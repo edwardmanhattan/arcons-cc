@@ -1,0 +1,86 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": {
+    "id": 1,
+    "name": "KRI Cakra",
+    "hull_number": "401",
+    "unit_class": {
+      "id": 8,
+      "name": "Cakra / Type 209-1300",
+      "id_name": "Cakra / Type 209-1300",
+      "unit_type": {
+        "id": 1,
+        "name": "SSK",
+        "id_name": "Kapal Selam Serang",
+        "description_en": "Diesel-electric attack submarine",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "category": {
+        "id": 1,
+        "name": "Submarine",
+        "id_name": "Kapal Selam",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "hull_count": 1
+    },
+    "unit_status": {
+      "id": 1,
+      "name": "Active",
+      "id_name": "Aktif",
+      "is_system": true,
+      "is_judge_side": false
+    },
+    "service_branch": {
+      "id": 1,
+      "name": "Navy",
+      "id_name": "TNI Angkatan Laut",
+      "is_system": true,
+      "is_judge_side": false
+    },
+    "movement_domain": {
+      "id": 2,
+      "name": "Submerged",
+      "id_name": "Bawah Air",
+      "is_system": true,
+      "is_judge_side": false
+    },
+    "current_specification_version": 1,
+    "role_description": "Kapal selam serang diesel-elektrik",
+    "source_country": "Jerman",
+    "source_yard": "HDW",
+    "source_notes": "Refit berkala di PT PAL; Nanggala 402 sudah hilang, tidak dicantumkan",
+    "commissioned_year_from": 1981,
+    "commissioning_precision": "year",
+    "current_specification": {
+      "version": 1,
+      "is_current": true,
+      "loa_m": 59.5,
+      "beam_m": 6.2,
+      "draft_m": 5.4,
+      "displacement_standard_t": 1285,
+      "displacement_full_t": 1390,
+      "range_nm": 11300,
+      "endurance_days": 50,
+      "crew_personnel": 33,
+      "turn_rate_is_derived": false,
+      "spec": {
+        "armament": "8x tabung torpedo 533 mm haluan",
+        "ciws": "Mampu ranjau 28x",
+        "displacement_note": "submerged",
+        "max_speed_note": "surface",
+        "missiles": "14x torpedo AEG SUT",
+        "propulsion": "4x Diesel MTU 12V493 + 1x motor listrik Siemens, 1 shaft; Daya 4.600 hp",
+        "sensors": "Sonar CSU-3-2, radar navigasi, ESM, CMS dasar",
+        "speed_cruise_kn": 10,
+        "speed_max_surface_kn": 11
+      },
+      "spec_schema_version": 1,
+      "created_at": "2026-09-23T19:32:26.94861+07:00"
+    },
+    "created_at": "2026-09-18T14:21:51.066212+07:00",
+    "updated_at": "2026-09-18T14:21:51.066212+07:00"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": {
+    "access_token": "REDACTED-ACCESS-TOKEN",
+    "token_type": "Bearer",
+    "expires_in": 900,
+    "refresh_token": "REDACTED-REFRESH-TOKEN",
+    "must_change_password": false
+  }
+}

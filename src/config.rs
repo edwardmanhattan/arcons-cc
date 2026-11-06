@@ -135,6 +135,128 @@ pub fn credential_file() -> PathBuf {
     config_dir().join("credentials.toml")
 }
 
+/// A configuration value that must never print. `Debug` is written by hand, so `{:?}` on the whole
+/// configuration is safe by construction — not by remembering to filter it somewhere downstream.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Hand the value over. Named `expose` so that every use reads like one.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+/// How the wall proves who it is. `Debug` never shows the secret: [`Secret`] redacts itself.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Credential {
+    /// Preferred for a deployment: no password at rest, and a wall can hold one for a long time.
+    RefreshToken(Secret),
+    /// Identifier and password, exchanged at startup. What the dev account uses.
+    Password {
+        identifier: String,
+        password: Secret,
+    },
+}
+
+/// Where Minos is, and how to sign in to it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Minos {
+    base_url: String,
+    credential: Credential,
+}
+
+impl Minos {
+    pub fn new(base_url: impl Into<String>, credential: Credential) -> Self {
+        let mut base_url: String = base_url.into();
+        while base_url.ends_with('/') {
+            base_url.pop();
+        }
+        Self {
+            base_url,
+            credential,
+        }
+    }
+
+    /// The REST base, including its path prefix (`…/api/v1`).
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// `(identifier, password)`, when the wall signs in that way.
+    pub fn password(&self) -> Option<(&str, &str)> {
+        match &self.credential {
+            Credential::Password {
+                identifier,
+                password,
+            } => Some((identifier, password.expose())),
+            Credential::RefreshToken(_) => None,
+        }
+    }
+
+    /// The refresh token, when the wall holds one.
+    pub fn refresh_token(&self) -> Option<&str> {
+        match &self.credential {
+            Credential::RefreshToken(token) => Some(token.expose()),
+            Credential::Password { .. } => None,
+        }
+    }
+
+    /// Read the configuration from the environment, naming what is missing and never what is set.
+    ///
+    /// #8 adds the file-based credential (`$XDG_CONFIG_HOME/arcons-cc/`); the environment vars are
+    /// the developer's route and the same names `.env.example` documents.
+    pub fn from_env() -> Result<Minos, Vec<String>> {
+        let mut missing = Vec::new();
+        let base_url = std::env::var("MINOS_BASE_URL").unwrap_or_default();
+        if base_url.trim().is_empty() {
+            missing.push("MINOS_BASE_URL".to_string());
+        }
+
+        let refresh = std::env::var("MINOS_REFRESH_TOKEN").unwrap_or_default();
+        let identifier = std::env::var("MINOS_IDENTIFIER").unwrap_or_default();
+        let password = std::env::var("MINOS_PASSWORD").unwrap_or_default();
+
+        let credential = if !refresh.trim().is_empty() {
+            Credential::RefreshToken(Secret::new(refresh))
+        } else if !identifier.trim().is_empty() && !password.is_empty() {
+            Credential::Password {
+                identifier,
+                password: Secret::new(password),
+            }
+        } else {
+            missing.push("MINOS_REFRESH_TOKEN or MINOS_IDENTIFIER + MINOS_PASSWORD".to_string());
+            return Err(missing);
+        };
+
+        if missing.is_empty() {
+            Ok(Minos::new(base_url, credential))
+        } else {
+            Err(missing)
+        }
+    }
+}
+
+/// The base URL is not a secret (it is a hostname in a deployment); the credential beside it is.
+impl std::fmt::Debug for Minos {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Minos")
+            .field("base_url", &self.base_url)
+            .field("credential", &self.credential)
+            .finish()
+    }
+}
+
 /// Report one file's presence, and remember the gap when it is absent.
 fn report(label: &str, path: &std::path::Path, owner: &str, missing: &mut Vec<String>) {
     if path.exists() {
@@ -167,9 +289,45 @@ pub fn self_check() -> ExitCode {
         missing.push("map seed (#5)".to_string());
     }
 
-    println!("  REST         not checked (needs a base URL: ticket #3)");
-    missing.push("REST base URL (#3)".to_string());
-    println!("  socket       not checked (needs a credential: ticket #4)");
+    // The live checks: sign in, read the picture, parse it, and look at the token's life. Nothing
+    // here prints a value from the credential — only what the server said (INV-08).
+    match Minos::from_env() {
+        Ok(minos) => {
+            println!("  REST         {}", minos.base_url());
+            match crate::data::live_check(&minos) {
+                Ok(check) => {
+                    println!(
+                        "  picture      ok  {} hulls, {} never reported",
+                        check.vessels, check.silent
+                    );
+                    match check.token_remaining {
+                        Some(left) if left.as_secs() > 0 => {
+                            println!("  token        ok  {} s left", left.as_secs());
+                        }
+                        Some(_) => {
+                            println!("  token        EXPIRED at sign-in");
+                            missing.push("a token that is still valid (#3)".to_string());
+                        }
+                        None => {
+                            println!("  token        no lifetime stated by the server");
+                        }
+                    }
+                }
+                Err(error) => {
+                    println!("  REST         FAILED  {error}");
+                    missing.push(format!("a working read (#3): {error}"));
+                }
+            }
+        }
+        Err(names) => {
+            println!(
+                "  REST         not configured  (needs {})",
+                names.join(" and ")
+            );
+            missing.push("Minos configuration (#8)".to_string());
+        }
+    }
+    println!("  socket       not checked (needs the socket actor: ticket #4)");
     missing.push("socket subscription (#4)".to_string());
 
     if missing.is_empty() {

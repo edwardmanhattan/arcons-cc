@@ -1,0 +1,651 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": [
+    {
+      "id_unit": 1,
+      "name": "KRI Cakra",
+      "hull_number": "401"
+    },
+    {
+      "id_unit": 2,
+      "name": "KRI Nagapasa",
+      "hull_number": "403"
+    },
+    {
+      "id_unit": 3,
+      "name": "KRI Ardadedali",
+      "hull_number": "404"
+    },
+    {
+      "id_unit": 4,
+      "name": "KRI Alugoro",
+      "hull_number": "405"
+    },
+    {
+      "id_unit": 5,
+      "name": "KRI Ahmad Yani",
+      "hull_number": "KRI-351"
+    },
+    {
+      "id_unit": 6,
+      "name": "KRI Yos Sudarso",
+      "hull_number": "KRI-353"
+    },
+    {
+      "id_unit": 7,
+      "name": "KRI Oswald Siahaan",
+      "hull_number": "KRI-354"
+    },
+    {
+      "id_unit": 8,
+      "name": "KRI Abdul Halim Perdanakusuma",
+      "hull_number": "KRI-355",
+      "position": {
+        "latitude": -7.8815946,
+        "longitude": 112.5356379,
+        "speed_kn": 0.08,
+        "speed_ms": 0.041155555555555556,
+        "course_deg": 255,
+        "accuracy_m": 7.2,
+        "recorded_at": "2026-09-29T09:56:07.685543+07:00",
+        "received_at": "2026-09-29T09:56:07.685543+07:00",
+        "age_seconds": 3334145.491014864,
+        "backfilled": false
+      }
+    },
+    {
+      "id_unit": 9,
+      "name": "KRI Karel Satsuitubun",
+      "hull_number": "KRI-356"
+    },
+    {
+      "id_unit": 10,
+      "name": "KRI Raden Eddy Martadinata",
+      "hull_number": "331"
+    },
+    {
+      "id_unit": 11,
+      "name": "KRI I Gusti Ngurah Rai",
+      "hull_number": "332"
+    },
+    {
+      "id_unit": 12,
+      "name": "KRI Bung Tomo",
+      "hull_number": "357"
+    },
+    {
+      "id_unit": 13,
+      "name": "KRI John Lie",
+      "hull_number": "358"
+    },
+    {
+      "id_unit": 14,
+      "name": "KRI Usman Harun",
+      "hull_number": "359"
+    },
+    {
+      "id_unit": 15,
+      "name": "KRI Fatahillah",
+      "hull_number": "361"
+    },
+    {
+      "id_unit": 16,
+      "name": "KRI Malahayati",
+      "hull_number": "362"
+    },
+    {
+      "id_unit": 17,
+      "name": "KRI Nala",
+      "hull_number": "363"
+    },
+    {
+      "id_unit": 18,
+      "name": "KRI Diponegoro",
+      "hull_number": "365"
+    },
+    {
+      "id_unit": 19,
+      "name": "KRI Hasanuddin",
+      "hull_number": "366"
+    },
+    {
+      "id_unit": 20,
+      "name": "KRI Iskandar Muda",
+      "hull_number": "367"
+    },
+    {
+      "id_unit": 21,
+      "name": "KRI Frans Kaisiepo",
+      "hull_number": "368"
+    },
+    {
+      "id_unit": 22,
+      "name": "KRI Kapitan Pattimura",
+      "hull_number": "371"
+    },
+    {
+      "id_unit": 23,
+      "name": "KRI Untung Suropati",
+      "hull_number": "372"
+    },
+    {
+      "id_unit": 24,
+      "name": "KRI Nuku",
+      "hull_number": "373"
+    },
+    {
+      "id_unit": 25,
+      "name": "KRI Lambung Mangkurat",
+      "hull_number": "374"
+    },
+    {
+      "id_unit": 26,
+      "name": "KRI Cut Nyak Dien",
+      "hull_number": "375"
+    },
+    {
+      "id_unit": 27,
+      "name": "KRI Sultan Thaha Syaifuddin",
+      "hull_number": "376"
+    },
+    {
+      "id_unit": 28,
+      "name": "KRI Sutanto",
+      "hull_number": "377"
+    },
+    {
+      "id_unit": 29,
+      "name": "KRI Sutedi Senoputra",
+      "hull_number": "378"
+    },
+    {
+      "id_unit": 30,
+      "name": "KRI Wiratno",
+      "hull_number": "379"
+    },
+    {
+      "id_unit": 31,
+      "name": "KRI Memet Sastrawirya",
+      "hull_number": "380"
+    },
+    {
+      "id_unit": 32,
+      "name": "KRI Tjiptadi",
+      "hull_number": "381"
+    },
+    {
+      "id_unit": 33,
+      "name": "KRI Hasan Basry",
+      "hull_number": "382"
+    },
+    {
+      "id_unit": 34,
+      "name": "KRI Imam Bonjol",
+      "hull_number": "383"
+    },
+    {
+      "id_unit": 35,
+      "name": "KRI Teuku Umar",
+      "hull_number": "384"
+    },
+    {
+      "id_unit": 36,
+      "name": "KRI Bung Karno",
+      "hull_number": "369"
+    },
+    {
+      "id_unit": 37,
+      "name": "KRI Bung Hatta",
+      "hull_number": "370"
+    },
+    {
+      "id_unit": 38,
+      "name": "KRI Clurit",
+      "hull_number": "641"
+    },
+    {
+      "id_unit": 39,
+      "name": "KRI Kujang",
+      "hull_number": "642"
+    },
+    {
+      "id_unit": 40,
+      "name": "KRI Beladau",
+      "hull_number": "643"
+    },
+    {
+      "id_unit": 41,
+      "name": "KRI Alamang",
+      "hull_number": "644"
+    },
+    {
+      "id_unit": 42,
+      "name": "KRI Surik",
+      "hull_number": "645"
+    },
+    {
+      "id_unit": 43,
+      "name": "KRI Siwar",
+      "hull_number": "646"
+    },
+    {
+      "id_unit": 44,
+      "name": "KRI Parang",
+      "hull_number": "647"
+    },
+    {
+      "id_unit": 45,
+      "name": "KRI Terapang",
+      "hull_number": "648"
+    },
+    {
+      "id_unit": 46,
+      "name": "KRI Panah",
+      "hull_number": "626"
+    },
+    {
+      "id_unit": 47,
+      "name": "KRI Keris",
+      "hull_number": "627"
+    },
+    {
+      "id_unit": 48,
+      "name": "KRI Sampari",
+      "hull_number": "628"
+    },
+    {
+      "id_unit": 49,
+      "name": "KRI Tombak",
+      "hull_number": "629"
+    },
+    {
+      "id_unit": 50,
+      "name": "KRI Halasan",
+      "hull_number": "630"
+    },
+    {
+      "id_unit": 51,
+      "name": "KRI Kerambit",
+      "hull_number": "631"
+    },
+    {
+      "id_unit": 52,
+      "name": "KRI Mandau",
+      "hull_number": "621"
+    },
+    {
+      "id_unit": 53,
+      "name": "KRI Rencong",
+      "hull_number": "622"
+    },
+    {
+      "id_unit": 54,
+      "name": "KRI Badik",
+      "hull_number": "623"
+    },
+    {
+      "id_unit": 55,
+      "name": "KRI Ajak",
+      "hull_number": "653"
+    },
+    {
+      "id_unit": 56,
+      "name": "KRI Singa",
+      "hull_number": "651"
+    },
+    {
+      "id_unit": 57,
+      "name": "KRI Tongkak",
+      "hull_number": "652"
+    },
+    {
+      "id_unit": 58,
+      "name": "KRI Golok",
+      "hull_number": "688"
+    },
+    {
+      "id_unit": 59,
+      "name": "KRI Pari",
+      "hull_number": "849"
+    },
+    {
+      "id_unit": 60,
+      "name": "KRI Sembilang",
+      "hull_number": "850"
+    },
+    {
+      "id_unit": 61,
+      "name": "KRI Julung",
+      "hull_number": "851"
+    },
+    {
+      "id_unit": 62,
+      "name": "KRI Sidat",
+      "hull_number": "852"
+    },
+    {
+      "id_unit": 63,
+      "name": "KRI Cakalang",
+      "hull_number": "853"
+    },
+    {
+      "id_unit": 64,
+      "name": "KRI Tongkol",
+      "hull_number": "854"
+    },
+    {
+      "id_unit": 65,
+      "name": "KRI Kurau",
+      "hull_number": "855"
+    },
+    {
+      "id_unit": 66,
+      "name": "KRI Torani",
+      "hull_number": "856"
+    },
+    {
+      "id_unit": 67,
+      "name": "KRI Hampala",
+      "hull_number": "857"
+    },
+    {
+      "id_unit": 68,
+      "name": "KRI Lumba-Lumba",
+      "hull_number": "858"
+    },
+    {
+      "id_unit": 69,
+      "name": "KRI Pandrong",
+      "hull_number": "801"
+    },
+    {
+      "id_unit": 70,
+      "name": "KRI Sura",
+      "hull_number": "802"
+    },
+    {
+      "id_unit": 71,
+      "name": "KRI Sibarau",
+      "hull_number": "847"
+    },
+    {
+      "id_unit": 72,
+      "name": "KRI Siliman",
+      "hull_number": "848"
+    },
+    {
+      "id_unit": 73,
+      "name": "KRI Dorang",
+      "hull_number": "874"
+    },
+    {
+      "id_unit": 74,
+      "name": "KRI Bawal",
+      "hull_number": "875"
+    },
+    {
+      "id_unit": 75,
+      "name": "KRI Tuna",
+      "hull_number": "876"
+    },
+    {
+      "id_unit": 76,
+      "name": "KRI Marlin",
+      "hull_number": "877"
+    },
+    {
+      "id_unit": 77,
+      "name": "KRI Hiu",
+      "hull_number": "878"
+    },
+    {
+      "id_unit": 78,
+      "name": "KRI Cucut",
+      "hull_number": "879"
+    },
+    {
+      "id_unit": 79,
+      "name": "KRI Pulau Rengat",
+      "hull_number": "711"
+    },
+    {
+      "id_unit": 80,
+      "name": "KRI Pulau Rupat",
+      "hull_number": "712"
+    },
+    {
+      "id_unit": 81,
+      "name": "KRI Makassar",
+      "hull_number": "590"
+    },
+    {
+      "id_unit": 82,
+      "name": "KRI Surabaya",
+      "hull_number": "591"
+    },
+    {
+      "id_unit": 83,
+      "name": "KRI Banjarmasin",
+      "hull_number": "592"
+    },
+    {
+      "id_unit": 84,
+      "name": "KRI Banda Aceh",
+      "hull_number": "593"
+    },
+    {
+      "id_unit": 85,
+      "name": "KRI Semarang",
+      "hull_number": "594"
+    },
+    {
+      "id_unit": 86,
+      "name": "KRI Dr. Soeharso",
+      "hull_number": "990"
+    },
+    {
+      "id_unit": 87,
+      "name": "KRI Teluk Bintuni",
+      "hull_number": "520"
+    },
+    {
+      "id_unit": 88,
+      "name": "KRI Teluk Lada",
+      "hull_number": "521"
+    },
+    {
+      "id_unit": 89,
+      "name": "KRI Teluk Lende",
+      "hull_number": "522"
+    },
+    {
+      "id_unit": 90,
+      "name": "KRI Teluk Palu",
+      "hull_number": "523"
+    },
+    {
+      "id_unit": 91,
+      "name": "KRI Teluk Calang",
+      "hull_number": "524"
+    },
+    {
+      "id_unit": 92,
+      "name": "KRI Teluk Weda",
+      "hull_number": "525"
+    },
+    {
+      "id_unit": 93,
+      "name": "KRI Teluk Wondama",
+      "hull_number": "526"
+    },
+    {
+      "id_unit": 94,
+      "name": "KRI Teluk Berau",
+      "hull_number": "527"
+    },
+    {
+      "id_unit": 95,
+      "name": "KRI Teluk Gilimanuk",
+      "hull_number": "531"
+    },
+    {
+      "id_unit": 96,
+      "name": "KRI Teluk Celukan Bawang",
+      "hull_number": "532"
+    },
+    {
+      "id_unit": 97,
+      "name": "KRI Teluk Cendrawasih",
+      "hull_number": "533"
+    },
+    {
+      "id_unit": 98,
+      "name": "KRI Teluk Berau*",
+      "hull_number": "534"
+    },
+    {
+      "id_unit": 99,
+      "name": "KRI Teluk Peleng",
+      "hull_number": "535"
+    },
+    {
+      "id_unit": 100,
+      "name": "KRI Teluk Sibolga",
+      "hull_number": "536"
+    },
+    {
+      "id_unit": 101,
+      "name": "KRI Teluk Manado",
+      "hull_number": "537"
+    },
+    {
+      "id_unit": 102,
+      "name": "KRI Teluk Hading",
+      "hull_number": "538"
+    },
+    {
+      "id_unit": 103,
+      "name": "KRI Teluk Parigi",
+      "hull_number": "539"
+    },
+    {
+      "id_unit": 104,
+      "name": "KRI Teluk Amboina",
+      "hull_number": "503"
+    },
+    {
+      "id_unit": 105,
+      "name": "KRI Teluk Ratai",
+      "hull_number": "509"
+    },
+    {
+      "id_unit": 106,
+      "name": "KRI Tarakan",
+      "hull_number": "905"
+    },
+    {
+      "id_unit": 107,
+      "name": "KRI Bontang",
+      "hull_number": "907"
+    },
+    {
+      "id_unit": 108,
+      "name": "KRI Sungai Gerong",
+      "hull_number": "906"
+    },
+    {
+      "id_unit": 109,
+      "name": "KRI Arun",
+      "hull_number": "903"
+    },
+    {
+      "id_unit": 110,
+      "name": "KRI Sorong",
+      "hull_number": "911"
+    },
+    {
+      "id_unit": 111,
+      "name": "KRI Rigel",
+      "hull_number": "933"
+    },
+    {
+      "id_unit": 112,
+      "name": "KRI Spica",
+      "hull_number": "934"
+    },
+    {
+      "id_unit": 113,
+      "name": "KRI Pulau Romang",
+      "hull_number": "723"
+    },
+    {
+      "id_unit": 114,
+      "name": "KRI Pulau Fani",
+      "hull_number": "731"
+    },
+    {
+      "id_unit": 115,
+      "name": "KRI Pulau Fanildo",
+      "hull_number": "732"
+    },
+    {
+      "id_unit": 116,
+      "name": "KRI Dr. Wahidin Sudirohusodo",
+      "hull_number": "991"
+    },
+    {
+      "id_unit": 117,
+      "name": "KRI Dr. Radjiman Wedyodiningrat",
+      "hull_number": "992"
+    },
+    {
+      "id_unit": 118,
+      "name": "KRI Dewaruci"
+    },
+    {
+      "id_unit": 119,
+      "name": "KRI Bima Suci"
+    },
+    {
+      "id_unit": 120,
+      "name": "KRI Multatuli",
+      "hull_number": "561"
+    },
+    {
+      "id_unit": 121,
+      "name": "KRI Tanjung Kambani",
+      "hull_number": "971"
+    },
+    {
+      "id_unit": 122,
+      "name": "KRI Tanjung Nusanive",
+      "hull_number": "973"
+    },
+    {
+      "id_unit": 123,
+      "name": "KRI Soputan",
+      "hull_number": "923"
+    },
+    {
+      "id_unit": 124,
+      "name": "KRI Leuser",
+      "hull_number": "924"
+    },
+    {
+      "id_unit": 256,
+      "name": "Leopard 2A4",
+      "hull_number": "1"
+    },
+    {
+      "id_unit": 260,
+      "name": "PZL W-3 Sokol",
+      "hull_number": "P-3000"
+    },
+    {
+      "id_unit": 262,
+      "name": "Anka-S (MALE)",
+      "hull_number": "D-0000"
+    }
+  ]
+}
