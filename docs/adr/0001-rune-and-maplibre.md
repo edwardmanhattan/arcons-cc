@@ -96,36 +96,58 @@ reason `lowest power`. **The map must land on that adapter too**: paying a discr
 frame is a stutter on every pan, and it would show up as `INV-12`'s frame CPU budget rather than as
 an error. That is why #5 has to say which adapter it used, not just that it drew.
 
-## Hardware note 2 — MapLibre picks the discrete GPU, and that is a bug here
+## Hardware note 2 — the map renders on the compositor's GPU too (#16)
 
-Rune chooses the compositor's GPU (above). **MapLibre does not.** Measured with the map feature on
-this laptop, 2026-11-06:
+Rune chooses the compositor's GPU. **MapLibre does not, by itself**: it enumerates the Vulkan
+physical devices, sorts them *itself*, and takes the first. Measured on this laptop, 2026-11-06,
+before the fix:
 
 ```
-[INFO] {arcons-map}[Render]:      Original order:
-[INFO] {arcons-map}[Render]:            [0] Intel(R) Graphics (RPL-P)
-[INFO] {arcons-map}[Render]:            [1] NVIDIA GeForce RTX 2050
 [INFO] {arcons-map}[Render]:      Sorted order:
 [INFO] {arcons-map}[Render]:            [0] NVIDIA GeForce RTX 2050
-[INFO] {arcons-map}[Render]:        Using "NVIDIA GeForce RTX 2050" …
-rune: GPU "Intel(R) Graphics (RPL-P)" …: the compositor's GPU
+[INFO] {arcons-map}[Render]:        Using "NVIDIA GeForce RTX 2050" with driver: "/usr/lib/libGLX_nvidia.so.615.78.08"
+rune: GPU "Intel(R) Graphics (RPL-P)" (wgpu; Vulkan, IntegratedGpu, 0000:00:02.0): the compositor's GPU
 ```
 
-It enumerates the physical devices, sorts them itself, and takes the first — so every map frame is
-shaded on the discrete GPU while the panel is fed by the iGPU, and each frame is read back across the
-bus. At 4 Hz idle that is a laptop that never idles, for a picture the iGPU could draw.
+Every map frame would be shaded on a GPU nobody is looking at, then read back across the bus at 4 Hz —
+a laptop that never idles, and (later) an INV-12 budget number nobody can explain.
 
-`ARCONS_MAP_VK_DRIVER=<icd path>` exists to limit the loader to one device, and **does not fix it on
-this build**: MapLibre's own pick ignores the loader's device selection. The switch stays (it is the
-right shape for the fix, and it costs nothing when unset), and the underlying selection is **open**:
-issue #16. Nothing in the gate depends on which GPU the map lands on.
+Mesa's `MESA_VK_DEVICE_SELECT` does not move it: MapLibre picks from its own list. **Limiting the
+Vulkan loader to one ICD does**, because then there is only one device to pick. `arcons-cc` sets
+`VK_DRIVER_FILES`/`VK_ICD_FILENAMES` from `main`, before any thread starts, choosing:
+
+- `ARCONS_MAP_VK_DRIVER=<path>` — that ICD manifest, verbatim;
+- `ARCONS_MAP_VK_DRIVER=off` — leave it to the loader;
+- unset or `auto` — **the integrated GPU**, because on a hybrid laptop that is the one the panel hangs
+  off and it is what Rune picks. Ad-hoc ranking, not filtering: this machine offers
+  `intel_hasvk_icd.json` (Haswell-era) beside `intel_icd.json`, and the legacy one sorts first and
+  finds no device on a modern iGPU. `lvp`/`swrast` (lavapipe) is never preferred: it is what a CI
+  runner has, not what a wall has.
+
+After the fix, one log line from each half of the window, on the same device:
+
+```
+arcons-cc: the map renders through /usr/share/vulkan/icd.d/intel_icd.json — the integrated GPU, where the panel is
+[INFO] {arcons-map}[Render]:        Using "Intel(R) Graphics (RPL-P)" with driver: "/usr/lib/libvulkan_intel.so"
+rune: a surface draws with wgpu Vulkan on Intel(R) Graphics (RPL-P)
+```
+
+Two sharp edges, recorded because they cost coredumps to find:
+
+- A `VK_DRIVER_FILES` path the loader accepts but which drives no usable device makes MapLibre throw
+  a C++ exception that nothing on the Rust side can catch: the process aborts. `choose_driver` refuses
+  a path that is not a file and ranks the legacy Intel driver away, which covers the two ways to get
+  there by accident; the remaining one is a driver genuinely broken on the machine.
+- The ICD list is read from the loader's own search paths (`$HOME`, `$XDG_DATA_DIRS`,
+  `/usr/local/share`, `/usr/share`), so a distro that keeps manifests somewhere else falls back to
+  "the loader decides" rather than guessing.
 
 ## What is deferred
 
 | deferred | owner | why |
 | --- | --- | --- |
 | the map feature inside the gate | #9 | it needs a C++ toolchain or a 378 MB download; the gate stays free of both |
-| the map on the compositor's GPU | #16 | MapLibre sorts devices itself; `VK_DRIVER_FILES` does not move it |
+| a test that names the adapter the map got | #16 follow-up | the evidence is two log lines today; an assertable report needs MapLibre to expose its device |
 | `vendor/rune` | before v0.1 ships | it is a git dependency today; vendoring makes the build reproducible offline |
 | true fullscreen | #8 | Rune at this rev exposes no fullscreen API; `--fullscreen` is borderless at the primary output's size |
 | the exercise plot, orders, participants | #11 | out of scope for v0.1 on purpose |
