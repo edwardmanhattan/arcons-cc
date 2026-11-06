@@ -23,6 +23,19 @@ is slow, ticket the fix; never delete or weaken it.
 
 Every ticket carries a `## Proof` line. If it cannot name a command, it is not ready.
 
+### When a tripwire goes red
+
+The gate parses our own claims, so some failures are about a document rather than a function:
+
+| test | it failed because | what to do |
+| --- | --- | --- |
+| `tests/spec_drift.rs` | the pinned Minos snapshot requires a field we do not model, or no longer has one we do | model it (or stop modelling it). Only re-vendor `docs/spec/` if the contract changed meaning — and say what changed |
+| `tests/doc_claims.rs` | `Cargo.toml` and ADR-0001 disagree about the Rune rev; §7 of the protocol and `live::Refusal` disagree about the refusal codes; the ADR's map-seed path is gone; or CI started running a part of the gate instead of the gate | fix the code or the document deliberately. A 7th refusal code means a new variant **and** a new action, never a default |
+| `tests/invariant_coverage.rs` | an invariant has no test and no IOU, or has an IOU it no longer needs | write the test that cites it, or delete its line from `PENDING` in the same change |
+| `tests/notices.rs` | a dependency is not named in `THIRD-PARTY-NOTICES.md`, or a copyleft crate appeared in the graph | add the row. Never drop the check |
+
+Every one of those messages names the claim, the file and the ticket that owns it. Read the message; it is the specification.
+
 ## Commands
 
 ```sh
