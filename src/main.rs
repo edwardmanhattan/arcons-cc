@@ -4,21 +4,12 @@
 //! floating card with what is known about it. The plan lives in the issues — `#1` is the epic —
 //! not in this file.
 //!
-//! Two rules shape the module list, and neither is negotiable:
-//!
-//! - **The UI thread never blocks.** Reads (`data`), the socket (`live`) and the map (`map`) each
-//!   own a thread and hand results to the view loop; the view loop only ever builds elements.
-//! - **A ticket is done when `scripts/verify.sh` says so.** See `docs/verification.md` and
-//!   `docs/invariants.md`; every ticket carries the command that decides it.
-
-mod config;
-mod data;
-mod live;
-mod map;
-mod ui;
-mod units;
+//! The crate is a library (`src/lib.rs`) with this one binary on top of it, so the tests can name
+//! what they test. Everything worth reading is documented there.
 
 use std::process::ExitCode;
+
+use arcons_cc::{config, ui};
 
 fn main() -> ExitCode {
     let args = match config::Args::parse(std::env::args().skip(1)) {
