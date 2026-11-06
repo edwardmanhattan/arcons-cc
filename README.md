@@ -29,14 +29,23 @@ no client touches it).
 | commander | HTTPS GET | `/units/{id}/commander` — current is the entry with no `to_at` |
 | sign in | HTTPS POST | `/auth/login` with `return_refresh_token: true`, then `/auth/refresh` |
 | the exercise plot (v0.2) | HTTPS poll | `/games/{id}/positions?at=` — **scenario** clock |
+| the exercise stream (v0.2) | WSS | `game:<id>:positions` — **granted** to a game's readers |
+
+**Reading the socket envelope.** Centrifugo adds one `data` level, and the channels are not uniform:
+`live-feed` publishes a bare event at `pub.data`; `game:<id>` publishes a `GameEvent` at `pub.data.type`
+with its payload at `pub.data.data.*`; `game:<id>:positions` is bare, has **no `type`**, and lives at
+`pub.data.positions`. A client that assumes one shape gets `undefined` and no error.
+
+`GET /live-feed/positions` needs the `read` action on `/system/live-feed`. That permission is the answer
+to "what account does the wall get".
 
 Source documents: `minos/docs/realtime-protocol.md` and `minos/docs/openapi/minos-api.yaml`
 (read-only copies live in the TFG repo at `minos-docs/`).
 
 ## Rules that are traps if forgotten
 
-- An **absent or null** optional field is **not zero**. `speed_kn`/`course_deg`/`accuracy_m` are
-  omitted when unmeasured; render nothing.
+- An **absent or null** optional field is **not zero**. `speed_kn`/`speed_ms`/`course_deg`/
+  `accuracy_m` are omitted when unmeasured; render nothing.
 - `backfilled: true` is real, is the newest thing known, and **did not just happen**. Never draw it as
   "here now".
 - The token rides in the **connect frame's `data`** as `{"token": "…"}` — never a header.
@@ -45,6 +54,21 @@ Source documents: `minos/docs/realtime-protocol.md` and `minos/docs/openapi/mino
 - **Never build a channel name** (`107`).
 - Refusals: `101`/`103`/`107` stop; `109` refresh then retry; `100` retry with backoff; `105` ignore.
 - **The UI thread never blocks.** Reads, socket and map each own a thread.
+
+## Verification
+
+**A ticket is done when a command says so.** The contract is [`docs/verification.md`](docs/verification.md),
+the numbered promises are [`docs/invariants.md`](docs/invariants.md), and the gate is `scripts/verify.sh`
+(the same command CI runs).
+
+```sh
+scripts/verify.sh          # fmt, clippy, tests, captures + pixel assertions, budgets
+scripts/verify.sh --fast   # the inner loop
+```
+
+Every ticket carries a `## Proof` line: the command, and what a failure looks like. A ticket that cannot
+name one is not ready. The upstream API contract is pinned in [`docs/spec/`](docs/spec/README.md) so a
+server change is a deliberate commit here rather than a silent breakage.
 
 ## Stack
 
@@ -56,7 +80,6 @@ Rune (pinned by git rev, vendored before release) · `maplibre_native` (offline 
 ```sh
 cargo run -- --self-check       # config, credentials, REST, socket, map seed
 cargo run                       # the display
+scripts/verify.sh               # the gate
 scripts/capture.sh picture      # headless scene → PNG + tree
 ```
-
-CI runs `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`, and the headless scenes.
