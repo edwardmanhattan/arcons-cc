@@ -46,20 +46,31 @@ Why: it renders a style with vector tiles **from a local seed**, which is what "
 network" requires; it has a `Continuous` renderer that suits a moving camera; and it has a Vulkan
 backend on Linux, the same driver stack Rune uses.
 
-**Deferred, deliberately, and this is the one place the scaffold does not wire the pin up:**
-`maplibre_native` is declared in `Cargo.toml` as an **optional** dependency behind the `map` feature,
-off by default. Its build script checks out and compiles roughly 2 GB of C++. Making that the price
-of `cargo test` would break the gate's promise — *no network, no display, no GPU beyond software
-Vulkan, every run* — and would block every ticket on a C++ build. #5 owns turning `map` on, vendoring
-the crate (`vendor/maplibre_native`, see `vendor/README.md`) and paying the build once, in a commit
-that says so.
+**The `map` feature is off in the gate**, and that is the design rather than a delay: its build
+script fetches and compiles C++, and `scripts/verify.sh` promises *no network, no display, no GPU
+beyond software Vulkan, every run*. The projection, the camera and the scheduling are therefore in
+`src/map/geometry.rs` and `src/map/thread.rs` with **no MapLibre in them**, and the engine lives
+behind `--features map` (vendored at `vendor/maplibre_native`, see `vendor/README.md`).
 
-The map seed lives at **`assets/tiles`** (see `src/map.rs`). The directory is in the tree, empty
-until #5 records a seed; `--self-check` distinguishes "no seed directory" from "a directory with no
-tiles", and #12's doc-claim test fails if the path named here does not exist.
+Three ways to build the engine, measured on this machine (2026-11-06):
 
-**Both sides must project with the same camera.** The map owns the camera it last rendered; markers
-are drawn against that camera, not re-derived (`INV-04`).
+| how | cost | when |
+| --- | --- | --- |
+| `MLN_PRECOMPILE=1` | downloads upstream's prebuilt amalgam: **378 MB** static lib + 0.5 MB headers, then links. Whole crate built in **46 s**. | the default for a developer, and the only route that never compiles C++ |
+| `MLN_LOCAL_REPOSITORY=<checkout>` | compiles the C++ from an existing checkout — no 2 GB clone. **~4.5 min** incremental here. | this laptop, via `~/.cargo/config.toml`, pointing at the TFG checkout it already has |
+| neither | clones ~2 GB of C++ and submodules, then builds it | the fallback nobody should pay for twice |
+
+The map seed lives at **`assets/tiles-cache.seed.sqlite`** (2.6 MB, recorded from TFG's cache). It is
+embedded with `include_bytes!` so a wall install cannot be missing it beside the binary, and it is
+copied to a writable cache on first run because MapLibre writes tiles into the same file. Every
+`resources`/`tiles` `expires` row is pinned to 2100 **before** MapLibre opens the cache: the seed was
+captured with ordinary HTTP expiry, so without pinning a fresh install asks the network to revalidate
+the style and a machine with no network can never report style-loaded.
+
+**Both sides project with the same camera, by construction.** The map thread publishes the camera and
+size of the frame it rendered (`map::geometry::Rendered`); markers call `Rendered::project`, which is
+the same `project` the picture was drawn against. There is one lat/lon → pixel conversion in the
+client, and `INV-04`'s test fails the moment a second one appears.
 
 ## Decision 3 — the UI thread never blocks
 
@@ -85,11 +96,36 @@ reason `lowest power`. **The map must land on that adapter too**: paying a discr
 frame is a stutter on every pan, and it would show up as `INV-12`'s frame CPU budget rather than as
 an error. That is why #5 has to say which adapter it used, not just that it drew.
 
+## Hardware note 2 — MapLibre picks the discrete GPU, and that is a bug here
+
+Rune chooses the compositor's GPU (above). **MapLibre does not.** Measured with the map feature on
+this laptop, 2026-11-06:
+
+```
+[INFO] {arcons-map}[Render]:      Original order:
+[INFO] {arcons-map}[Render]:            [0] Intel(R) Graphics (RPL-P)
+[INFO] {arcons-map}[Render]:            [1] NVIDIA GeForce RTX 2050
+[INFO] {arcons-map}[Render]:      Sorted order:
+[INFO] {arcons-map}[Render]:            [0] NVIDIA GeForce RTX 2050
+[INFO] {arcons-map}[Render]:        Using "NVIDIA GeForce RTX 2050" …
+rune: GPU "Intel(R) Graphics (RPL-P)" …: the compositor's GPU
+```
+
+It enumerates the physical devices, sorts them itself, and takes the first — so every map frame is
+shaded on the discrete GPU while the panel is fed by the iGPU, and each frame is read back across the
+bus. At 4 Hz idle that is a laptop that never idles, for a picture the iGPU could draw.
+
+`ARCONS_MAP_VK_DRIVER=<icd path>` exists to limit the loader to one device, and **does not fix it on
+this build**: MapLibre's own pick ignores the loader's device selection. The switch stays (it is the
+right shape for the fix, and it costs nothing when unset), and the underlying selection is **open**:
+issue #16. Nothing in the gate depends on which GPU the map lands on.
+
 ## What is deferred
 
 | deferred | owner | why |
 | --- | --- | --- |
-| `map` feature on, `maplibre_native` vendored | #5 | 2 GB of C++ per build; the gate must stay network-free |
+| the map feature inside the gate | #9 | it needs a C++ toolchain or a 378 MB download; the gate stays free of both |
+| the map on the compositor's GPU | #16 | MapLibre sorts devices itself; `VK_DRIVER_FILES` does not move it |
 | `vendor/rune` | before v0.1 ships | it is a git dependency today; vendoring makes the build reproducible offline |
 | true fullscreen | #8 | Rune at this rev exposes no fullscreen API; `--fullscreen` is borderless at the primary output's size |
 | the exercise plot, orders, participants | #11 | out of scope for v0.1 on purpose |

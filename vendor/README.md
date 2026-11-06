@@ -24,14 +24,30 @@ from "the network blinked", so it could not stop where it must stop.
 **Drop it when** upstream can set connect data and reports refusal codes. Until then, the copy is the
 only reason #4 can be written correctly.
 
-## `maplibre_native` — planned, not yet copied (#5)
+## `maplibre_native` — 0.9.3, patched (#5)
 
-TFG carries a copy that fixes two bugs in how the crate manages its own cached MapLibre checkout:
-upstream resolves `MLN_COMMIT` as a ref after a `--depth 1` fetch (no local ref, so every build
-re-clones 2 GB), and it judges a cached checkout stale by looking for `CMakeLists.txt`, then deletes
-the tree a concurrent build may be mid-clone into. The scaffold declares `maplibre_native` as an
-**optional** dependency and does not copy it; #5 does, with the reason recorded here and in
-ADR-0001, because that is the ticket that pays the C++ build.
+Copied from `~/Work/Crossnet/tfg/vendor/maplibre_native` (source only — its `target/` is a 2.9 GB
+build cache, not source), and depended on **by path** rather than through `[patch.crates-io]`: a
+version requirement cannot select a patched copy whose own version is older than the registry's, and
+Cargo silently resolved 0.9.4 instead. A path dependency says what we mean.
+
+**Why.** Two bugs in how upstream manages its own cached MapLibre checkout:
+
+- it resolves `MLN_COMMIT` as a ref after a `--depth 1` fetch, which leaves no local ref, so every
+  build believes the checkout is wrong and re-clones ~2 GB;
+- it judges a cached checkout stale by looking for `CMakeLists.txt` and then **deletes the tree** —
+  so two overlapping builds (an editor's `cargo check` and a terminal's `cargo run`, normal here)
+  race, and one restarts a 39-submodule clone underneath the other.
+
+`mln_checkout.rs` takes a lock, waits for a concurrent build instead of racing it, and reads the
+expected commit from the tag's own name.
+
+**Drop it when** upstream ships both fixes.
+
+**Building it (measured, ADR-0001):** `MLN_PRECOMPILE=1` downloads the prebuilt 378 MB amalgam and
+needs no C++ compile (~46 s for the whole crate); `MLN_LOCAL_REPOSITORY=<path>/maplibre-native`
+compiles from an existing checkout (~4.5 min here, via this machine's `~/.cargo/config.toml`). The
+map feature is off in the gate, so neither is on `scripts/verify.sh`'s path.
 
 ## `rune` — planned before release (#9 or the release ticket)
 

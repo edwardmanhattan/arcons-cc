@@ -13,10 +13,17 @@ description = "Arcons Command Center — the live maritime picture on a wall"
 rune = { git = "https://github.com/anomalyco/rune", rev = "7ead7d63fcf6f9dd9669385a8b90e2ae80015d7b" }
 rune-kit = { git = "https://github.com/anomalyco/rune", rev = "7ead7d63fcf6f9dd9669385a8b90e2ae80015d7b" }
 
-# The map engine. Optional until #5 lands the renderer thread: `maplibre_native`'s build script
-# clones ~2 GB of C++ and builds it, so enabling it here would cost every `cargo test` a network
-# fetch and a C++ toolchain. The pin is recorded now; #5 turns the feature on and vendors it.
-maplibre_native = { version = "0.9", optional = true }
+# The map engine. Its default build clones ~2 GB of C++ and builds it, so the `map` feature is off in
+# the gate: `scripts/verify.sh` must run with no network and no C++ toolchain. `cargo test map::`
+# covers the projection and the camera with the feature off; `cargo test --features map map::` and
+# `--probe-map` are the map-engine paths, and `MLN_PRECOMPILE=1` builds them from upstream's ~378 MB
+# prebuilt amalgam instead of from source. Vendored: see vendor/README.md.
+maplibre_native = { path = "vendor/maplibre_native", optional = true }
+# The offline seed is a SQLite cache whose expiry rows must be pinned before MapLibre opens it, or a
+# fresh install tries to revalidate the style over the network and never reports style-loaded.
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+# `--probe-map` writes one frame to a PNG for CI, with no window.
+png = { version = "0.18", optional = true }
 
 # The socket client. Vendored (see `vendor/README.md`): upstream 0.2.6 cannot set the connect
 # command's `data`, which is where Minos reads our token, and drops handshake refusal codes.
@@ -35,8 +42,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 default = []
-# #5 owns this: the map thread, the offline tile seed, and the vendored `maplibre_native`.
-map = ["dep:maplibre_native"]
+# #5: the map thread, the offline tile seed, and the vendored `maplibre_native`.
+map = ["dep:maplibre_native", "dep:rusqlite", "dep:png"]
 
 [patch.crates-io]
 tokio-centrifuge = { path = "vendor/tokio-centrifuge" }
