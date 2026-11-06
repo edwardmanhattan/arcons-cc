@@ -13,7 +13,7 @@ from this file, or when a copyleft crate appears in the lockfile unnamed.
 | component | licence | what it is |
 | --- | --- | --- |
 | **Rune** (`rune`, `rune-kit`) | MIT, © 2026 Anomaly | The UI framework. <https://github.com/anomalyco/rune>, pinned to rev `7ead7d63fcf6f9dd9669385a8b90e2ae80015d7b`. Vendored before release; the full licence text then lives at `vendor/rune/LICENSE`. |
-| **MapLibre Native** (`maplibre_native` 0.9) | BSD-2-Clause | The map engine. <https://github.com/maplibre/maplibre-native>. An optional dependency until #5 enables the `map` feature. |
+| **MapLibre Native** (`maplibre_native` 0.9.3, vendored) | BSD-2-Clause | The map engine, vendored for two checkout-cache fixes — see `vendor/README.md`. <https://github.com/maplibre/maplibre-native>. Behind the `map` feature, which the gate does not enable. |
 | **Inter**, **IBM Plex Mono** | SIL Open Font License 1.1 | Typefaces bundled with Rune. |
 
 ## The wall's own dependencies
@@ -27,6 +27,8 @@ from this file, or when a copyleft crate appears in the lockfile unnamed.
 | `thiserror` 2 | MIT OR Apache-2.0 | Typed errors. |
 | `chrono` 0.4 | MIT OR Apache-2.0 | Timestamps from the wire. |
 | `tracing`, `tracing-subscriber` 0.3 / 0.1 | MIT | Logging. **Redaction is a hand-written `Debug`, not a filter** (`INV-08`). |
+| `rusqlite` 0.32 (bundled SQLite) | MIT | The offline map seed is a SQLite cache; its expiry rows are pinned before MapLibre opens it. Bundled so no system library is needed. SQLite itself is public domain. |
+| `png` 0.18 | MIT OR Apache-2.0 | `--probe-map` writes one frame to a PNG, headless, for CI. |
 
 ## Crates with a licence that asks to be named
 

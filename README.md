@@ -78,7 +78,9 @@ Rune (pinned by git rev, vendored before release) · `maplibre_native` (offline 
 ## Build and run
 
 ```sh
-cargo run                       # the display (Wayland or X11)
+cargo run                       # the display, without the map (the gate's build)
+cargo run --features map        # the display with the map (needs the engine built once)
+cargo run --features map -- --probe-map --out out/probe.png   # one map frame, no window
 cargo run -- --fullscreen       # borderless, at the primary output's size
 cargo run -- --window-size 1920x1080
 cargo run -- --version          # the version, no window

@@ -24,6 +24,9 @@ OPTIONS:
     --window-size WxH   open at this size, in points (default 1280x720)
     --fullscreen        cover the primary output, no frame
     --self-check        report what is configured, and what is missing (exit 2 if anything is)
+    --probe-map         render one map frame to a PNG with no window (needs --features map)
+    --out PATH          where --probe-map writes (default out/probe.png)
+    --probe-at L,L,Z    the camera to probe (default the wall's start camera)
     --version           print the version
     -h, --help          this text
 ";
@@ -39,6 +42,8 @@ pub enum Command {
     Help,
     /// Report configuration and exit 0, or exit 2 naming what is missing.
     SelfCheck,
+    /// Render one map frame to a PNG with no window. CI's map witness.
+    ProbeMap,
 }
 
 /// How the window should open. `--fullscreen` wins over `--window-size`.
@@ -63,6 +68,10 @@ impl Default for Window {
 pub struct Args {
     pub command: Command,
     pub window: Window,
+    /// Where `--probe-map` writes its PNG.
+    pub out: std::path::PathBuf,
+    /// The camera `--probe-map` renders, when it is not the default.
+    pub probe_camera: Option<crate::map::geometry::Camera>,
     /// Arguments this binary does not own, handed to Rune so its headless tooling still works:
     /// `--snap`, `--scene`, `--tree`, `--script`, `--frames`. #9's captures depend on that.
     pub passthrough: Vec<String>,
@@ -77,6 +86,8 @@ impl Args {
         let mut args = Args {
             command: Command::Run,
             window: Window::default(),
+            out: std::path::PathBuf::from("out/probe.png"),
+            probe_camera: None,
             passthrough: Vec::new(),
         };
 
@@ -86,6 +97,19 @@ impl Args {
                 "--version" | "-V" => args.command = Command::Version,
                 "--help" | "-h" => args.command = Command::Help,
                 "--self-check" => args.command = Command::SelfCheck,
+                "--probe-map" => args.command = Command::ProbeMap,
+                "--out" => {
+                    let value = argv
+                        .next()
+                        .ok_or("--out needs a path, for example out/probe.png")?;
+                    args.out = std::path::PathBuf::from(value);
+                }
+                "--probe-at" => {
+                    let value = argv
+                        .next()
+                        .ok_or("--probe-at needs LAT,LON,ZOOM, for example -6.108,106.91,11")?;
+                    args.probe_camera = Some(parse_camera(&value)?);
+                }
                 "--fullscreen" => args.window.fullscreen = true,
                 "--window-size" => {
                     let value = argv
@@ -99,6 +123,34 @@ impl Args {
 
         Ok(args)
     }
+}
+
+/// `LAT,LON,ZOOM`, in degrees and zoom levels.
+pub fn parse_camera(value: &str) -> Result<crate::map::geometry::Camera, String> {
+    let error = || format!("--probe-at is LAT,LON,ZOOM (got {value:?})");
+    let mut parts = value.split(',');
+    let lat = parts
+        .next()
+        .ok_or_else(error)?
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| error())?;
+    let lon = parts
+        .next()
+        .ok_or_else(error)?
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| error())?;
+    let zoom = parts
+        .next()
+        .ok_or_else(error)?
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| error())?;
+    if parts.next().is_some() || !lat.is_finite() || !lon.is_finite() || !zoom.is_finite() {
+        return Err(error());
+    }
+    Ok(crate::map::geometry::Camera::new((lat, lon), zoom))
 }
 
 /// `WxH`, both above zero, in points.
@@ -281,12 +333,12 @@ pub fn self_check() -> ExitCode {
     // Presence only. Reading it is #8's job, and printing anything from it would be an INV-08 bug.
     report("credentials", &credential_file(), "#8", &mut missing);
 
-    let seed = map::seed_dir();
+    let seed = map::seed_path();
     if map::seed_present() {
         println!("  map seed     present  {}", seed.display());
     } else {
-        println!("  map seed     EMPTY    {} (ticket #5)", seed.display());
-        missing.push("map seed (#5)".to_string());
+        println!("  map seed     MISSING  {}", seed.display());
+        missing.push("the offline map seed (#5)".to_string());
     }
 
     // The live checks: sign in, read the picture, parse it, and look at the token's life. Nothing
@@ -367,6 +419,32 @@ mod tests {
             assert!(got.is_err(), "expected {bad:?} to be refused, got {got:?}");
         }
         assert!(parse(&["--window-size"]).is_err());
+    }
+
+    #[test]
+    fn a_probe_camera_is_three_numbers_and_nothing_else() {
+        let camera = parse(&["--probe-map", "--probe-at", "-6.108,106.91,11"])
+            .unwrap()
+            .probe_camera
+            .unwrap();
+        assert!((camera.center.0 - -6.108).abs() < 1e-9 && (camera.zoom - 11.0).abs() < 1e-9);
+        for bad in ["-6.108,106.91", "-6.108,106.91,11,2", "a,b,c", "", "1,,3"] {
+            assert!(parse_camera(bad).is_err(), "expected {bad:?} to be refused");
+        }
+    }
+
+    #[test]
+    fn the_probe_has_a_default_output_and_accepts_another() {
+        assert_eq!(parse(&["--probe-map"]).unwrap().command, Command::ProbeMap);
+        assert_eq!(
+            parse(&["--probe-map"]).unwrap().out,
+            std::path::PathBuf::from("out/probe.png")
+        );
+        assert_eq!(
+            parse(&["--probe-map", "--out", "/tmp/x.png"]).unwrap().out,
+            std::path::PathBuf::from("/tmp/x.png")
+        );
+        assert!(parse(&["--out"]).is_err(), "--out needs a path");
     }
 
     #[test]
