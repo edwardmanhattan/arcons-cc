@@ -13,7 +13,7 @@ up in the wrong ocean. This file defines the vocabulary; the code uses it exactl
 | **Position** | A Fix as the map draws it, after client-side judgement (staleness, interpolation). | the API's `position` object, verbatim |
 | **Feed** | The standing picture: every live unit, whether or not it has ever reported. | "the fleet list", "the positions" |
 | **Picture** | What the wall shows: the Feed, plus the judgements drawn on it. | "the dashboard", "the view" |
-| **Stale** | A client-side judgement from `age_seconds`. The server does not tell us; we decide, once, and say what the threshold is. | an error, a failure to connect |
+| **Stale** | A client-side judgement from `age_seconds`. The server does not tell us; we decide, once, and say what the threshold is (**120 s**, `units::STALE_AFTER`). | an error, a failure to connect |
 | **Backfilled** | Reconstructed from an offline backlog. Real, the newest thing known, and **it did not just happen**. | "current", "live", "late" |
 | **Measured** | A Fix a beacon reported. `speed_kn` and `course_deg` exist or they do not. | "actual", "true" |
 | **Derived** | A position computed along an order rather than reported by a beacon. Never mixed with Measured silently. | "estimated" as a synonym for both |

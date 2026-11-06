@@ -158,16 +158,10 @@ fn covered_invariants() -> Vec<String> {
 /// Delete a line in the same PR that lands the test. The check fails on a stale entry, on purpose:
 /// an IOU that outlives its gap is how the next gap hides.
 const PENDING: &[(&str, &str)] = &[
-    ("INV-01", "#3"),
-    ("INV-02", "#6"),
-    ("INV-03", "#6"),
-    ("INV-05", "#6"),
-    ("INV-06", "#3"),
     ("INV-07", "#4"),
     ("INV-08", "#3"),
     ("INV-10", "#7"),
     ("INV-11", "#9"),
-    ("INV-12", "#6"),
 ];
 
 #[test]
