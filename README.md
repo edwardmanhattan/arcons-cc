@@ -78,8 +78,26 @@ Rune (pinned by git rev, vendored before release) · `maplibre_native` (offline 
 ## Build and run
 
 ```sh
-cargo run -- --self-check       # config, credentials, REST, socket, map seed
-cargo run                       # the display
-scripts/verify.sh               # the gate
-scripts/capture.sh picture      # headless scene → PNG + tree
+cargo run                       # the display (Wayland or X11)
+cargo run -- --fullscreen       # borderless, at the primary output's size
+cargo run -- --window-size 1920x1080
+cargo run -- --version          # the version, no window
+cargo run -- --self-check       # config, credentials, REST, socket, map seed (exit 2 if anything is)
+
+scripts/verify.sh               # the gate — the same command CI runs
+scripts/verify.sh --fast        # the inner loop: no captures, no budgets
 ```
+
+First build is the slow one: Rune comes from git and pulls a few hundred crates. After that,
+`cargo test` takes seconds and needs no display and no network.
+
+Where the other documents sit: [`AGENTS.md`](AGENTS.md) is how to work here (one ticket per branch,
+what "done" means, the rules that are not preferences); [`CONTEXT.md`](CONTEXT.md) is the domain
+vocabulary; [`docs/adr/0001-rune-and-maplibre.md`](docs/adr/0001-rune-and-maplibre.md) records why
+Rune and why MapLibre, and what each defers.
+
+## There is no LICENSE, on purpose
+
+This application is proprietary and not licensed for redistribution. A root `LICENSE` would
+relicense it; the third-party components are listed in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)
+and keep their own licences.

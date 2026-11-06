@@ -1,3 +1,8 @@
 /target
 /out
 *.log
+
+# Local secrets. The wall's real credential lives in
+# $XDG_CONFIG_HOME/arcons-cc/credentials.toml; `.env` is for a developer's shell only and is
+# never committed. `.env.example` is, because it holds names and no values.
+/.env

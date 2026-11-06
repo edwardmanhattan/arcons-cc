@@ -1,0 +1,33 @@
+name: verify
+
+# One step decides whether this is green: scripts/verify.sh — the same command a human or an
+# agent runs. Never its individual parts here: CI and a developer must not be able to diverge.
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # System libraries Rune links against, and software Vulkan (lavapipe) so a headless render
+      # cannot pass by finding a GPU the wall does not have. Rune links libxkbcommon and loads
+      # Vulkan at run time even when it only snapshots.
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libvulkan1 mesa-vulkan-drivers
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: the gate
+        run: scripts/verify.sh
