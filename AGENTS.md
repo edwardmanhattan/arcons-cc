@@ -81,8 +81,8 @@ Comment on the issue rather than choosing silently, especially for: the wall's c
 ```
 src/main.rs      flags, startup, exit codes
 src/config.rs    paths, --self-check, the command line
-src/ui/          the view + tokens.rs (the only file that names a colour or a size)
-src/units.rs     the vocabulary: Unit, Picture
+src/ui/          the view, markers.rs, and tokens.rs (the only file that names a colour or a size)
+src/units/       the vocabulary and the view model: Unit, UnitView, Glyph, Picture, motion
 src/data.rs      the Minos REST client            (#3)
 src/live.rs      the Centrifugo socket actor      (#4)
 src/map/         geometry (no engine, in the gate) + the MapLibre thread (#5)

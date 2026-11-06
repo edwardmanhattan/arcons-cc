@@ -29,6 +29,13 @@ pub const GAP: f32 = 8.0;
 pub const HAIRLINE: f32 = 1.0;
 pub const PANEL_RADIUS: f32 = 10.0;
 
+/// A marker glyph's diameter, in points.
+pub const MARKER: f32 = 12.0;
+/// A marker's hit target: at least 24 pt, because a touch target is a decision about fingers.
+pub const MARKER_TARGET: f32 = 24.0;
+/// The little tick that shows a measured heading.
+pub const HEADING_TICK: f32 = 3.0;
+
 // ---------------------------------------------------------------------------
 // Type.
 // ---------------------------------------------------------------------------

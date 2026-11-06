@@ -15,6 +15,7 @@
 //! Without `--features map` the map element is absent and the panel says so: the engine is optional
 //! so the gate stays free of C++ and of a network. `--probe-map` is the headless witness.
 
+pub mod markers;
 pub mod tokens;
 
 use std::process::ExitCode;
@@ -23,7 +24,6 @@ use rune::{AppSpec, Cx, El, col, row, spacer, text};
 
 use crate::config;
 use crate::live::LiveThread;
-#[cfg(feature = "map")]
 use crate::map::geometry::Camera;
 use crate::units::Picture;
 
@@ -36,8 +36,10 @@ pub struct State {
     pub picture: Picture,
     /// The camera the operator is holding. The map thread renders it; markers project against the
     /// camera of the frame on screen instead (`INV-04`), which is not the same number mid-gesture.
-    #[cfg(feature = "map")]
     pub camera: Camera,
+    /// The frame the map last handed over: its camera and size are what markers project against.
+    /// `None` until the first frame, and always `None` without `--features map`.
+    pub frame: Option<crate::map::geometry::Rendered>,
     /// The camera at the start of a drag, so a pan is absolute rather than a sum of deltas.
     #[cfg(feature = "map")]
     drag_origin: Option<Camera>,
@@ -50,6 +52,17 @@ pub struct State {
     pub link: Link,
     /// How many fixes the socket has delivered, for the header's "is anything happening" question.
     pub fixes: u64,
+}
+
+impl State {
+    /// A state holding a picture, for tests and for a caller that has one already. The rest — the
+    /// camera, the frame, the socket — starts at its default.
+    pub fn new(picture: Picture) -> Self {
+        Self {
+            picture,
+            ..Self::default()
+        }
+    }
 }
 
 /// The socket's state, as the header shows it.
@@ -119,9 +132,9 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
 
 /// The map area: the frame when there is one, and the placeholder when there is not.
 fn picture(state: &State, scale: f32) -> El {
-    // Without the map engine neither is read: the panel is the whole story.
+    // Without the map engine the frame is never set, so the markers below are simply absent.
     #[cfg(not(feature = "map"))]
-    let _ = (state, scale);
+    let _ = scale;
 
     let body = col()
         .key("picture")
@@ -132,14 +145,25 @@ fn picture(state: &State, scale: f32) -> El {
         .border(tokens::HAIRLINE, tokens::hairline())
         .fill(tokens::panel());
 
-    // Drawn from the first frame, before the map has produced anything: `Pixels` is the streaming
-    // path, and its element only has to exist once. `set()` wakes the window and the next frame
-    // uploads — which is why a live map needs no view re-run at 4 Hz (or at all).
-    #[cfg(feature = "map")]
-    if let Some(map) = &state.map
-        && map.error().is_none()
-    {
-        {
+    let content = picture_content(state, scale, body);
+
+    // The marker layer goes on top of whatever the picture is — the map, its error, or the
+    // placeholder. It is drawn from the frame the map last rendered, so it is absent until there is
+    // one, and absent without the map engine (there is no camera to project against).
+    match state.frame {
+        Some(frame) => {
+            let placed = markers::place(&state.picture, &frame, std::time::Instant::now());
+            content.child(markers::layer(&placed, &frame, scale))
+        }
+        None => content,
+    }
+}
+
+/// The picture itself: the map's pixels, its failure, or the placeholder.
+#[cfg(feature = "map")]
+fn picture_content(state: &State, scale: f32, body: El) -> El {
+    if let Some(map) = &state.map {
+        if map.error().is_none() {
             return body.child(
                 rune::el()
                     .key("map")
@@ -155,34 +179,34 @@ fn picture(state: &State, scale: f32) -> El {
                     }),
             );
         }
+        if let Some(error) = map.error() {
+            return body
+                .center()
+                .gap(tokens::GAP)
+                .child(
+                    text("THE MAP DID NOT START")
+                        .key("map-error")
+                        .font(tokens::TITLE)
+                        .color(tokens::ink()),
+                )
+                .child(
+                    text(error)
+                        .key("map-error-detail")
+                        .font(tokens::LABEL)
+                        .color(tokens::ink_dim()),
+                );
+        }
     }
+    placeholder(body, "the feed and the markers land here (#3, #6)")
+}
 
-    #[cfg(feature = "map")]
-    if let Some(map) = &state.map
-        && let Some(error) = map.error()
-    {
-        return body
-            .center()
-            .gap(tokens::GAP)
-            .child(
-                text("THE MAP DID NOT START")
-                    .key("map-error")
-                    .font(tokens::TITLE)
-                    .color(tokens::ink()),
-            )
-            .child(
-                text(error)
-                    .key("map-error-detail")
-                    .font(tokens::LABEL)
-                    .color(tokens::ink_dim()),
-            );
-    }
+#[cfg(not(feature = "map"))]
+fn picture_content(_state: &State, _scale: f32, body: El) -> El {
+    placeholder(body, "built without the map: cargo run --features map")
+}
 
-    let hint = if cfg!(feature = "map") {
-        "the feed and the markers land here (#3, #6)"
-    } else {
-        "built without the map: cargo run --features map"
-    };
+/// The panel that says the wall is waiting, used until there is a picture to draw.
+fn placeholder(body: El, hint: &'static str) -> El {
     body.center()
         .gap(tokens::GAP)
         .child(
