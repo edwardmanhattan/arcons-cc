@@ -110,6 +110,14 @@ impl Http {
         })
     }
 
+    /// The current access token, refreshed if needed.
+    ///
+    /// Handed to the socket actor for the connect frame's `data`. It is a bearer credential: callers
+    /// pass it straight into the handshake and never log it (`INV-08`).
+    pub async fn access_token(&self) -> Result<String, Error> {
+        self.auth.access_token().await
+    }
+
     /// How long the current access token still has. `None` before the first refresh.
     pub fn token_remaining(&self) -> Option<Duration> {
         self.auth.remaining()
