@@ -80,6 +80,38 @@ elapsed time between reads. This machine's clock and the server's differ (the de
 a server timestamp produces a fix that is younger than it is — `INV-06` in one sentence. #6 owns
 the display arithmetic; this module only refuses to invent a second source for it.
 
+## The socket (#4): an accelerator over the read
+
+`live-feed` is a **hint that something changed**, not the source of truth. The rules the actor keeps,
+and why each one is not optional:
+
+- **The token rides in the connect frame's `data`** as `{"token": "…"}` — never a header, never the
+  frame's `token` field. The bytes are built by `live::actor::connect_data` and asserted in a test,
+  because the vendored `tokio-centrifuge` exists for exactly this.
+- **Subscribe by name, never build one.** `live-feed` is the one channel the protocol fixes and the
+  server grants. A name assembled from an id is refused with `107`, which is the server saying "I hand
+  these out". v0.1 watches the feed and nothing else: `personal:<id>` is already subscribed
+  server-side (an explicit subscribe returns `105`), and game channels belong to a feature that does
+  not exist yet.
+- **Re-read before trusting.** There is no replay and no presence on this channel, so a reconnect has
+  a hole in it. A disconnect marks the picture `Unproven` and only a completed
+  `GET /live-feed/positions` makes it `Proven` again (`INV-09`). Publications that arrive while
+  unproven are dropped rather than applied to a picture with a hole in it — the read that follows
+  supersedes them within milliseconds.
+- **Refusals are total** (`INV-07`): `101`/`103`/`107` stop, `105` is not an error, `109` refreshes
+  and retries, `100` backs off. `101` and `109` look alike and mean opposite things: retrying a dead
+  token forever, or signing the wall out every hour, are the two ways to get that wrong.
+- **Backoff is fully jittered** (1 s → 30 s, `random(0, bound]`). The SDK's stock strategy has no
+  jitter; a building full of walls reconnecting in lockstep is what jitter is for.
+- **TLS uses the system trust store** (`rustls-tls-native-roots`), not a bundled root list: the socket
+  is `wss://` behind the same certificate as the API, and a wall inside a deployment may trust a
+  private CA that only the system knows. A bundled list works in development and fails on the wall.
+- **No `age_seconds` on the event.** Age is measured at the moment of rendering, so a value frozen at
+  publish time arrives already wrong (`live::wire::LiveFix::age_seconds` takes the render clock).
+
+The actor is one thread with one current-thread runtime and one connection per attempt; the UI thread
+drains updates between frames and is woken by the same `Waker` Rune hands `AppSpec::setup`.
+
 ## What is deliberately absent
 
 - **`POST /live-feed/fixes`** (the `--post-fix` dev flag) is not implemented. Writing a fix needs a

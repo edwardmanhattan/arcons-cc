@@ -256,6 +256,29 @@ impl Minos {
         }
     }
 
+    /// The Centrifugo endpoint, derived from the REST base.
+    ///
+    /// Two shapes, and both are in the README because getting them wrong is a connect that hangs:
+    /// `https://host` → `wss://host/connection/websocket`, and `http://host:8080` →
+    /// `ws://host:8000/connection/websocket` (the REST port and the socket port differ in
+    /// development, and only the host is shared). A path prefix on the REST base (`…/api/v1`) is
+    /// dropped: the socket lives at the host root, not under the API.
+    pub fn socket_url(&self) -> String {
+        let rest = self.base_url();
+        let (scheme, rest) = match rest.split_once("://") {
+            Some((scheme, rest)) => (scheme, rest),
+            None => ("https", rest),
+        };
+        let host = rest.split('/').next().unwrap_or(rest);
+        if scheme == "https" {
+            format!("wss://{host}/connection/websocket")
+        } else {
+            // A development host: the REST port in the base is 8080, the socket is 8000.
+            let hostname = host.split(':').next().unwrap_or(host);
+            format!("ws://{hostname}:8000/connection/websocket")
+        }
+    }
+
     /// The refresh token, when the wall holds one.
     pub fn refresh_token(&self) -> Option<&str> {
         match &self.credential {
@@ -379,8 +402,28 @@ pub fn self_check() -> ExitCode {
             missing.push("Minos configuration (#8)".to_string());
         }
     }
-    println!("  socket       not checked (needs the socket actor: ticket #4)");
-    missing.push("socket subscription (#4)".to_string());
+    if let Ok(minos) = Minos::from_env() {
+        println!("  socket       {}", minos.socket_url());
+        match crate::live::actor::probe(&minos) {
+            Ok(probe) if probe.connected && probe.subscribed => {
+                println!("  subscription ok  {}", probe.channel);
+            }
+            Ok(probe) => {
+                println!(
+                    "  subscription FAILED  connected={} subscribed={}",
+                    probe.connected, probe.subscribed
+                );
+                missing.push("a socket subscription (#4)".to_string());
+            }
+            Err(error) => {
+                println!("  subscription FAILED  {error}");
+                missing.push(format!("a socket subscription (#4): {error}"));
+            }
+        }
+    } else {
+        println!("  socket       not checked (needs a Minos configuration: #8)");
+        missing.push("socket subscription (#4)".to_string());
+    }
 
     if missing.is_empty() {
         println!("ok");
@@ -464,6 +507,61 @@ mod tests {
             args.passthrough,
             vec!["--snap", "out/picture.png", "--tree", "out/t.json"]
         );
+    }
+
+    #[test]
+    fn the_socket_url_follows_the_base_url() {
+        // https → wss on the same host, path prefix dropped. http on a dev port → ws on :8000,
+        // because the REST and socket ports differ in development and only the host is shared.
+        let wall = Minos::new(
+            "https://api.example.test/api/v1",
+            Credential::RefreshToken(Secret::new("t")),
+        );
+        assert_eq!(
+            wall.socket_url(),
+            "wss://api.example.test/connection/websocket"
+        );
+
+        let dev = Minos::new(
+            "http://minos.local:8080/api/v1",
+            Credential::RefreshToken(Secret::new("t")),
+        );
+        assert_eq!(
+            dev.socket_url(),
+            "ws://minos.local:8000/connection/websocket"
+        );
+
+        // A bare host with no scheme is treated as https, not as a relative path.
+        let bare = Minos::new(
+            "api.example.test",
+            Credential::RefreshToken(Secret::new("t")),
+        );
+        assert_eq!(
+            bare.socket_url(),
+            "wss://api.example.test/connection/websocket"
+        );
+    }
+
+    #[test]
+    fn a_secret_never_prints_and_neither_does_the_configuration() {
+        // INV-08 for the configuration: `{:?}` on the whole thing is safe by construction.
+        let minos = Minos::new(
+            "https://api.example.test/api/v1",
+            Credential::Password {
+                identifier: "wall".into(),
+                password: Secret::new("hunter2-not-a-real-one"),
+            },
+        );
+        let printed = format!("{minos:?}");
+        assert!(
+            !printed.contains("hunter2"),
+            "the password printed: {printed}"
+        );
+        assert!(
+            !printed.contains("REDACTED"),
+            "redaction must be <redacted>, got {printed}"
+        );
+        assert!(printed.contains("<redacted>"));
     }
 
     #[test]

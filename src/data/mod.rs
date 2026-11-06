@@ -38,6 +38,7 @@ pub mod thread;
 pub mod types;
 pub mod wire;
 
+pub use http::Http;
 pub use thread::{Backend, Command, Reply};
 
 /// Everything that can go wrong between here and the wire.

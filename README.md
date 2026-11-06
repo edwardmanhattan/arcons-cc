@@ -84,7 +84,7 @@ cargo run --features map -- --probe-map --out out/probe.png   # one map frame, n
 cargo run -- --fullscreen       # borderless, at the primary output's size
 cargo run -- --window-size 1920x1080
 cargo run -- --version          # the version, no window
-cargo run -- --self-check       # config, credentials, REST, socket, map seed (exit 2 if anything is)
+cargo run -- --self-check       # config, credentials, REST read, socket subscribe, map seed
 
 scripts/verify.sh               # the gate — the same command CI runs
 scripts/verify.sh --fast        # the inner loop: no captures, no budgets

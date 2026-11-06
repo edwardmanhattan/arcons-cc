@@ -48,4 +48,19 @@ impl Picture {
     pub fn is_empty(&self) -> bool {
         self.units.is_empty()
     }
+
+    /// Replace the membership with a completed picture read.
+    ///
+    /// The read is authoritative: it names every live hull, including the ones that have never
+    /// reported, so a hull missing from it is missing from the fleet, not from our copy.
+    pub fn replace_from_feed(&mut self, feed: &[crate::data::types::FeedPosition]) {
+        self.units = feed
+            .iter()
+            .map(|position| Unit {
+                id_unit: position.id_unit,
+                name: position.name.clone(),
+                hull_number: position.hull_number.clone(),
+            })
+            .collect();
+    }
 }

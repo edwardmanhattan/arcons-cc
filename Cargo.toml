@@ -27,7 +27,10 @@ png = { version = "0.18", optional = true }
 
 # The socket client. Vendored (see `vendor/README.md`): upstream 0.2.6 cannot set the connect
 # command's `data`, which is where Minos reads our token, and drops handshake refusal codes.
-tokio-centrifuge = { version = "=0.2.6", default-features = false }
+# TLS: rustls against the SYSTEM trust store, not a bundled one. The socket is `wss://` behind the
+# same certificate as the API, and a wall inside a deployment may trust a private CA that only the
+# system store knows about; a bundled root list would work in development and fail on the wall.
+tokio-centrifuge = { version = "=0.2.6", default-features = false, features = ["rustls-tls-native-roots"] }
 
 # Build one thread per concern, never a blocking call from the UI thread.
 reqwest = { version = "0.13", features = ["blocking", "json", "rustls", "webpki-roots"], default-features = false }

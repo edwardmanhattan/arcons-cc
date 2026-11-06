@@ -22,6 +22,7 @@ use std::process::ExitCode;
 use rune::{AppSpec, Cx, El, col, row, spacer, text};
 
 use crate::config;
+use crate::live::LiveThread;
 #[cfg(feature = "map")]
 use crate::map::geometry::Camera;
 use crate::units::Picture;
@@ -43,6 +44,26 @@ pub struct State {
     /// The map thread and the pixels it paints. `None` without `--features map`.
     #[cfg(feature = "map")]
     pub map: Option<crate::map::thread::MapThread>,
+    /// The socket actor, when a credential was configured. `None` means the wall is read-only.
+    pub live: Option<LiveThread>,
+    /// What the socket last said about itself.
+    pub link: Link,
+    /// How many fixes the socket has delivered, for the header's "is anything happening" question.
+    pub fixes: u64,
+}
+
+/// The socket's state, as the header shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Link {
+    /// No credential: the wall reads and does not listen.
+    #[default]
+    Absent,
+    /// A socket is running and the picture is proven current.
+    Live,
+    /// Connected or reconnecting, but the picture is not proven current (`INV-09`).
+    Unproven,
+    /// A refusal a human has to fix, or a failure to start.
+    Failed(String),
 }
 
 /// The whole window.
@@ -51,13 +72,22 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
     // are reached through interior mutability only where they must be — here, the scale is a plain
     // read for the layout maths.
     let scale = cx.env().scale;
-    let status = if state.picture.is_empty() {
+    let units = if state.picture.is_empty() {
         "no picture yet".to_string()
     } else {
         match state.picture.len() {
             1 => "1 unit".to_string(),
             n => format!("{n} units"),
         }
+    };
+    let (link, link_colour) = match &state.link {
+        Link::Live => (
+            format!("live · {units} · {} fixes", state.fixes),
+            tokens::accent(),
+        ),
+        Link::Unproven => (format!("reconnecting · {units}"), tokens::ink_dim()),
+        Link::Absent => (units, tokens::ink_dim()),
+        Link::Failed(error) => (format!("socket down: {error}"), tokens::ink_dim()),
     };
 
     let header = row()
@@ -71,10 +101,10 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
         )
         .child(spacer())
         .child(
-            text(status)
+            text(link)
                 .key("picture-status")
                 .font(tokens::LABEL)
-                .color(tokens::ink_dim()),
+                .color(link_colour),
         );
 
     col()
@@ -270,23 +300,86 @@ fn window_options(window: config::Window, displays: &[rune::Display]) -> rune::W
     }
 }
 
+/// Start the socket actor, once, before the first frame.
+///
+/// Nothing here blocks: the actor owns its thread and its runtime, and `wake` is how it says "draw
+/// this now" without the view loop ever awaiting anything.
+fn start_socket(state: &mut State, wake: rune::Waker) {
+    let Ok(minos) = config::Minos::from_env() else {
+        // No credential: the wall reads what #3's thread gives it and listens to nothing. That is a
+        // deployment fact, not an error, and `--self-check` is where it is reported.
+        return;
+    };
+    state.live = Some(LiveThread::spawn(minos, move || wake()));
+}
+
+/// Drain what the socket said since the last frame.
+fn drain_socket(state: &mut State) -> bool {
+    // Drain first, apply second: the updates own their data, and applying while holding the socket
+    // borrow would keep the whole state immutable for the length of the drain.
+    let updates: Vec<crate::live::Update> = match &state.live {
+        Some(live) => std::iter::from_fn(|| live.try_recv()).collect(),
+        None => return false,
+    };
+    let changed = !updates.is_empty();
+    for update in updates {
+        apply_update(state, update);
+    }
+    changed
+}
+
+/// One socket update, as the view loop takes it.
+///
+/// Separated from the drain so it can be tested without a socket: what the header says, and what the
+/// picture believes, are the two things a wall gets wrong when this is wired by hand.
+fn apply_update(state: &mut State, update: crate::live::Update) {
+    use crate::live::Update;
+    match update {
+        Update::Picture(feed) => {
+            state.picture.replace_from_feed(&feed);
+            state.link = Link::Live;
+        }
+        Update::Fix(_fix) => {
+            // The marker layer is #6; until then the count is the evidence something arrived.
+            state.fixes += 1;
+        }
+        // Everything else means "not current": a connect is not a picture (`INV-09`), a refresh is
+        // not a picture, and a retry is not a picture.
+        Update::Connected | Update::Untrusted | Update::RefreshDue | Update::Retrying { .. } => {
+            state.link = Link::Unproven;
+        }
+        Update::Refused { code, reason } => {
+            state.link = Link::Failed(format!("refused {code}: {reason}"))
+        }
+        Update::Failed(error) => state.link = Link::Failed(error),
+    }
+}
+
 /// Start the map thread, once, before the first frame. A `fn` because `AppSpec::setup` is one.
-#[cfg(feature = "map")]
-fn setup(state: &mut State, _waker: rune::Waker) {
-    // The first frame's layout corrects this size; 1280x720 is the window it opens at, so the map is
-    // already rendering the right ground while the layout is being computed.
-    state.map = Some(crate::map::thread::MapThread::spawn(
-        state.camera,
-        (tokens::WINDOW_SIZE.0 as u32, tokens::WINDOW_SIZE.1 as u32),
-    ));
+fn setup(state: &mut State, waker: rune::Waker) {
+    start_socket(state, waker.clone());
+    #[cfg(feature = "map")]
+    {
+        // The first frame's layout corrects this size; 1280x720 is the window it opens at, so the map
+        // is already rendering the right ground while the layout is being computed.
+        state.map = Some(crate::map::thread::MapThread::spawn(
+            state.camera,
+            (tokens::WINDOW_SIZE.0 as u32, tokens::WINDOW_SIZE.1 as u32),
+        ));
+    }
+}
+
+/// Every frame: hand the view loop whatever the socket said, and say whether it changed anything.
+fn poll(state: &mut State, _elapsed: f64, _tx: &mut rune::Tx) -> bool {
+    drain_socket(state)
 }
 
 /// Open the display and run until the compositor closes it.
 pub fn run(window: config::Window, passthrough: Vec<String>) -> ExitCode {
     let spec = AppSpec::<State> {
         min_size: Some(tokens::MIN_WINDOW),
-        #[cfg(feature = "map")]
         setup: Some(setup),
+        poll: Some(poll),
         ..AppSpec::new(TITLE, window.size, State::default, view)
     };
 
@@ -351,6 +444,57 @@ mod tests {
                 && x + w <= tokens::WINDOW_SIZE.0
                 && y + h <= tokens::WINDOW_SIZE.1,
             "the panel must stay inside the window, got {rect:?}"
+        );
+    }
+
+    #[test]
+    fn a_picture_read_makes_the_wall_live_and_that_is_the_only_thing_that_does() {
+        // The wiring a wall gets wrong by hand: "connected" is not "live". Only a completed picture
+        // read may make the header claim the picture is current (INV-09).
+        let mut state = State::default();
+        assert_eq!(state.link, Link::Absent);
+        apply_update(&mut state, crate::live::Update::Connected);
+        assert_eq!(
+            state.link,
+            Link::Unproven,
+            "a connect proves the socket, not the picture"
+        );
+        apply_update(&mut state, crate::live::Update::Untrusted);
+        assert_eq!(state.link, Link::Unproven);
+
+        let feed = vec![
+            crate::data::types::FeedPosition {
+                id_unit: 8,
+                name: "KRI Abdul Halim Perdanakusuma".into(),
+                hull_number: Some("KRI-355".into()),
+                position: None,
+            },
+            crate::data::types::FeedPosition {
+                id_unit: 1,
+                name: "KRI Cakra".into(),
+                hull_number: None,
+                position: None,
+            },
+        ];
+        apply_update(&mut state, crate::live::Update::Picture(feed));
+        assert_eq!(state.link, Link::Live);
+        assert_eq!(
+            state.picture.len(),
+            2,
+            "the read is authoritative for membership"
+        );
+
+        apply_update(
+            &mut state,
+            crate::live::Update::Refused {
+                code: 101,
+                reason: "bad token".into(),
+            },
+        );
+        assert!(
+            matches!(&state.link, Link::Failed(message) if message.contains("101")),
+            "a refusal must be visible, got {:?}",
+            state.link
         );
     }
 

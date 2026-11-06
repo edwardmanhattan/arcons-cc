@@ -1,33 +1,42 @@
 //! The Centrifugo socket actor: movement, on its own thread, with its own runtime.
 //!
-//! #4 owns this module. Nothing here touches the UI thread; the actor publishes what arrived and
-//! the view loop reads it on the next frame.
+//! The socket is an **accelerator over the read**, never the source of truth. `live-feed` has no
+//! replay and no presence, so after any reconnect the picture is re-read and only then trusted
+//! (`INV-09`). Everything else here follows from the pinned protocol:
 //!
-//! The five things that decide whether this module is right:
+//! - **The token rides in the connect frame's `data`** as `{"token": "…"}` — never an
+//!   `Authorization` header, never the frame's `token` field. Upstream `tokio-centrifuge` 0.2.6
+//!   cannot set it, which is why [`crate::live::connect`] builds the bytes and the vendored copy
+//!   carries them.
+//! - **The envelope is not uniform.** Centrifugo adds one `data` level, and the channels differ
+//!   beneath it: `live-feed` is a **bare** event at `pub.data`; `game:<id>` puts a `GameEvent` at
+//!   `pub.data.type` with its payload at `pub.data.data.*` (two levels); `game:<id>:positions` is
+//!   bare, has **no** `type`, and lives at `pub.data.positions`. [`wire`] parses the first, and
+//!   refuses the others rather than returning `undefined` with no error.
+//! - **Refusals are total** (`INV-07`): [`Refusal`] has six variants and one [`Action`] each, both
+//!   exhaustive matches, and no catch-all over the wire enum.
+//! - **A `backfilled` fix is real and did not just happen** (`INV-03`): it reaches the UI with its
+//!   flag intact, and never as "here now".
 //!
-//! 1. **The token rides in the connect frame's `data`** as `{"token": "…"}` — never an
-//!    `Authorization` header, never the frame's `token` field. Upstream `tokio-centrifuge` 0.2.6
-//!    cannot set it, which is why `vendor/tokio-centrifuge` exists.
-//! 2. **The envelope is not uniform.** Centrifugo adds one `data` level, and the channels differ
-//!    beneath it: `live-feed` is a bare event at `pub.data`; `game:<id>` puts a `GameEvent` at
-//!    `pub.data.type` with its payload at `pub.data.data.*` (two levels); `game:<id>:positions` is
-//!    bare, has **no** `type`, and lives at `pub.data.positions`. The wrong depth is `undefined`
-//!    with no error.
-//! 3. **Never build a channel name.** The server grants them; an invented one is refused with `107`.
-//! 4. **Refusals are total** (`INV-07`): `101`/`103`/`107` stop · `109` refresh then retry · `100`
-//!    retry with backoff · `105` ignore. Every code gets its own arm; a new code upstream is a
-//!    compile-visible decision, never a silent default.
-//! 5. **Subscribe before, or with, the initial read**, and reconcile by `id_unit`; a fix published
-//!    in the gap is otherwise lost with no way to notice. And there is no `live-feed` replay, so a
-//!    reconnect re-reads before any marker is trusted (`INV-09`).
-//!
-//! No item exists yet on purpose — #4 lands the actor, and its state machine is the ticket.
+//! v0.1 subscribes to `live-feed` and nothing else. There is no personal channel and no game channel
+//! until there is a feature that needs one; a subscription to a channel nobody reads is a `107`
+//! waiting to be explained.
+
+pub mod actor;
+pub mod backoff;
+pub mod trust;
+pub mod wire;
+
+pub use actor::{LiveThread, Update};
+pub use backoff::Backoff;
+pub use trust::Trust;
+pub use wire::LiveFix;
 
 /// A Centrifugo client-protocol refusal: the number decides whether to come back.
 ///
-/// Six codes, and no more: `realtime-protocol.md` §7 is the authority, and
-/// `tests/doc_claims.rs` fails when the document and this enum disagree. That is the point — a new
-/// code upstream must be a **compile-visible decision** here, never a silent default (`INV-07`).
+/// Six codes, and no more: `realtime-protocol.md` §7 is the authority, and `tests/doc_claims.rs`
+/// fails when the document and this enum disagree. That is the point — a new code upstream must be a
+/// **compile-visible decision** here, never a silent default (`INV-07`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
     /// `100` — our side failed, not yours. Marked temporary: come back.
@@ -94,8 +103,8 @@ impl Refusal {
 
     /// The refusal a code names, or `None` for a code this client has never seen.
     ///
-    /// `None` is not a default: the actor (#4) logs the unknown code and does not invent an action
-    /// for it, because guessing would be how a future protocol addition gets swallowed.
+    /// `None` is not a default: the actor logs the unknown code and does not invent an action for it,
+    /// because guessing would be how a future protocol addition gets swallowed.
     pub const fn from_code(code: u16) -> Option<Refusal> {
         match code {
             100 => Some(Refusal::Internal),
@@ -132,5 +141,33 @@ mod tests {
             None,
             "an unknown code is a visible None, never a guess"
         );
+    }
+
+    #[test]
+    fn every_refusal_maps_to_exactly_one_action_and_the_two_similar_ones_differ() {
+        // INV-07: 101 and 109 look alike from a distance — one says "never come back", the other
+        // "refresh and come back". Treating them the same either retries forever with a dead token
+        // or signs the wall out every hour.
+        let mut seen = Vec::new();
+        for refusal in Refusal::ALL {
+            let action = refusal.action();
+            assert_eq!(
+                action,
+                refusal.action(),
+                "{refusal:?} must not change its mind"
+            );
+            seen.push((refusal.code(), action));
+        }
+        assert_eq!(seen.len(), 6, "six codes, one action each, no catch-all");
+        assert_eq!(Refusal::Unauthorized.action(), Action::Stop);
+        assert_eq!(Refusal::TokenExpired.action(), Action::RefreshThenRetry);
+        assert_ne!(
+            Refusal::Unauthorized.action(),
+            Refusal::TokenExpired.action()
+        );
+        assert_eq!(Refusal::Internal.action(), Action::RetryWithBackoff);
+        assert_eq!(Refusal::AlreadySubscribed.action(), Action::Ignore);
+        assert_eq!(Refusal::PermissionDenied.action(), Action::Stop);
+        assert_eq!(Refusal::InvalidChannelName.action(), Action::Stop);
     }
 }
