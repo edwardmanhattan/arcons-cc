@@ -45,32 +45,167 @@ pub fn seed_present() -> bool {
     std::fs::metadata(seed_path()).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 1024)
 }
 
-/// The Vulkan device the map's context must use, from `ARCONS_MAP_GPU` (`vendor:device`, e.g.
-/// `8086:` for this laptop's Intel iGPU), exported to Mesa's device-select layer.
+/// Which Vulkan driver the map renders through.
 ///
-/// **MapLibre picks the wrong GPU on a hybrid laptop by default.** Measured here: it sorts the
-/// physical devices and chooses the **RTX 2050**, while the panel is wired to the Intel iGPU and the
-/// compositor runs there. Rendering the map on the discrete GPU means waking it every 4 Hz and
-/// copying each frame back across the bus, for a picture the iGPU could shade.
+/// **MapLibre picks the wrong GPU on this hybrid laptop.** Measured: it enumerates the physical
+/// devices, sorts them itself, and takes the **RTX 2050** — while the panel is wired to the Intel
+/// iGPU and the compositor runs there. Every map frame would be shaded on a GPU nobody is looking
+/// at, and read back across the bus at 4 Hz. Mesa's `MESA_VK_DEVICE_SELECT` does not move it.
+/// Limiting the loader to one ICD does, because then there is only one device to pick: with
+/// `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/intel_icd.json` MapLibre logs
+/// `Using "Intel(R) Graphics (RPL-P)"`, and a deliberately bogus path makes it fail outright, which
+/// is how we know the loader honours it.
 ///
-/// Called from `main` before any thread starts (Rune included), because it is process-wide and the
-/// loader reads it once. Unset, nothing is forced: the map uses whatever the loader picks, and a
-/// hybrid machine is expected to set it. ADR-0001 records the value for this one.
+/// The **default is the integrated GPU** when the machine has both integrated and discrete Vulkan
+/// drivers. That is not a guess about which is faster, it is the compositor: on a hybrid laptop the
+/// panel hangs off the integrated one, and a wall display is not a game. It is also what Rune itself
+/// does — `RUNE_GPU_LOG=1` reports "the compositor's GPU" — so both halves of the window end up on
+/// one device. Overridable:
+///
+/// - `ARCONS_MAP_VK_DRIVER=<path>` — an ICD manifest, e.g. `…/nvidia_icd.json`;
+/// - `ARCONS_MAP_VK_DRIVER=off` — leave the choice to the Vulkan loader.
+///
+/// A path rather than a vendor id on purpose: mapping "8086" to a file is a guess about driver
+/// packaging, and a wall is not the place for that guess.
 #[cfg(feature = "map")]
 pub fn pin_gpu_from_env() {
-    if std::env::var_os("MESA_VK_DEVICE_SELECT").is_some() {
-        return;
+    let icds = vulkan_icds();
+    let explicit = std::env::var("ARCONS_MAP_VK_DRIVER").ok();
+    match choose_driver(explicit.as_deref(), &icds) {
+        Selection::None => {}
+        Selection::Invalid(value) => eprintln!(
+            "arcons-cc: ARCONS_MAP_VK_DRIVER={value} is neither `auto`, `off`, nor a readable ICD file; \
+             the map will render on whatever the Vulkan loader picks"
+        ),
+        Selection::Driver(path) => {
+            eprintln!(
+                "arcons-cc: the map renders through {} — {}",
+                path.display(),
+                reason(&path)
+            );
+            // SAFETY: called from `main` before Rune starts any thread, so nothing else reads the
+            // environment concurrently. `VK_DRIVER_FILES` is the current loader's name;
+            // `VK_ICD_FILENAMES` is the one an older loader still reads.
+            unsafe {
+                std::env::set_var("VK_DRIVER_FILES", &path);
+                std::env::set_var("VK_ICD_FILENAMES", &path);
+            }
+        }
     }
-    let Some(device) = std::env::var_os("ARCONS_MAP_GPU") else {
-        return;
-    };
-    let device = device.to_string_lossy().to_string();
-    if device.trim().is_empty() {
-        return;
+}
+
+/// What [`choose_driver`] decided.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Selection {
+    /// Leave it to the loader: `off`, or nothing suitable found.
+    None,
+    /// The value was not a directive or a file.
+    Invalid(String),
+    /// This ICD, and nothing else.
+    Driver(std::path::PathBuf),
+}
+
+/// The decision, as a **pure function** so it can be tested without a GPU, a loader, or a display.
+///
+/// `icds` is what the Vulkan loader would have offered. An explicit value wins over `auto`,
+/// including when it names the discrete card: the operator asked.
+pub fn choose_driver(explicit: Option<&str>, icds: &[std::path::PathBuf]) -> Selection {
+    match explicit.map(str::trim).filter(|value| !value.is_empty()) {
+        None | Some("auto") => icds
+            .iter()
+            // Rank, do not merely filter: this machine offers `intel_hasvk_icd.json` (Haswell-era
+            // Intel) beside `intel_icd.json`, and the legacy one sorts first. Choosing it finds no
+            // device on a modern iGPU and loses the map entirely.
+            .min_by_key(|path| rank(path))
+            .cloned()
+            .map_or(Selection::None, Selection::Driver),
+        Some("off") => Selection::None,
+        Some(value) => {
+            let path = std::path::PathBuf::from(value);
+            if path.is_file() {
+                Selection::Driver(path)
+            } else {
+                Selection::Invalid(value.to_string())
+            }
+        }
     }
-    // SAFETY: called from `main` before Rune starts any thread, so nothing else is reading the
-    // environment concurrently.
-    unsafe { std::env::set_var("MESA_VK_DEVICE_SELECT", device.trim()) };
+}
+
+/// How good a candidate this ICD is, lowest first: a modern integrated GPU, then any other
+/// integrated one, then anything else the loader offered.
+fn rank(path: &std::path::Path) -> u8 {
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    let legacy = name.contains("hasvk");
+    match (is_integrated(path), legacy) {
+        (true, false) => 0,
+        (true, true) => 1,
+        (false, _) => 2,
+    }
+}
+
+/// A Vulkan ICD manifest that is a GPU the *panel* is likely on.
+///
+/// Filenames, not vendor ids: the manifest's `library_path` names a driver, not a bus address, and
+/// every packager spells the file after the vendor. `lvp`/`swrast` are lavapipe, which is a software
+/// device and never what a wall should choose when real hardware is present.
+fn is_integrated(path: &std::path::Path) -> bool {
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    let integrated = ["intel", "radeon", "amdgpu", "panfrost", "freedreno", "v3d"]
+        .iter()
+        .any(|v| name.contains(v));
+    let software = name.contains("lvp") || name.contains("swrast") || name.contains("software");
+    integrated && !software
+}
+
+#[cfg(feature = "map")]
+fn reason(path: &std::path::Path) -> &'static str {
+    if is_integrated(path) {
+        "the integrated GPU, where the panel is"
+    } else {
+        "chosen by ARCONS_MAP_VK_DRIVER"
+    }
+}
+
+/// Every ICD manifest the Vulkan loader would search, in its own order.
+#[cfg(feature = "map")]
+fn vulkan_icds() -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::path::PathBuf::from(home);
+        dirs.push(home.join(".local/share/vulkan/icd.d"));
+        dirs.push(home.join(".config/vulkan/icd.d"));
+    }
+    if let Some(xdg) = std::env::var_os("XDG_DATA_DIRS") {
+        for dir in std::env::split_paths(&xdg) {
+            dirs.push(dir.join("vulkan/icd.d"));
+        }
+    }
+    dirs.push(std::path::PathBuf::from("/usr/local/share/vulkan/icd.d"));
+    dirs.push(std::path::PathBuf::from("/usr/share/vulkan/icd.d"));
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut files: Vec<std::path::PathBuf> = entries
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "json")
+            })
+            .collect();
+        files.sort();
+        found.extend(files);
+    }
+    found
 }
 
 /// Where the writable copy of the seed lives: MapLibre writes into its cache, so the shipped seed
@@ -127,6 +262,84 @@ pub fn probe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn icd(name: &str) -> PathBuf {
+        PathBuf::from("/usr/share/vulkan/icd.d").join(name)
+    }
+
+    #[test]
+    fn by_default_the_map_takes_the_integrated_gpu_the_panel_is_on() {
+        // The bug this fixes: MapLibre sorted the devices and took the RTX 2050 while the compositor
+        // and the panel were on the Intel iGPU. Integrated first is the compositor on a hybrid
+        // laptop, and it is what Rune itself chooses.
+        let icds = vec![icd("nvidia_icd.json"), icd("intel_icd.json")];
+        assert_eq!(
+            choose_driver(None, &icds),
+            Selection::Driver(icd("intel_icd.json"))
+        );
+        assert_eq!(
+            choose_driver(Some("auto"), &icds),
+            Selection::Driver(icd("intel_icd.json"))
+        );
+    }
+
+    #[test]
+    fn lavapipe_is_not_a_gpu_the_wall_should_choose() {
+        // A CI runner has only this. Choosing it as "integrated" would be right for CI and wrong for
+        // a wall, so it falls back to whatever is first rather than pretending it is the panel's GPU.
+        let icds = vec![icd("lvp_icd.x86_64.json"), icd("nvidia_icd.json")];
+        assert_eq!(
+            choose_driver(None, &icds),
+            Selection::Driver(icd("lvp_icd.x86_64.json"))
+        );
+        assert!(!is_integrated(&icd("lvp_icd.x86_64.json")));
+        assert!(is_integrated(&icd("intel_icd.json")));
+        assert!(!is_integrated(&icd("nvidia_icd.json")));
+    }
+
+    #[test]
+    fn an_explicit_driver_wins_off_wins_and_junk_is_refused() {
+        let icds = vec![icd("nvidia_icd.json"), icd("intel_icd.json")];
+        assert_eq!(
+            choose_driver(Some("off"), &icds),
+            Selection::None,
+            "off means the loader decides"
+        );
+        // A path that is not a file is refused loudly rather than silently ignored: a wall that
+        // renders on the wrong GPU because of a typo is this ticket all over again.
+        assert_eq!(
+            choose_driver(Some("/nope.json"), &icds),
+            Selection::Invalid("/nope.json".to_string())
+        );
+        // A real file wins even when it is the discrete card: the operator asked for it.
+        let this_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        assert_eq!(
+            choose_driver(Some(&this_file.display().to_string()), &icds),
+            Selection::Driver(this_file)
+        );
+    }
+
+    #[test]
+    fn the_legacy_intel_driver_loses_to_the_modern_one() {
+        // `intel_hasvk_icd.json` sorts first on this machine and finds no device on a modern iGPU.
+        // Ranking, not filtering, keeps one rule for "integrated" while still preferring the one
+        // that can actually drive the panel.
+        let icds = vec![
+            icd("intel_hasvk_icd.json"),
+            icd("nvidia_icd.json"),
+            icd("intel_icd.json"),
+        ];
+        assert_eq!(
+            choose_driver(None, &icds),
+            Selection::Driver(icd("intel_icd.json"))
+        );
+        assert!(rank(&icd("intel_icd.json")) < rank(&icd("intel_hasvk_icd.json")));
+    }
+
+    #[test]
+    fn a_machine_with_no_icd_leaves_the_loader_alone() {
+        assert_eq!(choose_driver(None, &[]), Selection::None);
+    }
 
     #[test]
     fn the_offline_seed_is_in_the_tree_and_not_empty() {
