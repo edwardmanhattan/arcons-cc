@@ -87,6 +87,7 @@ src/data.rs      the Minos REST client            (#3)
 src/live.rs      the Centrifugo socket actor      (#4)
 src/map.rs       MapLibre on its own thread       (#5)
 vendor/          dependencies patched for reasons recorded in vendor/README.md
+fixtures/        recorded wire data the tests read (see fixtures/README.md)
 docs/spec/       the pinned Minos contract — read-only
 docs/            verification contract, invariants, ADRs
 ```

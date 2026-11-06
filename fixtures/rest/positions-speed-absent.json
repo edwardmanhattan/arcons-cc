@@ -1,0 +1,21 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": [
+    {
+      "id_unit": 8,
+      "name": "KRI Abdul Halim Perdanakusuma",
+      "hull_number": "KRI-355",
+      "position": {
+        "latitude": -7.8815946,
+        "longitude": 112.5356379,
+        "course_deg": 255,
+        "accuracy_m": 7.2,
+        "recorded_at": "2026-09-29T09:56:07.685543+07:00",
+        "received_at": "2026-09-29T09:56:07.685543+07:00",
+        "age_seconds": 3334145.491014864,
+        "backfilled": false
+      }
+    }
+  ]
+}
