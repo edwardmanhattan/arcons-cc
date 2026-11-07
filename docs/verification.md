@@ -93,3 +93,24 @@ The failure mode a long agent run hits is not a wrong function — it is a *stal
 3. Run `scripts/verify.sh` before you report done, and paste its **last lines**, not a claim.
 4. If you changed a test, a fixture or a golden: say which, and why, in one sentence.
 5. If a check is slow, ticket the fix. Do not delete the check.
+
+## Captures: what the wall looks like, as a command
+
+```sh
+scripts/capture.sh picture          # out/picture.png, compared with fixtures/golden/picture.png
+scripts/assert.sh out/picture.png   # pixels and structure, with numbers
+scripts/capture.sh --update-goldens <scene>   # a human decided the new picture is right
+```
+
+A scene is deterministic by construction: `fixtures/scenes/feed.json` instead of a server, Rune's
+virtual clock instead of `Instant::now()`, no socket and no map surface. Two runs are identical
+bytes (`INV-11`), which is what makes a golden a check rather than a suggestion.
+
+The two checks do different jobs, and neither substitutes for the other:
+
+- **The golden** answers *"did anything change?"* — a tone, a gap, a moved label. It is bytes, so it
+  catches what nobody thought to assert.
+- **`assert.sh`** answers *"is what changed wrong?"* — "the marker for hull 12 is 5.1 px from where
+  the projection puts it", "the stale marker is 146 luma and the live one 170". It reads colours from
+  `ui::tokens` and geometry from `map::geometry::project`, so it cannot outlive the palette or the
+  layout it describes.

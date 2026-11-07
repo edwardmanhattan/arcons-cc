@@ -47,6 +47,30 @@ fn probe_map(_camera: arcons_cc::map::geometry::Camera, out: PathBuf) -> ExitCod
 }
 
 /// `--self-check`: run every check, print one line each, and exit with the first failure's code.
+/// `--assert`: pixels with numbers and a non-zero exit. `scripts/assert.sh` is a wrapper for it.
+fn assert_capture(args: &config::Args) -> ExitCode {
+    let (Some(scene), Some(image)) = (args.assert_scene.as_deref(), args.image.as_deref()) else {
+        eprintln!("arcons-cc: --assert needs a scene name and --image PATH");
+        return ExitCode::from(64);
+    };
+    match arcons_cc::verify::check(scene, image) {
+        Ok(lines) => {
+            for line in lines {
+                println!("  ok    {line}");
+            }
+            println!("{scene}: assertions passed");
+            ExitCode::SUCCESS
+        }
+        Err(failures) => {
+            for failure in failures {
+                eprintln!("  FAIL  {failure}");
+            }
+            eprintln!("{scene}: {} assertion(s) failed", 1);
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn self_check(args: &config::Args) -> ExitCode {
     let mut out = String::new();
     let outcome = config::check::run(
@@ -57,6 +81,13 @@ fn self_check(args: &config::Args) -> ExitCode {
     );
     print!("{out}");
     ExitCode::from(outcome.code())
+}
+
+/// Whether Rune has decided this process is a headless render (`--scene`, `--snap`, `--tree`,
+/// `--script`, …). A capture runs on a fixture and opens no window, so it neither needs nor should
+/// have a configuration.
+fn arcons_cc_headless() -> bool {
+    rune::is_headless()
 }
 
 fn main() -> ExitCode {
@@ -88,11 +119,17 @@ fn main() -> ExitCode {
 
     match args.command {
         config::Command::SelfCheck => self_check(&args),
+        config::Command::Assert => assert_capture(&args),
         config::Command::ProbeMap => probe_map(
             args.probe_camera
                 .unwrap_or(arcons_cc::map::geometry::Camera::START),
             args.out.clone(),
         ),
+        // A headless scene renders a fixture: it has no server to talk to and must not need one.
+        // `--scene`/`--snap`/`--tree` are Rune's own flags, so this asks Rune rather than guessing.
+        config::Command::Run if arcons_cc_headless() => {
+            ui::run(args.window, args.passthrough.clone())
+        }
         config::Command::Run => match config::Config::load(&args, &config::Env::from_process()) {
             Ok(config) => {
                 config::set_current(&config);

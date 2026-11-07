@@ -1,0 +1,633 @@
+{
+  "status_code": 200,
+  "message": "Successful",
+  "data": [
+    {
+      "id_unit": 1,
+      "name": "KRI Cakra",
+      "hull_number": "401",
+      "position": {
+        "latitude": -6.19,
+        "longitude": 106.83,
+        "speed_kn": 5.8,
+        "accuracy_m": 25.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 23
+      }
+    },
+    {
+      "id_unit": 2,
+      "name": "KRI Nagapasa",
+      "hull_number": "403",
+      "position": {
+        "latitude": -6.168,
+        "longitude": 106.83,
+        "speed_kn": 7.1,
+        "accuracy_m": 35.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 46
+      }
+    },
+    {
+      "id_unit": 3,
+      "name": "KRI Ardadedali",
+      "hull_number": "404",
+      "position": {
+        "latitude": -6.146,
+        "longitude": 106.83,
+        "speed_kn": 8.4,
+        "accuracy_m": 45.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 69
+      }
+    },
+    {
+      "id_unit": 4,
+      "name": "KRI Alugoro",
+      "hull_number": "405",
+      "position": {
+        "latitude": -6.124,
+        "longitude": 106.83,
+        "speed_kn": 9.7,
+        "accuracy_m": 55.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 92
+      }
+    },
+    {
+      "id_unit": 5,
+      "name": "KRI Ahmad Yani",
+      "hull_number": "KRI-351",
+      "position": {
+        "latitude": -6.102,
+        "longitude": 106.83,
+        "speed_kn": 11.0,
+        "accuracy_m": 65.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 115
+      }
+    },
+    {
+      "id_unit": 6,
+      "name": "KRI Yos Sudarso",
+      "hull_number": "KRI-353",
+      "position": {
+        "latitude": -6.19,
+        "longitude": 106.846,
+        "speed_kn": 12.3,
+        "accuracy_m": 75.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 138
+      }
+    },
+    {
+      "id_unit": 7,
+      "name": "KRI Oswald Siahaan",
+      "hull_number": "KRI-357"
+    },
+    {
+      "id_unit": 8,
+      "name": "KRI Abdul Halim Perdanakusuma",
+      "hull_number": "KRI-355",
+      "position": {
+        "latitude": -6.146,
+        "longitude": 106.846,
+        "speed_kn": 14.9,
+        "accuracy_m": 25.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 184
+      }
+    },
+    {
+      "id_unit": 9,
+      "name": "KRI Slamet Riyadi",
+      "hull_number": "KRI-352",
+      "position": {
+        "latitude": -6.124,
+        "longitude": 106.846,
+        "speed_kn": 0.0,
+        "accuracy_m": 35.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 207
+      }
+    },
+    {
+      "id_unit": 10,
+      "name": "KRI Karel Satsuit Tubun",
+      "hull_number": "KRI-354",
+      "position": {
+        "latitude": -6.102,
+        "longitude": 106.846,
+        "speed_kn": 17.5,
+        "accuracy_m": 45.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 230
+      }
+    },
+    {
+      "id_unit": 11,
+      "name": "KRI Bima Suci",
+      "hull_number": "KRI-358",
+      "position": {
+        "latitude": -6.19,
+        "longitude": 106.862,
+        "speed_kn": 18.8,
+        "accuracy_m": 55.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 900.0,
+        "backfilled": false,
+        "course_deg": 253
+      }
+    },
+    {
+      "id_unit": 12,
+      "name": "KRI Dewaruci",
+      "hull_number": "KRI-359",
+      "position": {
+        "latitude": -6.168,
+        "longitude": 106.862,
+        "speed_kn": 20.1,
+        "accuracy_m": 65.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 276
+      }
+    },
+    {
+      "id_unit": 13,
+      "name": "KRI Raden Eddy Martadinata",
+      "hull_number": "KRI-331",
+      "position": {
+        "latitude": -6.146,
+        "longitude": 106.862,
+        "speed_kn": 21.4,
+        "accuracy_m": 75.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": true,
+        "course_deg": 299
+      }
+    },
+    {
+      "id_unit": 14,
+      "name": "KRI I Gusti Ngurah Rai",
+      "hull_number": "KRI-332",
+      "position": {
+        "latitude": -6.124,
+        "longitude": 106.862,
+        "speed_kn": 22.7,
+        "accuracy_m": 15.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 322
+      }
+    },
+    {
+      "id_unit": 15,
+      "name": "KRI Bung Tomo",
+      "hull_number": "KRI-368",
+      "position": {
+        "latitude": -6.102,
+        "longitude": 106.862,
+        "speed_kn": 24.0,
+        "accuracy_m": 25.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 345
+      }
+    },
+    {
+      "id_unit": 16,
+      "name": "KRI Hasanuddin",
+      "hull_number": "KRI-366",
+      "position": {
+        "latitude": -6.19,
+        "longitude": 106.878,
+        "speed_kn": 25.3,
+        "accuracy_m": 35.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 8
+      }
+    },
+    {
+      "id_unit": 17,
+      "name": "KRI Halasan",
+      "hull_number": "KRI-364",
+      "position": {
+        "latitude": -6.168,
+        "longitude": 106.878,
+        "speed_kn": 4.5,
+        "accuracy_m": 45.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false
+      }
+    },
+    {
+      "id_unit": 18,
+      "name": "KRI Kujang",
+      "hull_number": "KRI-641",
+      "position": {
+        "latitude": -6.146,
+        "longitude": 106.878,
+        "speed_kn": 5.8,
+        "accuracy_m": 55.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 54
+      }
+    },
+    {
+      "id_unit": 19,
+      "name": "KRI Sampari",
+      "hull_number": "KRI-646",
+      "position": {
+        "latitude": -6.124,
+        "longitude": 106.878,
+        "speed_kn": 7.1,
+        "accuracy_m": 65.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 77
+      }
+    },
+    {
+      "id_unit": 20,
+      "name": "KRI Tombak",
+      "hull_number": "KRI-627",
+      "position": {
+        "latitude": -6.102,
+        "longitude": 106.878,
+        "speed_kn": 8.4,
+        "accuracy_m": 75.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 100
+      }
+    },
+    {
+      "id_unit": 21,
+      "name": "KRI Kerambit",
+      "hull_number": "KRI-628",
+      "position": {
+        "latitude": -6.19,
+        "longitude": 106.894,
+        "speed_kn": 9.7,
+        "accuracy_m": 15.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 123
+      }
+    },
+    {
+      "id_unit": 22,
+      "name": "KRI Parang",
+      "hull_number": "KRI-629",
+      "position": {
+        "latitude": -6.168,
+        "longitude": 106.894,
+        "speed_kn": 11.0,
+        "accuracy_m": 25.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 146
+      }
+    },
+    {
+      "id_unit": 23,
+      "name": "KRI Siwar",
+      "hull_number": "KRI-630",
+      "position": {
+        "latitude": -6.146,
+        "longitude": 106.894,
+        "speed_kn": 12.3,
+        "accuracy_m": 35.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 169
+      }
+    },
+    {
+      "id_unit": 24,
+      "name": "KRI Sura",
+      "hull_number": "KRI-631",
+      "position": {
+        "latitude": -6.124,
+        "longitude": 106.894,
+        "speed_kn": 13.6,
+        "accuracy_m": 45.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 192
+      }
+    },
+    {
+      "id_unit": 25,
+      "name": "KRI Teluk Bintuni",
+      "hull_number": "KRI-632",
+      "position": {
+        "latitude": -6.102,
+        "longitude": 106.894,
+        "speed_kn": 14.9,
+        "accuracy_m": 55.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 215
+      }
+    },
+    {
+      "id_unit": 26,
+      "name": "KRI Teluk Amboina",
+      "hull_number": "KRI-633",
+      "position": {
+        "latitude": -6.19,
+        "longitude": 106.91,
+        "speed_kn": 16.2,
+        "accuracy_m": 65.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 238
+      }
+    },
+    {
+      "id_unit": 27,
+      "name": "KRI Teluk Langsa",
+      "hull_number": "KRI-634",
+      "position": {
+        "latitude": -6.168,
+        "longitude": 106.91,
+        "speed_kn": 17.5,
+        "accuracy_m": 75.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 261
+      }
+    },
+    {
+      "id_unit": 28,
+      "name": "KRI Teluk Sampit",
+      "hull_number": "KRI-635",
+      "position": {
+        "latitude": -6.146,
+        "longitude": 106.91,
+        "speed_kn": 18.8,
+        "accuracy_m": 15.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 284
+      }
+    },
+    {
+      "id_unit": 29,
+      "name": "KRI Tanjung Kambani",
+      "hull_number": "KRI-636",
+      "position": {
+        "latitude": -6.124,
+        "longitude": 106.91,
+        "speed_kn": 20.1,
+        "accuracy_m": 25.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 307
+      }
+    },
+    {
+      "id_unit": 30,
+      "name": "KRI Kud Sangka",
+      "hull_number": "KRI-637",
+      "position": {
+        "latitude": -6.102,
+        "longitude": 106.91,
+        "speed_kn": 21.4,
+        "accuracy_m": 35.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 330
+      }
+    },
+    {
+      "id_unit": 31,
+      "name": "KRI Pulau Rangsang",
+      "hull_number": "KRI-638",
+      "position": {
+        "latitude": -6.19,
+        "longitude": 106.926,
+        "speed_kn": 22.7,
+        "accuracy_m": 45.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 353
+      }
+    },
+    {
+      "id_unit": 32,
+      "name": "KRI Pulau Rondo",
+      "hull_number": "KRI-639",
+      "position": {
+        "latitude": -6.168,
+        "longitude": 106.926,
+        "speed_kn": 24.0,
+        "accuracy_m": 55.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 16
+      }
+    },
+    {
+      "id_unit": 33,
+      "name": "KRI Pulau Rimau",
+      "hull_number": "KRI-640",
+      "position": {
+        "latitude": -6.146,
+        "longitude": 106.926,
+        "speed_kn": 25.3,
+        "accuracy_m": 65.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 39
+      }
+    },
+    {
+      "id_unit": 34,
+      "name": "KRI Pulau Raibu",
+      "hull_number": "KRI-642",
+      "position": {
+        "latitude": -6.124,
+        "longitude": 106.926,
+        "speed_kn": 4.5,
+        "accuracy_m": 75.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 62
+      }
+    },
+    {
+      "id_unit": 35,
+      "name": "KRI Pulau Rempang",
+      "hull_number": "KRI-643",
+      "position": {
+        "latitude": -6.102,
+        "longitude": 106.926,
+        "speed_kn": 5.8,
+        "accuracy_m": 15.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 85
+      }
+    },
+    {
+      "id_unit": 36,
+      "name": "KRI Tanjung Dalpele",
+      "hull_number": "KRI-644",
+      "position": {
+        "latitude": -6.19,
+        "longitude": 106.942,
+        "speed_kn": 7.1,
+        "accuracy_m": 25.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 108
+      }
+    },
+    {
+      "id_unit": 37,
+      "name": "KRI Tanjung Oisina",
+      "hull_number": "KRI-645",
+      "position": {
+        "latitude": -6.168,
+        "longitude": 106.942,
+        "speed_kn": 8.4,
+        "accuracy_m": 35.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 131
+      }
+    },
+    {
+      "id_unit": 38,
+      "name": "KRI Dr. Soeharso",
+      "hull_number": "KRI-647",
+      "position": {
+        "latitude": -6.146,
+        "longitude": 106.942,
+        "speed_kn": 9.7,
+        "accuracy_m": 45.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 154
+      }
+    },
+    {
+      "id_unit": 39,
+      "name": "KRI Semarang",
+      "hull_number": "KRI-648",
+      "position": {
+        "latitude": -6.124,
+        "longitude": 106.942,
+        "speed_kn": 11.0,
+        "accuracy_m": 55.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 177
+      }
+    },
+    {
+      "id_unit": 40,
+      "name": "KRI Soeharso",
+      "position": {
+        "latitude": -6.102,
+        "longitude": 106.942,
+        "speed_kn": 12.3,
+        "accuracy_m": 65.0,
+        "recorded_at": "2026-11-06T12:00:00Z",
+        "received_at": "2026-11-06T12:00:02Z",
+        "age_seconds": 4.0,
+        "backfilled": false,
+        "course_deg": 200
+      }
+    }
+  ]
+}

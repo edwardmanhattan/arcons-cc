@@ -28,3 +28,16 @@ Two rules for adding one:
    table above. Never write a payload from a struct in `src/`.
 2. **Redact tokens, passwords and hostnames** before committing. `grep -r REDACTED fixtures/` should
    find every one, and nothing else should look like a JWT.
+
+## `scenes/` and `golden/` — recorded 2026-11-07
+
+`scenes/feed.json` is the picture the named scenes load: 40 hulls in the `GET /live-feed/positions`
+envelope, so a scene parses through the same `FeedPosition` the REST client uses. It is **derived
+from `rest/positions.json`**: the envelope and every key are the recorded ones, and the values are
+filled in so each trap has one hull (hull 7 never reported, hull 11 is older than the stale
+threshold, hull 13 is backfilled, hull 17 has no course, hull 9 is a measured `0.0`). Say so rather
+than pretending a dev server produced it.
+
+`golden/<scene>.png` is one capture per scene, compared **byte for byte** (`INV-11`). It changes only
+through `scripts/capture.sh --update-goldens`, which a human runs after looking at the diff. A golden
+that changes in passing is a golden that has stopped being a check.

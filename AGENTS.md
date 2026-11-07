@@ -91,5 +91,9 @@ vendor/          dependencies patched for reasons recorded in vendor/README.md
 fixtures/        recorded wire data the tests read (see fixtures/README.md)
 docs/spec/       the pinned Minos contract — read-only
 src/platform.rs  the log, SIGTERM, the start clock
+src/scene.rs     the named states a capture renders: fixture feed, no network, virtual clock
+src/verify.rs    --assert: pixel and structure questions with numbers
+scripts/         verify.sh (the gate), capture.sh <scene>, assert.sh <png>
+fixtures/scenes/ the 40-vessel feed the scenes load; golden/ the captures they must match
 docs/            verification contract, invariants, ADRs, runbook.md (putting the wall up)
 ```
