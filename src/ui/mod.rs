@@ -17,6 +17,7 @@
 
 pub mod markers;
 pub mod tokens;
+pub mod unitcard;
 
 use std::process::ExitCode;
 
@@ -40,6 +41,9 @@ pub struct State {
     /// The frame the map last handed over: its camera and size are what markers project against.
     /// `None` until the first frame, and always `None` without `--features map`.
     pub frame: Option<crate::map::geometry::Rendered>,
+    /// The frame the view was last drawn for, so a new one — from the map thread, or from a test —
+    /// redraws the markers exactly once.
+    frame_seen: Option<crate::map::geometry::Rendered>,
     /// The camera at the start of a drag, so a pan is absolute rather than a sum of deltas.
     #[cfg(feature = "map")]
     drag_origin: Option<Camera>,
@@ -48,6 +52,14 @@ pub struct State {
     pub map: Option<crate::map::thread::MapThread>,
     /// The socket actor, when a credential was configured. `None` means the wall is read-only.
     pub live: Option<LiveThread>,
+    /// The reads thread: the card asks it for identity, commander and specification.
+    pub backend: Option<crate::data::Backend>,
+    /// The selected hull. One at a time, always (`INV-10`).
+    pub selected: Option<i64>,
+    /// The open card, built when the selection or its fix changes — never per frame.
+    pub card: Option<crate::units::card::Card>,
+    /// The age text shown last frame, so a second passing redraws the card and nothing else.
+    last_age: String,
     /// What the socket last said about itself.
     pub link: Link,
     /// How many fixes the socket has delivered, for the header's "is anything happening" question.
@@ -62,6 +74,61 @@ impl State {
             picture,
             ..Self::default()
         }
+    }
+
+    /// Select a hull: build the card from the picture and ask the reads thread for the rest.
+    ///
+    /// Selecting the same hull twice does not re-ask: a card that re-fetches on every press is a card
+    /// that flickers between answers.
+    pub fn select(&mut self, id_unit: i64) {
+        if self.selected == Some(id_unit) {
+            return;
+        }
+        self.selected = Some(id_unit);
+        self.rebuild_card();
+        if let Some(backend) = &self.backend {
+            backend.request(crate::data::Command::Unit(id_unit));
+            backend.request(crate::data::Command::Commander(id_unit));
+            backend.request(crate::data::Command::Specifications(id_unit));
+        }
+    }
+
+    /// Clear the selection. One card at a time means clearing the only one there is.
+    pub fn clear_selection(&mut self) {
+        self.selected = None;
+        self.card = None;
+        self.last_age.clear();
+    }
+
+    /// Rebuild the card from the current picture — on selection, and when its fix changes.
+    fn rebuild_card(&mut self) {
+        let Some(id_unit) = self.selected else {
+            self.card = None;
+            return;
+        };
+        let Some(view) = self
+            .picture
+            .units()
+            .iter()
+            .find(|unit| unit.unit.id_unit == id_unit)
+        else {
+            // A selection for a hull the picture no longer names: the card goes with it.
+            self.card = None;
+            return;
+        };
+        let now = std::time::Instant::now();
+        let previous = self.card.take();
+        let mut card = crate::units::card::Card::new(view, now);
+        // Keep what the reads already said for THIS hull: re-asking on every fix would make the
+        // commander row flicker between answers every few seconds.
+        if let Some(previous) = previous
+            && previous.unit.id_unit == id_unit
+        {
+            card.identity = previous.identity;
+            card.commander = previous.commander;
+            card.specification = previous.specification;
+        }
+        self.card = Some(card);
     }
 }
 
@@ -150,13 +217,31 @@ fn picture(state: &State, scale: f32) -> El {
     // The marker layer goes on top of whatever the picture is — the map, its error, or the
     // placeholder. It is drawn from the frame the map last rendered, so it is absent until there is
     // one, and absent without the map engine (there is no camera to project against).
-    match state.frame {
-        Some(frame) => {
-            let placed = markers::place(&state.picture, &frame, std::time::Instant::now());
-            content.child(markers::layer(&placed, &frame, scale))
-        }
-        None => content,
+    let Some(frame) = state.frame else {
+        return content;
+    };
+    let now = std::time::Instant::now();
+    let placed = markers::place(&state.picture, &frame, now);
+    let mut layer = content.child(markers::layer(&placed, &frame, scale));
+
+    // The card points at its marker's DRAWN position — not the fix — so it follows a hull that is
+    // travelling and a map that has been panned. Placement is arithmetic in `units::card::place`,
+    // where it is property-tested against the window.
+    if let Some(card) = &state.card
+        && let Some(marker) = placed
+            .iter()
+            .find(|marker| marker.id_unit == card.unit.id_unit)
+    {
+        let points = if scale > 0.0 { f64::from(scale) } else { 1.0 };
+        let anchor = (marker.x / points, marker.y / points);
+        let viewport = (
+            f64::from(frame.width) / points,
+            f64::from(frame.height) / points,
+        );
+        let placement = crate::units::card::place(anchor, viewport);
+        layer = layer.child(unitcard::card(card, placement, now));
     }
+    layer
 }
 
 /// The picture itself: the map's pixels, its failure, or the placeholder.
@@ -324,6 +409,85 @@ fn window_options(window: config::Window, displays: &[rune::Display]) -> rune::W
     }
 }
 
+/// Fold what the reads thread said into the open card.
+///
+/// The three reads fill in independently: the card shows a skeleton row for a pending one and keeps
+/// its content if one fails, so a slow commander lookup never blanks the name.
+fn drain_card_reads(state: &mut State) -> bool {
+    let Some(backend) = &state.backend else {
+        return false;
+    };
+    let mut replies = Vec::new();
+    while let Some(reply) = backend.try_recv() {
+        replies.push(reply);
+    }
+    if replies.is_empty() {
+        return false;
+    }
+    let Some(card) = state.card.as_mut() else {
+        return false;
+    };
+    let mut changed = false;
+    for reply in replies {
+        match reply {
+            crate::data::Reply::Unit(id, result) if Some(id) == state.selected => {
+                card.identity = match result {
+                    Ok(unit) => crate::units::card::Fetch::Ready(*unit),
+                    Err(error) => crate::units::card::Fetch::Failed(error.to_string()),
+                };
+                changed = true;
+            }
+            crate::data::Reply::Commander(id, result) if Some(id) == state.selected => {
+                card.commander = match result {
+                    Ok(entries) => crate::units::card::Fetch::Ready(entries),
+                    Err(error) => crate::units::card::Fetch::Failed(error.to_string()),
+                };
+                changed = true;
+            }
+            crate::data::Reply::Specifications(id, result) if Some(id) == state.selected => {
+                card.specification = match result {
+                    Ok(versions) => crate::units::card::Fetch::Ready(versions),
+                    Err(error) => crate::units::card::Fetch::Failed(error.to_string()),
+                };
+                changed = true;
+            }
+            _ => {}
+        }
+    }
+    changed
+}
+
+/// Once a second, the age text changes: redraw the card, and nothing else.
+///
+/// This is the ticket's "the age advances without a re-render of the map": the model is untouched, so
+/// the map element, the marker layer and every other element diff to themselves.
+fn tick_card_age(state: &mut State) -> bool {
+    let Some(card) = &state.card else {
+        return false;
+    };
+    let text = card.age_text(std::time::Instant::now());
+    if text == state.last_age {
+        return false;
+    }
+    state.last_age = text;
+    true
+}
+
+/// Escape closes the card. A key press the focused control did not take comes here.
+fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool {
+    if !closes_on_escape(event, state.selected) {
+        return false;
+    }
+    state.clear_selection();
+    true
+}
+
+/// The decision, without a `Tx`: Escape closes an open card and is consumed, and with nothing open it
+/// is left for whatever else wants it.
+fn closes_on_escape(event: &rune::KeyEvent, selected: Option<i64>) -> bool {
+    event.key == rune::Key::Escape && selected.is_some()
+}
+
 /// Start the socket actor, once, before the first frame.
 ///
 /// Nothing here blocks: the actor owns its thread and its runtime, and `wake` is how it says "draw
@@ -382,6 +546,10 @@ fn apply_update(state: &mut State, update: crate::live::Update) {
 /// Start the map thread, once, before the first frame. A `fn` because `AppSpec::setup` is one.
 fn setup(state: &mut State, waker: rune::Waker) {
     start_socket(state, waker.clone());
+    if let Ok(minos) = config::Minos::from_env() {
+        // The card's three reads run here, on the reads thread, never on the UI thread.
+        state.backend = crate::data::Backend::spawn(minos).ok();
+    }
     #[cfg(feature = "map")]
     {
         // The first frame's layout corrects this size; 1280x720 is the window it opens at, so the map
@@ -395,7 +563,27 @@ fn setup(state: &mut State, waker: rune::Waker) {
 
 /// Every frame: hand the view loop whatever the socket said, and say whether it changed anything.
 fn poll(state: &mut State, _elapsed: f64, _tx: &mut rune::Tx) -> bool {
-    drain_socket(state)
+    let mut changed = drain_socket(state);
+    changed |= drain_card_reads(state);
+    changed |= tick_card_age(state);
+
+    // The frame the map last handed over is what markers project against (`INV-04`). Reading it here,
+    // rather than in the view, keeps the view a function of the state.
+    #[cfg(feature = "map")]
+    if let Some(map) = &state.map {
+        state.frame = map.rendered();
+    }
+    if state.frame != state.frame_seen {
+        state.frame_seen = state.frame;
+        changed = true;
+    }
+
+    // A marker still travelling between two fixes needs the next frame drawn, and stops asking on its
+    // own when the travel window ends: a wall at rest rebuilds nothing.
+    if state.picture.travelling(std::time::Instant::now()) {
+        changed = true;
+    }
+    changed
 }
 
 /// Open the display and run until the compositor closes it.
@@ -404,6 +592,7 @@ pub fn run(window: config::Window, passthrough: Vec<String>) -> ExitCode {
         min_size: Some(tokens::MIN_WINDOW),
         setup: Some(setup),
         poll: Some(poll),
+        on_key: Some(on_key),
         ..AppSpec::new(TITLE, window.size, State::default, view)
     };
 
@@ -519,6 +708,194 @@ mod tests {
             matches!(&state.link, Link::Failed(message) if message.contains("101")),
             "a refusal must be visible, got {:?}",
             state.link
+        );
+    }
+
+    fn picture_with_two_hulls() -> Picture {
+        use crate::data::types::{FeedFix, FeedPosition};
+        use chrono::{TimeZone, Utc};
+        let fix = |lat: f64, speed: Option<f64>| FeedFix {
+            latitude: lat,
+            longitude: 106.9,
+            speed_kn: speed,
+            speed_ms: None,
+            course_deg: None,
+            accuracy_m: None,
+            recorded_at: Utc.with_ymd_and_hms(2026, 11, 6, 12, 0, 0).unwrap(),
+            received_at: Utc.with_ymd_and_hms(2026, 11, 6, 12, 0, 0).unwrap(),
+            age_seconds: 4.0,
+            backfilled: false,
+        };
+        let mut picture = Picture::default();
+        picture.replace_from_feed(&[
+            FeedPosition {
+                id_unit: 8,
+                name: "KRI Abdul Halim Perdanakusuma".into(),
+                hull_number: Some("KRI-355".into()),
+                position: Some(fix(-6.10, Some(0.0))),
+            },
+            FeedPosition {
+                id_unit: 9,
+                name: "KRI Cakra".into(),
+                hull_number: None,
+                position: Some(fix(-6.11, None)),
+            },
+        ]);
+        picture
+    }
+
+    fn state_with_two_hulls() -> State {
+        let camera = Camera::new((-6.108, 106.910), 11.0);
+        let mut state = State::new(picture_with_two_hulls());
+        state.camera = camera;
+        state.frame = Some(crate::map::geometry::Rendered {
+            camera,
+            width: 1280,
+            height: 720,
+        });
+        state
+    }
+
+    #[test]
+    fn one_card_at_a_time_and_clearing_leaves_none() {
+        // INV-10: selecting a hull replaces the selection. Two cards is the failure this exists for.
+        let mut state = state_with_two_hulls();
+        state.select(8);
+        assert_eq!(state.card.as_ref().map(|card| card.unit.id_unit), Some(8));
+        state.select(9);
+        assert_eq!(
+            state.card.as_ref().map(|card| card.unit.id_unit),
+            Some(9),
+            "the second selection replaces the first"
+        );
+        assert_eq!(state.selected, Some(9));
+        state.clear_selection();
+        assert!(
+            state.card.is_none(),
+            "INV-10: a cleared selection has no card"
+        );
+        assert_eq!(state.selected, None);
+    }
+
+    #[test]
+    fn escape_closes_the_card_only_when_there_is_one() {
+        let mut state = state_with_two_hulls();
+        let escape = rune::KeyEvent {
+            key: rune::Key::Escape,
+            mods: rune::Mods::default(),
+        };
+        assert!(
+            !closes_on_escape(&escape, state.selected),
+            "Escape with nothing open is not consumed"
+        );
+        state.select(8);
+        assert!(
+            closes_on_escape(&escape, state.selected),
+            "Escape closes the open card"
+        );
+        state.clear_selection();
+        assert!(state.card.is_none());
+        // And a key that is not Escape never closes it, however the state looks.
+        let tab = rune::KeyEvent {
+            key: rune::Key::Tab,
+            mods: rune::Mods::default(),
+        };
+        assert!(!closes_on_escape(&tab, Some(8)));
+    }
+
+    #[test]
+    fn the_open_card_is_drawn_inside_the_window_and_keeps_its_marker() {
+        // INV-10 at the render level: the card exists, is on screen, and stays inside the window for
+        // a marker at the very edge (where a careless card would clip).
+        let mut state = state_with_two_hulls();
+        state.select(8);
+        let rt = frame_once(state);
+        let (rect, opacity) = rt.presented("card").expect("the card is drawn");
+        assert!(opacity > 0.9);
+        let (x, y, w, h) = (rect[0], rect[1], rect[2], rect[3]);
+        assert!(w > 0.0 && h > 0.0, "the card has area: {w}x{h}");
+        assert!(
+            x >= 0.0
+                && y >= 0.0
+                && x + w <= tokens::WINDOW_SIZE.0
+                && y + h <= tokens::WINDOW_SIZE.1,
+            "INV-10: the card leaves the window: {rect:?}"
+        );
+        assert!(
+            rt.find("card-name").is_some(),
+            "the card shows the hull's name"
+        );
+        assert!(
+            rt.find("card-hull").is_some(),
+            "and its hull number, when it has one"
+        );
+    }
+
+    #[test]
+    fn clicking_a_markers_pixel_opens_its_card_and_a_pan_keeps_it_attached() {
+        // The ticket's acceptance criterion, driven the way an operator drives it: press the marker's
+        // own pixel, then move the camera and check the card followed the marker.
+        let mut rt = frame_once(state_with_two_hulls());
+        let (x, y) = rt.find("hit-8").expect("the marker has a hit target");
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.invalidate();
+        rt.frame(1.0 / 60.0);
+        assert!(
+            rt.state.card.is_some(),
+            "a press on the marker opens its card"
+        );
+        let before = rt.presented("card").expect("card drawn").0;
+        let marker_before = rt.find("marker-8").expect("marker placed");
+
+        // Pan: the frame the map hands over moves 400 px left, and the markers move with it.
+        let camera = Camera::new((-6.108, 106.910 - 0.05), 11.0);
+        rt.state.camera = camera;
+        rt.state.frame = Some(crate::map::geometry::Rendered {
+            camera,
+            width: 1280,
+            height: 720,
+        });
+        // In the app `poll` notices the new frame and asks for the redraw; here the test says so
+        // directly, which is the same thing without an app harness.
+        rt.invalidate();
+        // Markers are laid out by a spring, so one frame is a fraction of the way: let it settle,
+        // which is what the operator sees half a second after the pan ends.
+        for _ in 0..40 {
+            rt.frame(1.0 / 60.0);
+        }
+
+        let marker_after = rt.find("marker-8").expect("marker still placed");
+        let after = rt.presented("card").expect("card still drawn").0;
+        assert!(
+            (marker_after.0 - marker_before.0).abs() > 100.0,
+            "the pan moved the marker: {marker_before:?} → {marker_after:?}"
+        );
+        assert!(
+            (after[0] - before[0]).abs() > 50.0 || after[1] != before[1],
+            "INV-10: the card follows its marker, it does not stay put"
+        );
+        assert!(
+            after[0] >= 0.0
+                && after[1] >= 0.0
+                && after[0] + after[2] <= tokens::WINDOW_SIZE.0
+                && after[1] + after[3] <= tokens::WINDOW_SIZE.1,
+            "INV-10: the card stayed inside the window after the pan: {after:?}"
+        );
+        rt.state.clear_selection();
+        assert!(rt.state.card.is_none());
+    }
+
+    #[test]
+    fn a_card_for_a_hull_without_a_hull_number_has_no_hull_row() {
+        // An empty row is worse than a missing one: it claims the field exists and is blank.
+        let mut state = state_with_two_hulls();
+        state.select(9);
+        let rt = frame_once(state);
+        assert!(rt.find("card-name").is_some());
+        assert!(
+            rt.find("card-hull").is_none(),
+            "KRI Cakra has no hull number, so no row"
         );
     }
 

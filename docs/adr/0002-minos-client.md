@@ -112,6 +112,28 @@ and why each one is not optional:
 The actor is one thread with one current-thread runtime and one connection per attempt; the UI thread
 drains updates between frames and is woken by the same `Waker` Rune hands `AppSpec::setup`.
 
+## The card (#7): a display, and three reads
+
+The card is what a click answers, and it is a **display**: no buttons that change the world. If a verb
+is ever wanted, it comes with its own ticket and its own authority question — a wall display that can
+write is a display that can change the picture it is reporting.
+
+- **One card, one selection** (`INV-10`). Selecting replaces; Escape or a press on the map clears. The
+  placement is arithmetic in `units::card::place` and property-tested over 21×21 marker positions and
+  four window shapes: it points at its marker, flips to the other side rather than clipping, and never
+  leaves the window.
+- **A missing field is not a zero and not a blank row.** `speed_kn: Some(0.0)` prints `0.0`; an absent
+  speed prints `— not measured`, and a hull with no fix prints `— no fix` (different reasons, and both
+  are information). `hull_number` absent means no row at all.
+- **Three reads on open, never per tick**: `GET /units/{id}`, `/commander`, `/specifications`, through
+  the reads thread. A pending read is a skeleton row (`…`), an empty commander list is "no commander
+  recorded" — a valid answer, not an error — and one failure does not blank the rest of the card.
+- **Age is the only thing that changes every second**, and it changes without rebuilding anything:
+  `Card::age_text` adds monotonic elapsed time to the age measured when the card was built, so the map
+  and the marker layer diff to themselves and only the card's text is new.
+- **The card follows the marker's DRAWN position**, not its fix, which is what makes it track a hull
+  between beacons and a map that has been panned.
+
 ## What is deliberately absent
 
 - **`POST /live-feed/fixes`** (the `--post-fix` dev flag) is not implemented. Writing a fix needs a
