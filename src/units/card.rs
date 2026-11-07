@@ -142,7 +142,7 @@ impl Card {
     /// The commander's name, or the one line that says why there is none.
     pub fn commander_line(&self) -> (&'static str, String) {
         match &self.commander {
-            Fetch::Pending => ("COMMANDER", "…".to_string()),
+            Fetch::Pending => ("COMMANDER", "loading".to_string()),
             Fetch::Failed(error) => ("COMMANDER", format!("unavailable ({error})")),
             Fetch::Ready(entries) => match entries.iter().find(|entry| entry.is_current()) {
                 Some(current) => ("COMMANDER", current.user_name.clone()),
@@ -353,7 +353,7 @@ mod tests {
         let mut card = Card::new(&view(None, true), Instant::now(), STALE_AFTER);
         assert_eq!(
             card.commander_line(),
-            ("COMMANDER", "…".to_string()),
+            ("COMMANDER", "loading".to_string()),
             "pending is a skeleton, not a gap"
         );
         card.commander = Fetch::Ready(Vec::new());
