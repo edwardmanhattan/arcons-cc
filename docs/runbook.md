@@ -198,5 +198,6 @@ INFO first map frame in 1645 ms
 | `socket down: refused 103` | the account may not subscribe to `live-feed`: a permissions change, not a code bug |
 | `refused 109` | the token expired mid-session; the actor refreshes once and comes back by itself |
 | a picture that stops updating, header says `reconnecting` | the socket, not the REST client: the last read is still on screen, and the banner says so |
+| a picture that stops updating, header says `live` and the log's `socket fixes=` stops climbing | **the backend is not publishing**, not the wall: `fixes=0` after 30 s is a fact to take to whoever posts fixes. An independent client against the same socket and token sees the same silence (`#28`) |
 | every hull dim | the feed's own timestamps are older than `stale_after_s`; check `age_seconds` on the wire before blaming the wall |
 | the map is blank but markers are placed | the seed: `--self-check` proves it is present, `--probe-map` proves it draws |

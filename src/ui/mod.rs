@@ -61,7 +61,8 @@ pub struct State {
     last_age: String,
     /// What the socket last said about itself.
     pub link: Link,
-    /// How many fixes the socket has delivered, for the header's "is anything happening" question.
+    /// How many fixes the socket has delivered **and the picture applied**, for the header's
+    /// "is anything happening" question.
     pub fixes: u64,
     /// A fix older than this draws as stale. From `config.toml`, so a deployment whose feed is slow
     /// says so in its own units instead of arguing with a constant (`#8`).
@@ -78,6 +79,8 @@ pub struct State {
     /// Set by a marker's press, so the map's press handler does not undo it in the same click.
     /// Reset at the top of every frame's poll.
     marker_press: bool,
+    /// When the last "socket" heartbeat was logged, on the frame clock.
+    last_report: f64,
 }
 
 impl Default for State {
@@ -112,6 +115,7 @@ impl Default for State {
             logical: 0.0,
             headless: false,
             marker_press: false,
+            last_report: 0.0,
         }
     }
 }
@@ -654,9 +658,17 @@ fn apply_update(state: &mut State, update: crate::live::Update) {
             state.picture.replace_from_feed(&feed);
             state.link = Link::Live;
         }
-        Update::Fix(_fix) => {
-            // The marker layer is #6; until then the count is the evidence something arrived.
+        Update::Fix(fix) => {
+            // **This is the wall.** A publication is the only thing that makes the picture newer than
+            // the last REST read (#28): counting it and keeping the old position is a photograph with
+            // a counter on it.
+            state.picture.apply_fix(&fix);
             state.fixes += 1;
+            // A card is a view of one unit, so it follows that unit's fix. Rebuilt here rather than
+            // every frame: a fix for another hull does not change this card's numbers.
+            if state.selected == Some(fix.id_unit) {
+                state.rebuild_card();
+            }
         }
         // Everything else means "not current": a connect is not a picture (`INV-09`), a refresh is
         // not a picture, and a retry is not a picture.
@@ -747,10 +759,27 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     if state.picture.travelling(state.now()) {
         changed = true;
     }
+    // Every 30 s the log says what the wall has received, so "it is not moving" is a line in a file
+    // rather than a report that ends in a relaunch (#28). Nothing here is drawn: the header already
+    // carries the count, and a wall has no console.
+    if !state.headless && elapsed - state.last_report >= REPORT_EVERY.as_secs_f64() {
+        state.last_report = elapsed;
+        tracing::info!(
+            fixes = state.fixes,
+            units = state.picture.units().len(),
+            link = ?state.link,
+            "socket"
+        );
+    }
+
     // The next frame starts a new gesture: a marker's press has done its job either way.
     state.marker_press = false;
     changed
 }
+
+/// How often the wall says what it has received. Long enough to be a heartbeat, short enough that a
+/// frozen picture is noticed inside a coffee break.
+const REPORT_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Open the display and run until the compositor closes it.
 pub fn run(window: config::Window, passthrough: Vec<String>) -> ExitCode {
@@ -963,6 +992,92 @@ mod tests {
             height: 720,
         });
         state
+    }
+
+    /// A fix from the socket has to **move a hull**, not tick a counter.
+    ///
+    /// #28: `Update::Fix` counted the publication and kept the position from the last REST read, so
+    /// the wall only ever showed what a relaunch had read. This is that bug as a test: the position
+    /// after the fix is the fix's, the header's count moves with it, and the frame is marked as
+    /// travelling so the next frame draws the move.
+    #[test]
+    fn a_fix_from_the_socket_moves_its_marker() {
+        let mut state = state_with_two_hulls();
+        let before = position_of(&state.picture, 8);
+
+        apply_update(
+            &mut state,
+            crate::live::Update::Fix(crate::live::wire::LiveFix {
+                id_unit: 8,
+                name: "KRI Abdul Halim Perdanakusuma".into(),
+                hull_number: Some("KRI-355".into()),
+                latitude: -6.20,
+                longitude: 106.99,
+                speed_kn: Some(12.0),
+                speed_ms: Some(6.17),
+                course_deg: Some(90.0),
+                accuracy_m: Some(5.0),
+                recorded_at: chrono::Utc::now(),
+                received_at: chrono::Utc::now(),
+                backfilled: false,
+            }),
+        );
+
+        assert_eq!(state.fixes, 1, "the header's count is the fix's");
+        let after = position_of(&state.picture, 8);
+        assert!(
+            (after.lat - -6.20).abs() < 2e-6 && (after.lon - 106.99).abs() < 2e-6,
+            "the picture took the fix's position, got {after:?} (was {before:?})"
+        );
+        assert!(
+            state.picture.travelling(state.now()),
+            "the marker is drawn travelling, so `poll` keeps the frames coming until it arrives"
+        );
+    }
+
+    /// The card is a view of one hull, so that hull's fix has to reach it.
+    #[test]
+    fn a_fix_updates_the_open_card() {
+        let mut state = state_with_two_hulls();
+        state.select(8);
+        assert_eq!(
+            state.card.as_ref().map(|card| card.speed_kn),
+            Some(Some(0.0))
+        );
+
+        apply_update(
+            &mut state,
+            crate::live::Update::Fix(crate::live::wire::LiveFix {
+                id_unit: 8,
+                name: "KRI Abdul Halim Perdanakusuma".into(),
+                hull_number: Some("KRI-355".into()),
+                latitude: -6.10,
+                longitude: 106.9,
+                speed_kn: Some(21.5),
+                speed_ms: None,
+                course_deg: None,
+                accuracy_m: None,
+                recorded_at: chrono::Utc::now(),
+                received_at: chrono::Utc::now(),
+                backfilled: false,
+            }),
+        );
+
+        assert_eq!(
+            state.card.as_ref().map(|card| card.speed_kn),
+            Some(Some(21.5)),
+            "the open card follows its hull's fix"
+        );
+    }
+
+    fn position_of(picture: &crate::units::Picture, id_unit: i64) -> crate::units::Pos {
+        picture
+            .units()
+            .iter()
+            .find(|unit| unit.unit.id_unit == id_unit)
+            .expect("the hull is in the picture")
+            .position
+            .expect("the hull has a fix")
     }
 
     #[test]
