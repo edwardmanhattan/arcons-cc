@@ -25,11 +25,6 @@ pub fn card(card: &Card, placement: Placement, now: Instant) -> El {
         .radius(tokens::PANEL_RADIUS)
         .border(tokens::CARD_BORDER, tokens::card_edge())
         .fill(tokens::panel())
-        .shadow(
-            tokens::CARD_SHADOW_Y,
-            tokens::CARD_SHADOW_BLUR,
-            tokens::shadow(),
-        )
         // A card is a display. A press on it must not clear the selection behind it.
         .on_press(|_state: &mut crate::ui::State| {});
 
