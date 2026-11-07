@@ -177,3 +177,31 @@ fn ci_runs_the_gate_and_never_its_parts() {
         }
     }
 }
+
+/// The wall's binary and the gate's captures are built by different routes, and #26 is why: the local
+/// C++ checkout at `-O2` crashes on the first map frame, so the wall takes upstream's amalgam.
+///
+/// If this fails, `scripts/build-wall.sh` stopped doing one of the two things that make it a wall
+/// build, or it went away while the runbook still tells an operator to run it.
+#[test]
+fn the_wall_build_takes_the_precompiled_route() {
+    let script = read("scripts/build-wall.sh");
+    assert!(
+        script.contains("MLN_PRECOMPILE=1"),
+        "scripts/build-wall.sh must select the precompiled core (#26)"
+    );
+    assert!(
+        script.contains("MLN_LOCAL_REPOSITORY= "),
+        "scripts/build-wall.sh must **clear** MLN_LOCAL_REPOSITORY: it wins over MLN_PRECOMPILE in the \
+         vendored build script, and the local route is the one that segfaults in release (#26)"
+    );
+    assert!(
+        script.contains("--release") && script.contains("--features map"),
+        "a wall binary is release and has the map: scripts/build-wall.sh must pass both"
+    );
+    let runbook = read("docs/runbook.md");
+    assert!(
+        runbook.contains("scripts/build-wall.sh"),
+        "docs/runbook.md must tell the operator how the wall binary is built (§6)"
+    );
+}
