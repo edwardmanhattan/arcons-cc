@@ -16,11 +16,14 @@ pub fn card(card: &Card, placement: Placement, now: Instant) -> El {
     let mut body = col()
         .key("card")
         .absolute(placement.x as f32, placement.y as f32)
-        .size(WIDTH as f32, 0.0)
+        // Width fixed, **height by content**: forcing 0 drew the fill and the border into a
+        // zero-height box while the children overflowed it, which is exactly what "the card has no
+        // panel" looked like on the wall.
+        .w(WIDTH as f32)
         .gap(tokens::CARD_GAP)
         .padding(tokens::PAD)
         .radius(tokens::PANEL_RADIUS)
-        .border(tokens::HAIRLINE, tokens::hairline())
+        .border(tokens::CARD_BORDER, tokens::card_edge())
         .fill(tokens::panel())
         // A card is a display. A press on it must not clear the selection behind it.
         .on_press(|_state: &mut crate::ui::State| {});

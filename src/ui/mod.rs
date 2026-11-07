@@ -75,6 +75,9 @@ pub struct State {
     logical: f64,
     /// A capture, not a wall: no socket, no map surface, and nothing on screen to report about them.
     pub headless: bool,
+    /// Set by a marker's press, so the map's press handler does not undo it in the same click.
+    /// Reset at the top of every frame's poll.
+    marker_press: bool,
 }
 
 impl Default for State {
@@ -108,6 +111,7 @@ impl Default for State {
             origin: std::time::Instant::now(),
             logical: 0.0,
             headless: false,
+            marker_press: false,
         }
     }
 }
@@ -151,6 +155,27 @@ impl State {
             backend.request(crate::data::Command::Unit(id_unit));
             backend.request(crate::data::Command::Commander(id_unit));
             backend.request(crate::data::Command::Specifications(id_unit));
+        }
+    }
+
+    /// A press on a hull's marker: select it, or close its card if it is already open.
+    ///
+    /// One click, one meaning — which is why the marker's press and the map's "press the background
+    /// to clear" handler do not both decide: pressing a marker records that this press was a
+    /// marker's, and the map's handler stands down for it.
+    pub fn press_marker(&mut self, id_unit: i64) {
+        self.marker_press = true;
+        if self.selected == Some(id_unit) {
+            self.clear_selection();
+        } else {
+            self.select(id_unit);
+        }
+    }
+
+    /// A press on the map itself: clear, unless that press was a marker's.
+    pub fn press_background(&mut self) {
+        if !self.marker_press {
+            self.clear_selection();
         }
     }
 
@@ -722,6 +747,8 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     if state.picture.travelling(state.now()) {
         changed = true;
     }
+    // The next frame starts a new gesture: a marker's press has done its job either way.
+    state.marker_press = false;
     changed
 }
 
@@ -957,6 +984,51 @@ mod tests {
             "INV-10: a cleared selection has no card"
         );
         assert_eq!(state.selected, None);
+    }
+
+    #[test]
+    fn a_press_on_a_hull_toggles_it_and_a_press_on_the_map_does_not_steal_it() {
+        // The two handlers fire for one click. Whichever runs first, the marker's press wins and the
+        // map's does not undo it — and pressing the same hull again closes the card.
+        let mut state = state_with_two_hulls();
+        state.press_marker(8);
+        state.press_background();
+        assert_eq!(
+            state.selected,
+            Some(8),
+            "the map's handler stood down for the marker's press"
+        );
+        assert!(state.card.is_some());
+
+        let mut state = state_with_two_hulls();
+        state.press_marker(8);
+        state.marker_press = false; // as the end of that frame does
+        state.press_marker(8);
+        assert!(
+            state.card.is_none(),
+            "the second press on the same hull closes its card"
+        );
+
+        state.marker_press = false;
+        state.press_background();
+        assert_eq!(state.selected, None, "a press on the map clears");
+    }
+
+    #[test]
+    fn the_card_is_a_panel_with_a_real_height() {
+        // The reported bug: `.size(WIDTH, 0.0)` painted the fill into a zero-height box, so the card
+        // was loose text over the map. A drawn height is the proof, and the panel's own colour at its
+        // centre is the second half of it.
+        let mut state = state_with_two_hulls();
+        state.select(8);
+        let rt = frame_once(state);
+        let (rect, _) = rt.presented("card").expect("the card is drawn");
+        assert!(
+            rect[3] > 100.0,
+            "the card panel has a real height, got {} (zero means the fill is invisible)",
+            rect[3]
+        );
+        assert!(rect[2] > 200.0, "and a width, got {}", rect[2]);
     }
 
     #[test]

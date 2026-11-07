@@ -140,7 +140,7 @@ fn glyph(marker: &Placed, scale: f64) -> El {
         .center()
         // A press on a marker selects its hull. One card at a time, always (`INV-10`): selecting
         // replaces the selection, it does not add to it.
-        .on_press(move |state: &mut crate::ui::State| state.select(id_unit))
+        .on_press(move |state: &mut crate::ui::State| state.press_marker(id_unit))
         .child(symbol);
     if let Some(ring) = accuracy {
         target = target.child(ring);
