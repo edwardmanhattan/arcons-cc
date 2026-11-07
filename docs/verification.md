@@ -114,3 +114,11 @@ The two checks do different jobs, and neither substitutes for the other:
   the projection puts it", "the stale marker is 146 luma and the live one 170". It reads colours from
   `ui::tokens` and geometry from `map::geometry::project`, so it cannot outlive the palette or the
   layout it describes.
+
+### Goldens are one machine's bytes; determinism is every machine's
+
+`scripts/capture.sh` renders every scene **twice** and compares the two: that half of `INV-11` holds
+anywhere, and CI runs it. The committed golden was made by this laptop's renderer, and CI's software
+path antialiases a glyph edge differently — so CI sets `ARCONS_GOLDENS=off` and keeps the
+determinism check and every assertion. On the reference machine the byte comparison runs, which is
+where a palette or a spacing change is caught. Say which machine made a golden when it changes.

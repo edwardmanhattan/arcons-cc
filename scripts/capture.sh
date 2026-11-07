@@ -61,6 +61,27 @@ for scene in "${SCENES[@]}"; do
     continue
   fi
 
+  # Determinism on ANY machine: a second render of the same scene must be the same bytes as the
+  # first. This is the part of INV-11 that is true everywhere, and it is the part CI can hold.
+  cp "out/$scene.png" "out/$scene.first.png"
+  ./target/debug/arcons-cc --scene "$scene" --at 2 --fps 60 --size 1280x720 --scale 1 \
+    --snap "out/$scene.png" > "out/$scene.log" 2>&1
+  if cmp -s "out/$scene.first.png" "out/$scene.png"; then
+    echo "  two runs identical (INV-11)"
+  else
+    echo "  [31mTWO RUNS DIFFER[0m — nondeterminism in the render, which no golden can fix" >&2
+    status=1
+    continue
+  fi
+
+  # The committed golden was made by one renderer. Another renderer (CI's software path) antialiases
+  # a glyph edge differently, so comparing across machines would fail for a reason that is not about
+  # the wall. `ARCONS_GOLDENS=off` keeps CI to determinism + assertions; the reference machine
+  # compares bytes.
+  if [ "${ARCONS_GOLDENS:-on}" = "off" ]; then
+    echo "  golden comparison skipped (ARCONS_GOLDENS=off): assertions still run"
+    continue
+  fi
   golden="fixtures/golden/$scene.png"
   if [ ! -f "$golden" ]; then
     echo "  no golden at $golden: run scripts/capture.sh --update-goldens $scene" >&2
