@@ -73,7 +73,11 @@ pub struct LiveThread {
 impl LiveThread {
     /// Start the actor. `wake` runs after every update, so the view draws it now rather than on its
     /// next idle frame.
-    pub fn spawn(minos: Minos, wake: impl Fn() + Send + Sync + 'static) -> LiveThread {
+    pub fn spawn(
+        minos: Minos,
+        socket_url: String,
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> LiveThread {
         let (updates, incoming) = channel();
         let (stop, stopped) = tokio::sync::mpsc::unbounded_channel();
         let wake = Arc::new(wake);
@@ -92,7 +96,7 @@ impl LiveThread {
                         return;
                     }
                 };
-                runtime.block_on(run(minos, updates, stopped, wake));
+                runtime.block_on(run(minos, socket_url, updates, stopped, wake));
             })
             .expect("the socket thread starts");
         LiveThread {
@@ -129,6 +133,7 @@ pub fn connect_data(token: &str) -> Vec<u8> {
 
 async fn run(
     minos: Minos,
+    socket_url: String,
     updates: Sender<Update>,
     mut stopped: tokio::sync::mpsc::UnboundedReceiver<()>,
     wake: Arc<dyn Fn() + Send + Sync>,
@@ -144,7 +149,9 @@ async fn run(
         }
     };
 
-    let url = minos.socket_url();
+    // The configured endpoint, not one derived here: a deployment may front the socket with a
+    // different host or path from the REST API's.
+    let url = socket_url;
     let backoff = Backoff::default();
     let mut attempt: u32 = 0;
     let mut roll = Roll::new();
@@ -367,6 +374,12 @@ pub struct Probe {
 /// The CLI path, so it may block: nothing is drawing yet. A probe that only checked "the TCP connect
 /// worked" would pass on a refusal, which is why it waits for the **subscribed** reply.
 pub fn probe(minos: &Minos) -> Result<Probe, String> {
+    probe_url(minos, &minos.socket_url())
+}
+
+/// The same probe against a socket URL the configuration named explicitly (`centrifugo_url`), which
+/// is not always derivable from the REST base.
+pub fn probe_url(minos: &Minos, socket_url: &str) -> Result<Probe, String> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -380,7 +393,7 @@ pub fn probe(minos: &Minos) -> Result<Probe, String> {
         let config = Config::new()
             .with_name("arcons-cc")
             .with_connect_data(connect_data(&token));
-        let client = Client::new(&minos.socket_url(), config);
+        let client = Client::new(socket_url, config);
 
         // The probe reports why, not just that: a refused handshake carries a code, and "connected:
         // false" with no reason is a wall that cannot be debugged.

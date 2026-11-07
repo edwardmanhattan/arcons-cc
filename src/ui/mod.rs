@@ -32,7 +32,6 @@ use crate::units::Picture;
 pub const TITLE: &str = "Arcons Command Center";
 
 /// What the view loop holds. #3 fills the picture, #4 moves it, #6 draws it, #7 selects from it.
-#[derive(Default)]
 pub struct State {
     pub picture: Picture,
     /// The camera the operator is holding. The map thread renders it; markers project against the
@@ -64,6 +63,41 @@ pub struct State {
     pub link: Link,
     /// How many fixes the socket has delivered, for the header's "is anything happening" question.
     pub fixes: u64,
+    /// A fix older than this draws as stale. From `config.toml`, so a deployment whose feed is slow
+    /// says so in its own units instead of arguing with a constant (`#8`).
+    pub stale_after: std::time::Duration,
+}
+
+impl Default for State {
+    /// The configuration the process installed, or the defaults when there is none — which is what a
+    /// test has, and what `cargo run` has before `config::set_current`.
+    fn default() -> Self {
+        let config = crate::config::current();
+        let camera = match config {
+            Some(config) => Camera::new(config.map_center, config.map_zoom),
+            None => Camera::START,
+        };
+        Self {
+            picture: Picture::default(),
+            camera,
+            frame: None,
+            frame_seen: None,
+            #[cfg(feature = "map")]
+            drag_origin: None,
+            #[cfg(feature = "map")]
+            map: None,
+            live: None,
+            backend: None,
+            selected: None,
+            card: None,
+            last_age: String::new(),
+            link: Link::default(),
+            fixes: 0,
+            stale_after: config
+                .map(|config| config.stale_after)
+                .unwrap_or(crate::units::STALE_AFTER),
+        }
+    }
 }
 
 impl State {
@@ -118,7 +152,7 @@ impl State {
         };
         let now = std::time::Instant::now();
         let previous = self.card.take();
-        let mut card = crate::units::card::Card::new(view, now);
+        let mut card = crate::units::card::Card::new(view, now, self.stale_after);
         // Keep what the reads already said for THIS hull: re-asking on every fix would make the
         // commander row flicker between answers every few seconds.
         if let Some(previous) = previous
@@ -170,6 +204,15 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
         Link::Failed(error) => (format!("socket down: {error}"), tokens::ink_dim()),
     };
 
+    // A banner that does not cover the map: it is a row above the map, so the picture is never
+    // obscured while the socket is reconnecting — the wall's whole job is the picture.
+    let banner = match &state.link {
+        Link::Live => None,
+        Link::Absent => Some("no socket: this wall is read-only until a credential is configured"),
+        Link::Unproven => Some("connecting: no new fixes yet, the picture is what was last read"),
+        Link::Failed(error) => Some(error.as_str()),
+    };
+
     let header = row()
         .w_full()
         .gap(tokens::GAP)
@@ -187,14 +230,24 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .color(link_colour),
         );
 
-    col()
+    // The banner is a row of its own, and only when there is something to say: a flexible spacer
+    // here would take half the window away from the map, which is exactly what a wall must not lose.
+    let mut root = col()
         .w_full()
         .h_full()
         .padding(tokens::PAD)
         .gap(tokens::GAP)
         .fill(tokens::bg())
-        .child(header)
-        .child(picture(state, scale))
+        .child(header);
+    if let Some(message) = banner {
+        root = root.child(
+            text(message)
+                .key("reconnect-banner")
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim()),
+        );
+    }
+    root.child(picture(state, scale))
 }
 
 /// The map area: the frame when there is one, and the placeholder when there is not.
@@ -221,7 +274,7 @@ fn picture(state: &State, scale: f32) -> El {
         return content;
     };
     let now = std::time::Instant::now();
-    let placed = markers::place(&state.picture, &frame, now);
+    let placed = markers::place(&state.picture, &frame, now, state.stale_after);
     let mut layer = content.child(markers::layer(&placed, &frame, scale));
 
     // The card points at its marker's DRAWN position — not the fix — so it follows a hull that is
@@ -392,6 +445,9 @@ fn laid_out(state: &mut State, width: f32, height: f32, scale: f32) {
 fn window_options(window: config::Window, displays: &[rune::Display]) -> rune::WindowOptions {
     let options = rune::WindowOptions {
         min_size: Some(tokens::MIN_WINDOW),
+        // A wall has nothing to click: no title bar to drag, no grip to resize. Fullscreen is
+        // borderless as well, and takes the primary output's own geometry.
+        borderless: !window.decorations,
         ..Default::default()
     };
     if !window.fullscreen {
@@ -493,12 +549,20 @@ fn closes_on_escape(event: &rune::KeyEvent, selected: Option<i64>) -> bool {
 /// Nothing here blocks: the actor owns its thread and its runtime, and `wake` is how it says "draw
 /// this now" without the view loop ever awaiting anything.
 fn start_socket(state: &mut State, wake: rune::Waker) {
-    let Ok(minos) = config::Minos::from_env() else {
-        // No credential: the wall reads what #3's thread gives it and listens to nothing. That is a
-        // deployment fact, not an error, and `--self-check` is where it is reported.
+    let Some(config) = config::current() else {
+        // No configuration at all: the wall draws and listens to nothing. That is a deployment fact,
+        // not an error, and `--self-check` is where it is reported.
         return;
     };
-    state.live = Some(LiveThread::spawn(minos, move || wake()));
+    state.live = Some(LiveThread::spawn(
+        config.minos.clone(),
+        config.socket_url.clone(),
+        move || wake(),
+    ));
+    // A spawned actor is not a live wall: the header says "connecting" until the socket has proved
+    // itself and the picture has been re-read (`INV-09`). Leaving the default here would claim there
+    // is no credential while one is being used.
+    state.link = Link::Unproven;
 }
 
 /// Drain what the socket said since the last frame.
@@ -546,9 +610,9 @@ fn apply_update(state: &mut State, update: crate::live::Update) {
 /// Start the map thread, once, before the first frame. A `fn` because `AppSpec::setup` is one.
 fn setup(state: &mut State, waker: rune::Waker) {
     start_socket(state, waker.clone());
-    if let Ok(minos) = config::Minos::from_env() {
+    if let Some(config) = config::current() {
         // The card's three reads run here, on the reads thread, never on the UI thread.
-        state.backend = crate::data::Backend::spawn(minos).ok();
+        state.backend = crate::data::Backend::spawn(config.minos.clone()).ok();
     }
     #[cfg(feature = "map")]
     {
@@ -562,8 +626,29 @@ fn setup(state: &mut State, waker: rune::Waker) {
 }
 
 /// Every frame: hand the view loop whatever the socket said, and say whether it changed anything.
-fn poll(state: &mut State, _elapsed: f64, _tx: &mut rune::Tx) -> bool {
+fn poll(state: &mut State, _elapsed: f64, tx: &mut rune::Tx) -> bool {
+    // systemd stops a wall with `SIGTERM`. Quitting through the runtime's own path drops the GL
+    // context in order, instead of a hard exit that leaves the driver complaining.
+    if crate::platform::terminated() {
+        tracing::info!(
+            "terminating on SIGTERM/SIGINT after {} ms",
+            crate::platform::since_start()
+        );
+        tx.quit();
+        return false;
+    }
+
     let mut changed = drain_socket(state);
+    changed |= drain_card_reads(state);
+    changed |= tick_card_age(state);
+
+    // "Start to first map frame" is a number in the log rather than a claim in a ticket. Without the
+    // engine there is no map frame, so the first view pass is what gets timed.
+    if state.frame.is_some() {
+        crate::platform::first_frame("first map frame");
+    } else if cfg!(not(feature = "map")) {
+        crate::platform::first_frame("first frame (no map engine)");
+    }
     changed |= drain_card_reads(state);
     changed |= tick_card_age(state);
 
@@ -658,6 +743,48 @@ mod tests {
                 && y + h <= tokens::WINDOW_SIZE.1,
             "the panel must stay inside the window, got {rect:?}"
         );
+    }
+
+    #[test]
+    fn a_reconnecting_wall_says_so_above_the_map_and_never_on_top_of_it() {
+        // The banner is a row, not an overlay: a wall whose socket is down must not hide the picture
+        // it is still showing, and must not look like it has stopped reporting.
+        let mut state = state_with_two_hulls();
+        state.link = Link::Unproven;
+        let rt = frame_once(state);
+        let (banner, opacity) = rt
+            .presented("reconnect-banner")
+            .expect("the banner is drawn");
+        assert!(opacity > 0.9);
+        // The map with the engine, the picture panel without it: either way, the thing below.
+        let (map, _) = rt
+            .presented("map")
+            .or_else(|| rt.presented("picture"))
+            .expect("the picture is drawn");
+        assert!(
+            banner[1] + banner[3] <= map[1] + 0.5,
+            "the banner covers the map: banner {banner:?} over map {map:?}"
+        );
+
+        // It is absent when the wall is live: a banner that is always there is furniture.
+        let mut state = state_with_two_hulls();
+        state.link = Link::Live;
+        assert!(frame_once(state).find("reconnect-banner").is_none());
+    }
+
+    #[test]
+    fn the_window_can_be_told_to_have_no_decorations() {
+        // A wall has no window manager affordances to click, and `borderless` is how Rune says so.
+        let plain = window_options(config::Window::default(), &[]);
+        assert!(!plain.borderless, "the default window is decorated");
+
+        let frozen = config::Window {
+            decorations: false,
+            ..config::Window::default()
+        };
+        let options = window_options(frozen, &[]);
+        assert!(options.borderless, "--no-decorations is borderless");
+        assert_eq!(options.min_size, Some(tokens::MIN_WINDOW));
     }
 
     #[test]

@@ -28,6 +28,8 @@ from this file, or when a copyleft crate appears in the lockfile unnamed.
 | `chrono` 0.4 | MIT OR Apache-2.0 | Timestamps from the wire. |
 | `tracing`, `tracing-subscriber` 0.3 / 0.1 | MIT | Logging. **Redaction is a hand-written `Debug`, not a filter** (`INV-08`). |
 | `rusqlite` 0.32 (bundled SQLite) | MIT | The offline map seed is a SQLite cache; its expiry rows are pinned before MapLibre opens it. Bundled so no system library is needed. SQLite itself is public domain. |
+| `toml` 0.8 | MIT OR Apache-2.0 | `config.toml` and `credentials.toml`: the operator's format, refused on an unknown key rather than silently defaulted. |
+| `libc` 0.2 | MIT OR Apache-2.0 | One `signal(2)` call, so `SIGTERM` from systemd quits through the runtime and drops the GL context in order. |
 | `png` 0.18 | MIT OR Apache-2.0 | `--probe-map` writes one frame to a PNG, headless, for CI. |
 
 ## Crates with a licence that asks to be named

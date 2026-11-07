@@ -158,7 +158,11 @@ mod tests {
             );
             seen.push((refusal.code(), action));
         }
-        assert_eq!(seen.len(), 6, "six codes, one action each, no catch-all");
+        assert_eq!(
+            seen.len(),
+            6,
+            "INV-07: six codes, one action each, no catch-all"
+        );
         assert_eq!(Refusal::Unauthorized.action(), Action::Stop);
         assert_eq!(Refusal::TokenExpired.action(), Action::RefreshThenRetry);
         assert_ne!(
