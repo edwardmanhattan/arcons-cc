@@ -31,6 +31,9 @@ OPTIONS:
     --config PATH       read this config file instead of $XDG_CONFIG_HOME/arcons-cc/config.toml
     --credentials PATH  read this credential file instead of the one config.toml names
     --log-file PATH     also write the log there (stderr always gets it)
+    --assert SCENE      check a capture's pixels and tree (scripts/assert.sh calls this)
+    --image PATH        the capture --assert reads
+    --tree PATH         the element tree to check too
     --self-check        check config, credential, login, REST, socket and map seed, and exit
                         with 0 ok · 1 config · 2 credential · 3 login · 4 REST · 5 socket · 6 seed
     --probe-map         render one map frame to a PNG with no window (needs --features map)
@@ -53,6 +56,8 @@ pub enum Command {
     SelfCheck,
     /// Render one map frame to a PNG with no window. CI's map witness.
     ProbeMap,
+    /// Check a capture: pixels with numbers, and the element tree for structure.
+    Assert,
 }
 
 /// How the window should open. `--fullscreen` wins over `--window-size`.
@@ -91,6 +96,12 @@ pub struct Args {
     pub credentials: Option<PathBuf>,
     /// `--log-file`: a second place the log goes, for a wall with no terminal attached.
     pub log_file: Option<PathBuf>,
+    /// `--assert`: the scene whose assertions to run.
+    pub assert_scene: Option<String>,
+    /// `--image`: the capture `--assert` reads.
+    pub image: Option<PathBuf>,
+    /// `--tree`: the element tree to check beside the capture.
+    pub tree: Option<PathBuf>,
     /// Arguments this binary does not own, handed to Rune so its headless tooling still works:
     /// `--snap`, `--scene`, `--tree`, `--script`, `--frames`. #9's captures depend on that.
     pub passthrough: Vec<String>,
@@ -110,6 +121,9 @@ impl Args {
             config: None,
             credentials: None,
             log_file: None,
+            assert_scene: None,
+            image: None,
+            tree: None,
             passthrough: Vec::new(),
         };
 
@@ -118,6 +132,19 @@ impl Args {
             match arg.as_str() {
                 "--version" | "-V" => args.command = Command::Version,
                 "--help" | "-h" => args.command = Command::Help,
+                "--assert" => {
+                    let value = argv.next().ok_or("--assert needs a scene name")?;
+                    args.assert_scene = Some(value);
+                    args.command = Command::Assert;
+                }
+                "--image" => {
+                    let value = argv.next().ok_or("--image needs a path")?;
+                    args.image = Some(PathBuf::from(value));
+                }
+                "--tree" => {
+                    let value = argv.next().ok_or("--tree needs a path")?;
+                    args.tree = Some(PathBuf::from(value));
+                }
                 "--self-check" => args.command = Command::SelfCheck,
                 "--probe-map" => args.command = Command::ProbeMap,
                 "--out" => {
@@ -666,14 +693,23 @@ mod tests {
             "--fullscreen",
             "--snap",
             "out/picture.png",
-            "--tree",
-            "out/t.json",
+            "--at",
+            "2",
+            "--scene",
+            "picture",
         ])
         .unwrap();
         assert!(args.window.fullscreen);
         assert_eq!(
             args.passthrough,
-            vec!["--snap", "out/picture.png", "--tree", "out/t.json"]
+            vec![
+                "--snap",
+                "out/picture.png",
+                "--at",
+                "2",
+                "--scene",
+                "picture"
+            ]
         );
     }
 

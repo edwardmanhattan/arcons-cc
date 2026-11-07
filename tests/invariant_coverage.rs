@@ -157,7 +157,7 @@ fn covered_invariants() -> Vec<String> {
 ///
 /// Delete a line in the same PR that lands the test. The check fails on a stale entry, on purpose:
 /// an IOU that outlives its gap is how the next gap hides.
-const PENDING: &[(&str, &str)] = &[("INV-11", "#9")];
+const PENDING: &[(&str, &str)] = &[];
 
 #[test]
 fn every_invariant_is_either_proved_or_owed_to_a_ticket() {

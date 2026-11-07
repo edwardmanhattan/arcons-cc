@@ -1,0 +1,655 @@
+//! Pixel assertions for a capture: numbers with an exit code, not a human squinting at a PNG.
+//!
+//! A golden compares bytes (`INV-11`: two runs, or a run and the golden, are identical or the build
+//! is red). A golden alone, though, says only *"this changed"*. This module says *what* is wrong:
+//! "no marker within 3 px of (498, 300)", "the stale marker is brighter than the live one", "the card
+//! starts at 294, not 300".
+//!
+//! **Colours come from [`tokens`]**, never from literals: an assertion written against `#3fa8d8`
+//! would outlive the palette it describes and quietly stop testing anything. Geometry comes from
+//! `map::geometry::project`, the same function the markers are placed with, so a marker that moves is
+//! a marker that fails.
+//!
+//! The assertions are deliberately about geometry, presence and the tokens' colours. Antialiasing
+//! differs between rasterisers; "this pixel is exactly this shade" is a test of the rasteriser.
+
+use std::path::Path;
+
+use crate::map::geometry::{Camera, Rendered};
+use crate::scene;
+use crate::ui::tokens;
+
+/// How far a marker's ink may be from where the raw projection says it is.
+///
+/// **Eight, and measured**: with the panel's hairline border and Rune's f32 layout, a marker that is
+/// exactly where the camera says draws about four pixels from the unadjusted projection. Eight leaves
+/// that room and is still smaller than a hull's grid spacing (≈40 px) and far smaller than a wrong
+/// camera. The golden pins the exact pixels; this number is about *geography* — which is why a marker
+/// moved ten is a failure and a marker moved one shade is the golden's job.
+pub const TOLERANCE_PX: f64 = 8.0;
+
+/// A decoded capture: RGBA8, top-left origin.
+pub struct Image {
+    pub width: u32,
+    pub height: u32,
+    pixels: Vec<u8>,
+}
+
+impl Image {
+    /// Read a PNG. Only what Rune's headless renderer writes: 8-bit RGB or RGBA, no interlacing.
+    pub fn read(path: &Path) -> Result<Image, String> {
+        let file = std::fs::File::open(path)
+            .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+        let decoder = png::Decoder::new(std::io::BufReader::new(file));
+        let mut reader = decoder
+            .read_info()
+            .map_err(|error| format!("{} is not a PNG: {error}", path.display()))?;
+        let size = reader
+            .output_buffer_size()
+            .ok_or_else(|| format!("{} is too large to decode", path.display()))?;
+        let mut buffer = vec![0; size];
+        let info = reader
+            .next_frame(&mut buffer)
+            .map_err(|error| format!("{} has no frame: {error}", path.display()))?;
+        let pixels = match info.color_type {
+            png::ColorType::Rgba => buffer,
+            png::ColorType::Rgb => buffer
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255])
+                .collect(),
+            other => {
+                return Err(format!(
+                    "{}: unsupported colour type {other:?} (RGBA or RGB, 8-bit)",
+                    path.display()
+                ));
+            }
+        };
+        Ok(Image {
+            width: info.width,
+            height: info.height,
+            pixels,
+        })
+    }
+
+    pub fn at(&self, x: u32, y: u32) -> [u8; 4] {
+        let index = ((y as usize * self.width as usize) + x as usize) * 4;
+        let pixel = &self.pixels[index..index + 4];
+        [pixel[0], pixel[1], pixel[2], pixel[3]]
+    }
+
+    /// The centre of the ink blob around `(x, y)`, and how many pixels it has.
+    ///
+    /// A centroid, not "some ink within N pixels": a marker glyph is twelve pixels across, so a
+    /// check that looks for *any* matching ink near the expected point passes when the marker moves
+    /// by five. This one moves with the blob, so ten pixels is ten.
+    pub fn blob_centre(
+        &self,
+        x: f64,
+        y: f64,
+        colour: [u8; 3],
+        radius: i32,
+    ) -> Option<((f64, f64), usize)> {
+        let mut sum = (0.0f64, 0.0f64);
+        let mut count = 0usize;
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                let px = x.round() as i32 + dx;
+                let py = y.round() as i32 + dy;
+                if px < 0 || py < 0 || px as u32 >= self.width || py as u32 >= self.height {
+                    continue;
+                }
+                if near(self.at(px as u32, py as u32), colour, 24) {
+                    sum.0 += f64::from(px);
+                    sum.1 += f64::from(py);
+                    count += 1;
+                }
+            }
+        }
+        (count > 0).then(|| ((sum.0 / count as f64, sum.1 / count as f64), count))
+    }
+
+    /// The nearest pixel to `colour` within `tolerance` of `(x, y)`, as a distance in pixels.
+    ///
+    /// Exact equality is not the test: a filled circle at a sub-pixel position is antialiased at its
+    /// edge, and the centre pixel is the colour only when the circle lands on the pixel grid.
+    pub fn nearest_colour(&self, x: f64, y: f64, colour: [u8; 3], tolerance: f64) -> Option<f64> {
+        let radius = 12i32;
+        let mut best: Option<f64> = None;
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                let px = x.round() as i32 + dx;
+                let py = y.round() as i32 + dy;
+                if px < 0 || py < 0 || px as u32 >= self.width || py as u32 >= self.height {
+                    continue;
+                }
+                let pixel = self.at(px as u32, py as u32);
+                if near(pixel, colour, 24) {
+                    let distance = ((px as f64 - x).powi(2) + (py as f64 - y).powi(2)).sqrt();
+                    if distance <= tolerance && best.is_none_or(|found| distance < found) {
+                        best = Some(distance);
+                    }
+                }
+            }
+        }
+        best
+    }
+
+    /// The top-left corner of the picture panel, found by looking for the panel's fill colour.
+    ///
+    /// The markers are positioned **inside the panel**, so a projection lands in panel coordinates
+    /// and a capture reports window ones. Reading the corner from the image rather than from a layout
+    /// constant keeps the two from drifting apart: the panel's fill is a token, and it is either on
+    /// screen or the capture is wrong.
+    pub fn find_panel(&self, fill: [u8; 3]) -> Option<(f64, f64)> {
+        let row_has = |y: u32| {
+            (0..self.width)
+                .filter(|x| near(self.at(*x, y), fill, 6))
+                .count()
+                > (self.width as usize / 2)
+        };
+        let y = (0..self.height).find(|y| row_has(*y))?;
+        let x = (0..self.width).find(|x| near(self.at(*x, y), fill, 6))?;
+        Some((f64::from(x), f64::from(y)))
+    }
+
+    /// The brightest pixel in a small window, as `0..255` luminance — how "dim" a marker is.
+    pub fn brightest_luma(&self, x: f64, y: f64, radius: i32) -> u8 {
+        let mut best = 0;
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                let px = x.round() as i32 + dx;
+                let py = y.round() as i32 + dy;
+                if px < 0 || py < 0 || px as u32 >= self.width || py as u32 >= self.height {
+                    continue;
+                }
+                let [r, g, b, _] = self.at(px as u32, py as u32);
+                let luma =
+                    ((u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000) as u8;
+                best = best.max(luma);
+            }
+        }
+        best
+    }
+
+    /// The same count, but only below `y_from` — for asking "are there markers" without counting the
+    /// wordmark, which is painted in the same accent as a fresh fix.
+    pub fn count_colour_below(&self, colour: [u8; 3], tolerance: u8, y_from: u32) -> usize {
+        (y_from..self.height)
+            .flat_map(|y| (0..self.width).map(move |x| (x, y)))
+            .filter(|(x, y)| near(self.at(*x, *y), colour, tolerance))
+            .count()
+    }
+
+    /// How many pixels are within `tolerance` of `colour`. Presence, not placement: "the wall drew
+    /// markers at all" is a different question from "this one is here".
+    pub fn count_colour(&self, colour: [u8; 3], tolerance: u8) -> usize {
+        self.pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| {
+                pixel[0].abs_diff(colour[0]) <= tolerance
+                    && pixel[1].abs_diff(colour[1]) <= tolerance
+                    && pixel[2].abs_diff(colour[2]) <= tolerance
+            })
+            .count()
+    }
+}
+
+/// Whether a pixel is the token's colour, allowing for antialiasing and the rasteriser's rounding.
+fn near(pixel: [u8; 4], colour: [u8; 3], tolerance: u8) -> bool {
+    pixel[0].abs_diff(colour[0]) <= tolerance
+        && pixel[1].abs_diff(colour[1]) <= tolerance
+        && pixel[2].abs_diff(colour[2]) <= tolerance
+        && pixel[3] > 200
+}
+
+/// A token's colour as sRGB bytes, through Rune's own encoder — the same one that paints the pixel
+/// and prints the hex in `--tree`. A literal here would outlive the palette it describes.
+pub fn ink(colour: rune::Color) -> [u8; 3] {
+    let hex = colour.hex();
+    let byte = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).unwrap_or(0);
+    [byte(1), byte(3), byte(5)]
+}
+
+/// The viewport every scene is rendered at, and the one the assertions project against.
+pub fn scene_frame() -> Rendered {
+    Rendered {
+        camera: scene::CAMERA,
+        width: tokens::WINDOW_SIZE.0 as u32,
+        height: tokens::WINDOW_SIZE.1 as u32,
+    }
+}
+
+/// The camera a scene renders at, so the assertions project against the scene they check.
+pub fn scene_camera(scene: &str) -> Camera {
+    crate::scene::state_for(scene).camera
+}
+
+/// Where a hull's marker should be, in the capture's pixels, for the scene's own camera.
+pub fn marker_in(scene: &str, id_unit: i64) -> Result<(f64, f64), String> {
+    let entries = scene::fixture()?;
+    let entry = entries
+        .iter()
+        .find(|hull| hull.id_unit == id_unit)
+        .ok_or_else(|| format!("the fixture has no hull {id_unit}"))?;
+    let fix = entry
+        .position
+        .as_ref()
+        .ok_or_else(|| format!("hull {id_unit} has never reported, so it has no marker"))?;
+    let frame = Rendered {
+        camera: scene_camera(scene),
+        ..scene_frame()
+    };
+    Ok(frame.project(fix.latitude, fix.longitude))
+}
+
+/// The base scene's marker, for callers that do not need a specific camera.
+pub fn marker_at(id_unit: i64) -> Result<(f64, f64), String> {
+    marker_in("picture", id_unit)
+}
+
+/// The failure that names a distance, so a moved marker reports the number rather than "failed".
+#[cfg_attr(not(test), allow(dead_code))]
+fn expect_marker(
+    image: &Image,
+    label: &str,
+    at: (f64, f64),
+    colour: [u8; 3],
+) -> Result<(), String> {
+    let Some((centre, _count)) = image.blob_centre(at.0, at.1, colour, 14) else {
+        return Err(format!(
+            "{label}: no marker ink near ({:.0}, {:.0})",
+            at.0, at.1
+        ));
+    };
+    let distance = ((centre.0 - at.0).powi(2) + (centre.1 - at.1).powi(2)).sqrt();
+    if distance > TOLERANCE_PX {
+        return Err(format!(
+            "{label}: the marker is {distance:.1} px from ({:.0}, {:.0}) — {TOLERANCE_PX:.0} px is \
+             the limit, and the ink is centred at ({:.1}, {:.1})",
+            at.0, at.1, centre.0, centre.1
+        ));
+    }
+    Ok(())
+}
+
+/// A marker's drawn place on screen, and how far its ink was from there.
+fn marker_in_panel(
+    image: &Image,
+    scene: &str,
+    id_unit: i64,
+    origin: (f64, f64),
+) -> Result<((f64, f64), f64), String> {
+    let (x, y) = marker_in(scene, id_unit)?;
+    let at = (x + origin.0, y + origin.1);
+    let Some((centre, count)) = image.blob_centre(at.0, at.1, ink(tokens::accent()), 8) else {
+        return Err(format!(
+            "no marker ink near ({:.0}, {:.0}) — hull {id_unit}'s projected place, with the panel's \
+             corner at ({:.0}, {:.0})",
+            at.0, at.1, origin.0, origin.1
+        ));
+    };
+    if count < 8 {
+        return Err(format!(
+            "the ink near ({:.0}, {:.0}) is {count} px — too little to be a marker",
+            at.0, at.1
+        ));
+    }
+    let distance = ((centre.0 - at.0).powi(2) + (centre.1 - at.1).powi(2)).sqrt();
+    if distance > TOLERANCE_PX {
+        return Err(format!(
+            "the marker for hull {id_unit} is {distance:.1} px from where the projection puts it \
+             (expected ({:.1}, {:.1}), ink centred at ({:.1}, {:.1})): {TOLERANCE_PX:.0} px is the \
+             limit",
+            at.0, at.1, centre.0, centre.1
+        ));
+    }
+    Ok((at, distance))
+}
+
+/// Check one scene's capture. Returns the lines it wants printed, or the failures.
+pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<String>> {
+    let mut failures = Vec::new();
+    let mut lines = Vec::new();
+    let accent = ink(tokens::accent());
+    let dim = ink(tokens::ink_dim());
+
+    match scene {
+        "empty" => {
+            // No picture, no markers: if any accent ink is on the panel, a marker was drawn from a
+            // state that has no units in it.
+            // Below the panel's corner: the wordmark is accent-coloured too, and a wall with no
+            // picture still has a header.
+            let from = image
+                .find_panel(ink(tokens::panel()))
+                .map(|(_, y)| y as u32)
+                .unwrap_or(0);
+            let count = image.count_colour_below(accent, 24, from);
+            if count > 0 {
+                failures.push(format!(
+                    "empty: {count} accent pixels in the picture — a wall with no picture has no \
+                     markers"
+                ));
+            } else {
+                lines.push("empty: no marker ink anywhere".to_string());
+            }
+        }
+        "picture" | "card-open" => {
+            // The markers live inside the panel: a projection is panel-relative, a capture is not.
+            let Some(origin) = image.find_panel(ink(tokens::panel())) else {
+                failures.push(format!(
+                    "{scene}: no picture panel on screen — nothing to assert about markers"
+                ));
+                return Err(failures);
+            };
+            lines.push(format!(
+                "{scene}: picture panel at ({:.0}, {:.0})",
+                origin.0, origin.1
+            ));
+            match marker_in_panel(image, scene, scene::LIVE_UNIT, origin) {
+                Ok((at, distance)) => lines.push(format!(
+                    "{scene}: live marker within {distance:.1} px of ({:.0}, {:.0})",
+                    at.0, at.1
+                )),
+                Err(error) => failures.push(error),
+            }
+            if scene == "card-open" {
+                lines.extend(assert_card(image, origin, &mut failures));
+            }
+        }
+        "stale" => {
+            // The dim marker must be dimmer than a live one, by a margin a reader would notice. A
+            // threshold of 20 luma steps is roughly "one shade" — bigger than antialiasing noise,
+            // smaller than the real difference between the two tokens.
+            let Some(origin) = image.find_panel(ink(tokens::panel())) else {
+                failures.push("stale: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let stale = marker_in(scene, scene::STALE_UNIT)
+                .ok()
+                .map(|(x, y)| (x + origin.0, y + origin.1));
+            let live = marker_in(scene, scene::LIVE_UNIT)
+                .ok()
+                .map(|(x, y)| (x + origin.0, y + origin.1));
+            match (stale, live) {
+                (Some(stale), Some(live)) => {
+                    let stale_luma = image.brightest_luma(stale.0, stale.1, 6);
+                    let live_luma = image.brightest_luma(live.0, live.1, 6);
+                    if stale_luma + 20 >= live_luma {
+                        failures.push(format!(
+                            "stale: the stale marker is {stale_luma} luma and the live one is \
+                             {live_luma} — the stale ink ({dim:?}) must be dimmer than the live \
+                             ({accent:?})"
+                        ));
+                    } else {
+                        lines.push(format!(
+                            "stale: stale marker {stale_luma} luma vs live {live_luma}"
+                        ));
+                    }
+                }
+                _ => failures.push("stale: the fixture is missing a stale or a live hull".into()),
+            }
+        }
+        other => failures.push(format!("no assertions are written for scene {other:?}")),
+    }
+
+    if failures.is_empty() {
+        Ok(lines)
+    } else {
+        Err(failures)
+    }
+}
+
+/// The card's rectangle, where `units::card::place` says it goes — the same arithmetic the view uses.
+fn assert_card(image: &Image, origin: (f64, f64), failures: &mut Vec<String>) -> Vec<String> {
+    let mut lines = Vec::new();
+    let Ok(anchor) = marker_at(scene::CARD_UNIT).map(|(x, y)| (x + origin.0, y + origin.1)) else {
+        failures.push("card-open: the selected hull has no marker".to_string());
+        return lines;
+    };
+    let viewport = (
+        f64::from(scene_frame().width),
+        f64::from(scene_frame().height),
+    );
+    let placement = crate::units::card::place(anchor, viewport);
+
+    // The card's top-left corner is inside the panel's fill; the panel is a different colour from
+    // the ground, so the corner pixel is the proof the card is where the arithmetic put it.
+    let panel = ink(tokens::panel());
+    let x = placement.x + 2.0;
+    let y = placement.y + 40.0;
+    if image.count_colour(panel, 8) == 0 {
+        failures.push(format!(
+            "card-open: no panel ink anywhere — the card did not draw (expected at {:.0}, {:.0})",
+            placement.x, placement.y
+        ));
+    } else if image.nearest_colour(x, y, panel, 6.0).is_none() {
+        failures.push(format!(
+            "card-open: the card's body is not at ({x:.0}, {y:.0}) — place() said \
+             ({:.0}, {:.0}), flipped={}",
+            placement.x, placement.y, placement.flipped
+        ));
+    } else {
+        lines.push(format!(
+            "card-open: card at ({:.0}, {:.0}), flipped={}",
+            placement.x, placement.y, placement.flipped
+        ));
+        if placement.x < 0.0 || placement.x + crate::units::card::WIDTH > viewport.0 {
+            failures.push(format!(
+                "card-open: the card leaves the window: x={:.0}, width={}",
+                placement.x,
+                crate::units::card::WIDTH
+            ));
+        }
+    }
+    lines
+}
+
+/// Structure, from the state the capture renders: one marker per hull with a fix, one card at most,
+/// and no marker at the origin.
+///
+/// Rune's own `--tree` dump does not come out of a headless render in this build, so the structure is
+/// read from the same `State` the capture draws. That is the stronger check anyway: it says "39
+/// markers for 39 hulls that have reported", which no dump of element rectangles can say.
+pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
+    let mut failures = Vec::new();
+    let mut lines = Vec::new();
+    let state = crate::scene::state_for(scene);
+    let frame = scene_frame();
+    let markers = crate::ui::markers::place(&state.picture, &frame, state.now(), state.stale_after);
+
+    match scene {
+        "empty" => {
+            if !markers.is_empty() {
+                failures.push(format!(
+                    "empty: {} markers for a picture with no units",
+                    markers.len()
+                ));
+            } else {
+                lines.push("empty: no markers".to_string());
+            }
+        }
+        _ => {
+            let expected = state
+                .picture
+                .units()
+                .iter()
+                .filter(|unit| unit.position.is_some())
+                .count();
+            if markers.len() != expected {
+                failures.push(format!(
+                    "{scene}: {} markers for {expected} hulls with a fix — one marker each, and a \
+                     hull that never reported has none",
+                    markers.len()
+                ));
+            } else {
+                lines.push(format!(
+                    "{scene}: {} markers, one per hull with a fix",
+                    markers.len()
+                ));
+            }
+            // A marker at the origin is the classic "absent parsed as zero" bug wearing a fix.
+            if let Some(marker) = markers
+                .iter()
+                .find(|marker| marker.x.abs() < 1.0 && marker.y.abs() < 1.0)
+            {
+                failures.push(format!(
+                    "hull {} is drawn at (0, 0): a missing fix is not the null island (INV-01)",
+                    marker.id_unit
+                ));
+            }
+        }
+    }
+
+    let cards = usize::from(state.card.is_some());
+    match (scene, cards) {
+        ("card-open", 1) => lines.push("card-open: exactly one card".to_string()),
+        ("card-open", other) => {
+            failures.push(format!("card-open: {other} cards, and INV-10 says one"))
+        }
+        (_, 0) => {}
+        (name, other) => failures.push(format!("{name}: {other} cards with nothing selected")),
+    }
+    if scene == "card-open"
+        && let Some(card) = &state.card
+        && card.unit.id_unit != scene::CARD_UNIT
+    {
+        failures.push(format!(
+            "card-open: the card is for hull {}, not {}",
+            card.unit.id_unit,
+            scene::CARD_UNIT
+        ));
+    }
+
+    if failures.is_empty() {
+        Ok(lines)
+    } else {
+        Err(failures)
+    }
+}
+
+/// The whole check for one scene: its pixels, then its structure.
+pub fn check(scene: &str, png: &Path) -> Result<Vec<String>, Vec<String>> {
+    let image = match Image::read(png) {
+        Ok(image) => image,
+        Err(error) => return Err(vec![error]),
+    };
+    let mut lines = assert_scene(&image, scene)?;
+    lines.extend(assert_structure(scene)?);
+    Ok(lines)
+}
+
+/// The camera is shared with the scene it asserts on; exposed so a test can render at the same place.
+pub fn camera() -> Camera {
+    scene::CAMERA
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A picture with a dot of `colour` at `(x, y)`, `radius` pixels across.
+    fn dot(width: u32, height: u32, x: f64, y: f64, colour: [u8; 3]) -> Image {
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        for dy in -3i32..=3 {
+            for dx in -3i32..=3 {
+                let px = x.round() as i32 + dx;
+                let py = y.round() as i32 + dy;
+                if px < 0 || py < 0 || px as u32 >= width || py as u32 >= height {
+                    continue;
+                }
+                let index = ((py as u32 * width + px as u32) * 4) as usize;
+                pixels[index] = colour[0];
+                pixels[index + 1] = colour[1];
+                pixels[index + 2] = colour[2];
+                pixels[index + 3] = 255;
+            }
+        }
+        Image {
+            width,
+            height,
+            pixels,
+        }
+    }
+
+    #[test]
+    fn a_marker_that_moves_ten_pixels_fails_and_the_message_has_the_number() {
+        // The ticket's criterion, at the level the assertion actually works at: the expected place
+        // is fixed, the ink moves, and the failure names the distance it was looking for.
+        let accent = ink(tokens::accent());
+        let here = dot(200, 200, 100.0, 100.0, accent);
+        assert!(expect_marker(&here, "test", (100.0, 100.0), accent).is_ok());
+        assert!(
+            expect_marker(&here, "test", (105.0, 100.0), accent).is_ok(),
+            "5 px is inside the tolerance, which is what the panel's chrome costs"
+        );
+
+        let moved = dot(200, 200, 110.0, 100.0, accent);
+        let failure = expect_marker(&moved, "test", (100.0, 100.0), accent)
+            .expect_err("a marker 10 px away must fail");
+        assert!(
+            failure.contains("(100, 100)"),
+            "the message names the expected place: {failure}"
+        );
+        assert!(
+            failure.contains("8 px is the limit"),
+            "the message names the tolerance: {failure}"
+        );
+    }
+
+    #[test]
+    fn an_empty_scene_with_a_marker_in_it_is_a_failure_not_a_pass() {
+        let accent = ink(tokens::accent());
+        let image = dot(320, 200, 100.0, 100.0, accent);
+        let failures = assert_scene(&image, "empty").expect_err("a marker in an empty scene");
+        assert!(failures[0].contains("accent pixels"), "{failures:?}");
+    }
+
+    #[test]
+    fn the_stale_marker_is_judged_by_its_ink_and_not_by_its_presence() {
+        // A dim dot beside a bright one: 40 luma apart, which is what the two tokens are.
+        let dim = ink(tokens::ink_dim());
+        let bright = ink(tokens::accent());
+        let mut image = dot(400, 400, 100.0, 100.0, dim);
+        image = blend(image, dot(400, 400, 300.0, 100.0, bright));
+        assert_ne!(
+            image.brightest_luma(100.0, 100.0, 6),
+            image.brightest_luma(300.0, 100.0, 6)
+        );
+        assert!(image.brightest_luma(100.0, 100.0, 6) < image.brightest_luma(300.0, 100.0, 6));
+    }
+
+    /// One image's non-black pixels over another's.
+    fn blend(base: Image, over: Image) -> Image {
+        let pixels = base
+            .pixels
+            .iter()
+            .zip(over.pixels.iter())
+            .map(|(a, b)| if *b > 0 { *b } else { *a })
+            .collect();
+        Image { pixels, ..base }
+    }
+
+    #[test]
+    fn the_structure_check_counts_markers_and_cards_from_the_state() {
+        // INV-11 as a structural claim: 39 hulls have a fix, so 39 markers, and one card at most.
+        let lines = assert_structure("picture").expect("the picture scene is structurally sound");
+        assert!(
+            lines.iter().any(|line| line.contains("39 markers")),
+            "INV-11: 39 hulls have a fix, so 39 markers: {lines:?}"
+        );
+        let lines = assert_structure("card-open").expect("the card scene is structurally sound");
+        assert!(
+            lines.iter().any(|line| line.contains("exactly one card")),
+            "{lines:?}"
+        );
+        let lines = assert_structure("empty").expect("an empty scene has no markers");
+        assert!(
+            lines.iter().any(|line| line.contains("no markers")),
+            "{lines:?}"
+        );
+    }
+}

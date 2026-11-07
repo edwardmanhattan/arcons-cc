@@ -222,7 +222,12 @@ impl Picture {
     /// at response time — the one place a server-sent age is correct, because it is measured when the
     /// answer is composed and read immediately.
     pub fn replace_from_feed(&mut self, feed: &[FeedPosition]) {
-        let now = Instant::now();
+        self.replace_from_feed_at(feed, Instant::now())
+    }
+
+    /// The same, with the receipt instant named: a scene loads its fixture at the logical clock, so
+    /// its ages cannot drift with how long the process took to start (`INV-11`).
+    pub fn replace_from_feed_at(&mut self, feed: &[FeedPosition], now: Instant) {
         self.units = feed
             .iter()
             .map(|entry| {

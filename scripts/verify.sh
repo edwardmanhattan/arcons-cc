@@ -85,7 +85,11 @@ if [ "$FAST" -eq 1 ]; then
 elif have scripts/capture.sh; then
   run_scenes() {
     local ok=0
-    for scene in ${SCENES//,/ }; do
+    local scenes="${SCENES:-empty,picture,stale,card-open}"
+    # The captures run the binary, not a test harness: build it here so `capture.sh` in CI and on a
+    # laptop runs the same file.
+    cargo build -q || return 1
+    for scene in ${scenes//,/ }; do
       scripts/capture.sh "$scene" || ok=1
       if have scripts/assert.sh; then
         scripts/assert.sh "out/$scene.png" || ok=1

@@ -66,6 +66,15 @@ pub struct State {
     /// A fix older than this draws as stale. From `config.toml`, so a deployment whose feed is slow
     /// says so in its own units instead of arguing with a constant (`#8`).
     pub stale_after: std::time::Duration,
+    /// The instant the process (or the scene) started. Ages are measured from here plus
+    /// [`State::logical`], never from `Instant::now()`: a capture has to be byte-identical twice
+    /// (`INV-11`), and a wall clock in a view is the surest way to lose that.
+    origin: std::time::Instant,
+    /// Seconds the frame loop believes have passed. Rune feeds a virtual clock to `poll` in
+    /// headless runs, so a scene at `--at 2` is exactly two seconds old every time.
+    logical: f64,
+    /// A capture, not a wall: no socket, no map surface, and nothing on screen to report about them.
+    pub headless: bool,
 }
 
 impl Default for State {
@@ -96,11 +105,29 @@ impl Default for State {
             stale_after: config
                 .map(|config| config.stale_after)
                 .unwrap_or(crate::units::STALE_AFTER),
+            origin: std::time::Instant::now(),
+            logical: 0.0,
+            headless: false,
         }
     }
 }
 
 impl State {
+    /// The clock every age in the view is measured against. The *only* source of "now" in the view,
+    /// which is what makes a capture reproducible: `--scene` drives `logical` from Rune's virtual
+    /// clock, and a windowed run from the real one.
+    pub fn now(&self) -> std::time::Instant {
+        self.origin + std::time::Duration::from_secs_f64(self.logical)
+    }
+
+    /// Take a wire-shaped picture as the opening state, stamped at the logical clock. A scene's ages
+    /// then come from the fixture's own `age_seconds` and nothing else.
+    pub fn load_fixture(&mut self, entries: &[crate::data::types::FeedPosition]) {
+        let now = self.now();
+        self.picture.replace_from_feed_at(entries, now);
+        self.fixes = 0;
+    }
+
     /// A state holding a picture, for tests and for a caller that has one already. The rest — the
     /// camera, the frame, the socket — starts at its default.
     pub fn new(picture: Picture) -> Self {
@@ -150,7 +177,7 @@ impl State {
             self.card = None;
             return;
         };
-        let now = std::time::Instant::now();
+        let now = self.now();
         let previous = self.card.take();
         let mut card = crate::units::card::Card::new(view, now, self.stale_after);
         // Keep what the reads already said for THIS hull: re-asking on every fix would make the
@@ -206,11 +233,17 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
 
     // A banner that does not cover the map: it is a row above the map, so the picture is never
     // obscured while the socket is reconnecting — the wall's whole job is the picture.
-    let banner = match &state.link {
-        Link::Live => None,
-        Link::Absent => Some("no socket: this wall is read-only until a credential is configured"),
-        Link::Unproven => Some("connecting: no new fixes yet, the picture is what was last read"),
-        Link::Failed(error) => Some(error.as_str()),
+    let banner = match (&state.link, state.headless) {
+        // A scene has no socket to be wrong about.
+        (_, true) => None,
+        (Link::Live, _) => None,
+        (Link::Absent, _) => {
+            Some("no socket: this wall is read-only until a credential is configured")
+        }
+        (Link::Unproven, _) => {
+            Some("connecting: no new fixes yet, the picture is what was last read")
+        }
+        (Link::Failed(error), _) => Some(error.as_str()),
     };
 
     let header = row()
@@ -273,7 +306,7 @@ fn picture(state: &State, scale: f32) -> El {
     let Some(frame) = state.frame else {
         return content;
     };
-    let now = std::time::Instant::now();
+    let now = state.now();
     let placed = markers::place(&state.picture, &frame, now, state.stale_after);
     let mut layer = content.child(markers::layer(&placed, &frame, scale));
 
@@ -339,7 +372,12 @@ fn picture_content(state: &State, scale: f32, body: El) -> El {
 }
 
 #[cfg(not(feature = "map"))]
-fn picture_content(_state: &State, _scale: f32, body: El) -> El {
+fn picture_content(state: &State, _scale: f32, body: El) -> El {
+    // A scene has a picture and no map engine: the ground is the panel, and saying "built without
+    // the map" would be a note about our build inside the thing under test.
+    if state.headless {
+        return body;
+    }
     placeholder(body, "built without the map: cargo run --features map")
 }
 
@@ -609,6 +647,19 @@ fn apply_update(state: &mut State, update: crate::live::Update) {
 
 /// Start the map thread, once, before the first frame. A `fn` because `AppSpec::setup` is one.
 fn setup(state: &mut State, waker: rune::Waker) {
+    // A scene is offline by construction: `--snap` renders a fixture, and a capture that opened a
+    // socket would be a capture that depends on a server being awake.
+    if rune::is_headless() {
+        state.headless = true;
+        // A scene declares its own viewport: there is no map thread to hand one over, and markers
+        // still have to project against something real. The size is the one `capture.sh` pins.
+        state.frame = Some(crate::map::geometry::Rendered {
+            camera: state.camera,
+            width: tokens::WINDOW_SIZE.0 as u32,
+            height: tokens::WINDOW_SIZE.1 as u32,
+        });
+        return;
+    }
     start_socket(state, waker.clone());
     if let Some(config) = config::current() {
         // The card's three reads run here, on the reads thread, never on the UI thread.
@@ -626,7 +677,10 @@ fn setup(state: &mut State, waker: rune::Waker) {
 }
 
 /// Every frame: hand the view loop whatever the socket said, and say whether it changed anything.
-fn poll(state: &mut State, _elapsed: f64, tx: &mut rune::Tx) -> bool {
+fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
+    // Rune's `elapsed` is the frame clock: virtual in a headless scene, real in a window. Every age
+    // in the view is derived from it, so nothing in a capture depends on how fast the machine was.
+    state.logical = elapsed;
     // systemd stops a wall with `SIGTERM`. Quitting through the runtime's own path drops the GL
     // context in order, instead of a hard exit that leaves the driver complaining.
     if crate::platform::terminated() {
@@ -665,7 +719,7 @@ fn poll(state: &mut State, _elapsed: f64, tx: &mut rune::Tx) -> bool {
 
     // A marker still travelling between two fixes needs the next frame drawn, and stops asking on its
     // own when the travel window ends: a wall at rest rebuilds nothing.
-    if state.picture.travelling(std::time::Instant::now()) {
+    if state.picture.travelling(state.now()) {
         changed = true;
     }
     changed
@@ -678,6 +732,7 @@ pub fn run(window: config::Window, passthrough: Vec<String>) -> ExitCode {
         setup: Some(setup),
         poll: Some(poll),
         on_key: Some(on_key),
+        scenes: crate::scene::SCENES,
         ..AppSpec::new(TITLE, window.size, State::default, view)
     };
 

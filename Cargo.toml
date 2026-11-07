@@ -22,8 +22,9 @@ maplibre_native = { path = "vendor/maplibre_native", optional = true }
 # The offline seed is a SQLite cache whose expiry rows must be pinned before MapLibre opens it, or a
 # fresh install tries to revalidate the style over the network and never reports style-loaded.
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
-# `--probe-map` writes one frame to a PNG for CI, with no window.
-png = { version = "0.18", optional = true }
+# `--probe-map` writes one frame to a PNG for CI, with no window; `--assert` reads captures
+# back. Not behind the map feature: the assertion has to run where the map engine is not built.
+png = "0.18"
 
 # The socket client. Vendored (see `vendor/README.md`): upstream 0.2.6 cannot set the connect
 # command's `data`, which is where Minos reads our token, and drops handshake refusal codes.
@@ -52,7 +53,7 @@ libc = "0.2"
 [features]
 default = []
 # #5: the map thread, the offline tile seed, and the vendored `maplibre_native`.
-map = ["dep:maplibre_native", "dep:rusqlite", "dep:png"]
+map = ["dep:maplibre_native", "dep:rusqlite"]
 
 [patch.crates-io]
 tokio-centrifuge = { path = "vendor/tokio-centrifuge" }
