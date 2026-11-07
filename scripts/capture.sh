@@ -38,12 +38,11 @@ mkdir -p out fixtures/golden
 status=0
 for scene in "${SCENES[@]}"; do
   printf '\n\033[1m▶ capture %s\033[0m\n' "$scene"
-  # `--at 3`: three seconds of the virtual clock, so a travel animation has settled and the font
-  # atlas has finished loading — a glyph that arrives a frame late is a capture that differs from
-  # itself, and CI caught exactly that on `card-open`.
+  # `--at 2`: two seconds of the virtual clock, so a scene with a travel animation has settled and a
+  # `--at 0` capture cannot accidentally be right for the wrong reason.
   if ! ./target/debug/arcons-cc \
       --scene "$scene" \
-      --at 3 \
+      --at 2 \
       --fps 60 \
       --size 1280x720 \
       --scale 1 \
@@ -65,7 +64,7 @@ for scene in "${SCENES[@]}"; do
   # Determinism on ANY machine: a second render of the same scene must be the same bytes as the
   # first. This is the part of INV-11 that is true everywhere, and it is the part CI can hold.
   cp "out/$scene.png" "out/$scene.first.png"
-  ./target/debug/arcons-cc --scene "$scene" --at 3 --fps 60 --size 1280x720 --scale 1 \
+  ./target/debug/arcons-cc --scene "$scene" --at 2 --fps 60 --size 1280x720 --scale 1 \
     --snap "out/$scene.png" > "out/$scene.log" 2>&1
   if cmp -s "out/$scene.first.png" "out/$scene.png"; then
     echo "  two runs identical (INV-11)"
