@@ -153,7 +153,21 @@ stale picture from three days ago is worse than a wall showing nothing at all.
 runtime's own path, so the GL context and the socket are dropped in order and the exit status is `0`.
 There is no `TimeoutStopSec` dance and no leaked thread.
 
-## 6. What the startup should say
+## 6. Build the binary a wall runs
+
+**Not `--release` yet.** `cargo build --release --features map` currently segfaults on the first frame
+in MapLibre's Vulkan backend ([#26](https://github.com/edwardmanhattan/arcons-cc/issues/26)); the
+debug build renders the same style, seed and camera correctly. Until #26 is closed, install
+
+```sh
+cargo build --features map          # what every timing in this runbook was measured on
+```
+
+and do not put a release binary on a wall. When #26 is fixed, this section goes away, the numbers in
+§6 are re-measured in release, and `docs/research/map-engines.md`'s frame-cost row is updated with
+them.
+
+## 7. What the startup should say
 
 ```
 arcons-cc: the map renders through /usr/share/vulkan/icd.d/intel_icd.json — the integrated GPU, where the panel is
@@ -171,7 +185,7 @@ INFO first map frame in 1645 ms
 - `RUNE_GPU_LOG=1` adds Rune's own line (`a surface draws with wgpu Vulkan on …`). Keep it in mind
   when frames are slow: the two lines together say which GPU each half is using.
 
-## 7. When something is wrong
+## 8. When something is wrong
 
 | symptom | read this |
 | --- | --- |

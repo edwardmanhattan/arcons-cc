@@ -46,6 +46,14 @@ Why: it renders a style with vector tiles **from a local seed**, which is what "
 network" requires; it has a `Continuous` renderer that suits a moving camera; and it has a Vulkan
 backend on Linux, the same driver stack Rune uses.
 
+**Reviewed for #10 (2026-11-07): keep it.** `docs/research/map-engines.md` compares it against
+`maplibre-rs`, `galileo`, `versatiles` and a custom raster renderer on the six criteria that decide
+this (offline, text quality, frame cost, licence, packaging, maintenance). It is the only candidate
+that meets the first two today — a 2.6 MB seed that renders byte-identically with no network
+namespace, and the liberty style's own labels — and the costs we carry (build, vendored patch, and a
+full RGBA frame copied through the CPU every frame) are measured there. That document names the
+triggers that re-open the question; this ADR changes the day one of them fires.
+
 **The `map` feature is off in the gate**, and that is the design rather than a delay: its build
 script fetches and compiles C++, and `scripts/verify.sh` promises *no network, no display, no GPU
 beyond software Vulkan, every run*. The projection, the camera and the scheduling are therefore in
