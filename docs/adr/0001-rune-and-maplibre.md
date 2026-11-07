@@ -60,6 +60,12 @@ beyond software Vulkan, every run*. The projection, the camera and the schedulin
 `src/map/geometry.rs` and `src/map/thread.rs` with **no MapLibre in them**, and the engine lives
 behind `--features map` (vendored at `vendor/maplibre_native`, see `vendor/README.md`).
 
+
+**The wall's binary is built from the precompiled amalgam** (`scripts/build-wall.sh`, #26). The local
+checkout route compiles the same C++ with this machine's compiler, and at `-O2` and above the result
+segfaults on the first map frame inside glslang (`-O0` and the debug build are fine, upstream's
+artifact is fine). The local route stays for development; the wall gets the artifact upstream built.
+
 Three ways to build the engine, measured on this machine (2026-11-06):
 
 | how | cost | when |

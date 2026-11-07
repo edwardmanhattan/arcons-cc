@@ -155,17 +155,19 @@ There is no `TimeoutStopSec` dance and no leaked thread.
 
 ## 6. Build the binary a wall runs
 
-**Not `--release` yet.** `cargo build --release --features map` currently segfaults on the first frame
-in MapLibre's Vulkan backend ([#26](https://github.com/edwardmanhattan/arcons-cc/issues/26)); the
-debug build renders the same style, seed and camera correctly. Until #26 is closed, install
-
 ```sh
-cargo build --features map          # what every timing in this runbook was measured on
+scripts/build-wall.sh              # → target/release/arcons-cc
 ```
 
-and do not put a release binary on a wall. When #26 is fixed, this section goes away, the numbers in
-§6 are re-measured in release, and `docs/research/map-engines.md`'s frame-cost row is updated with
-them.
+Release, `--features map`, and the map engine's C++ taken from **upstream's prebuilt amalgam** rather
+than compiled here (#26). The first build downloads that amalgam (~378 MB); after that it is a minute
+or two. `MLN_LOCAL_REPOSITORY` — which `~/.cargo/config.toml` sets for development — is cleared by
+the script on purpose: compiled on this machine at `-O2` and above, MapLibre's C++ segfaults on the
+first map frame inside glslang, while the debug build and the amalgam both render. That is why every
+capture in `fixtures/golden/` was taken on a debug build, and why the wall must not be given one.
+
+Frame cost with this binary, warm, 1080p, render plus RGBA readback: **42.5 ms median** (30.9 ms at
+720p). Debug is 65.2 / 45.5 ms — `docs/research/map-engines.md` has both rows.
 
 ## 7. What the startup should say
 

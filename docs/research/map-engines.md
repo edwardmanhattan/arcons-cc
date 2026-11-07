@@ -41,7 +41,7 @@ Measured, today, on this laptop:
 | --- | --- |
 | **Offline** | `assets/tiles-cache.seed.sqlite`, **2.6 MB**, 36 tiles, z6–z12, style document and glyphs included. `--probe-map` under `unshare -rn` (no network namespace) produces a **byte-identical** PNG to the online run: `sha256 7e83c87b…`. |
 | **Text** | `out/probe.png`, 1280×720 at z11 over Jakarta: place names, water names, road shields, all with halos (`text-halo-*` from the style). Vector glyphs are rasterised at device scale, so 1× and 1.25× are both sharp — the text is a *style* feature, not an image. |
-| **Frame cost** | warm, one frame including RGBA readback, debug build: **1280×720 median 45.5 ms / p95 58.3 ms**; **1920×1080 median 65.2 ms / p95 79.5 ms** (`cargo run --features map --example map_frame_cost 1920x1080`). Debug, so a floor rather than a ceiling — and the only number that exists, because **the release build segfaults** (below). |
+| **Frame cost** | warm, one frame including RGBA readback — **release** (`scripts/build-wall.sh`): **1280×720 median 30.9 ms / p95 36.7 ms**; **1920×1080 median 42.5 ms / p95 48.9 ms**. Debug is 45.5 / 65.2 ms. `cargo run --features map --example map_frame_cost 1920x1080`. |
 | **GPU sharing** | **No shared texture.** `frame_rgba()` is `render_once()` + `read_still_image()`: the whole frame comes back through the CPU as straight-alpha RGBA — 1920×1080×4 = **8.29 MB per frame**, 33 MB/s at the wall's 4 Hz — and Rune uploads it again as a `Pixels`. |
 | **Licence** | BSD-2-Clause, in the notices; no copyleft in the graph (`tests/notices.rs`). |
 | **Build** | three routes, measured 2026-11-06 (ADR-0001): prebuilt amalgam **378 MB download → 46 s** link; local C++ checkout **~4.5 min**; fresh clone **~2 GB**. A full clean `--release --features map` build of this crate took **14 min 51 s** today, UI and all. |
@@ -106,7 +106,7 @@ Scale: ✅ meets it with evidence · ⚠️ meets it with a caveat we would carr
 | --- | --- | --- | --- | --- | --- |
 | **1. Offline cold start** | ✅ 2.6 MB seed, z6–z12, byte-identical render with no network namespace | ❌ no cache; ours to write | ⚠️ tile sources and cache are the app's job | ✅ *is* the offline tile store | ✅ PNG tiles on disk |
 | **2. Text quality** | ✅ style-driven vector glyphs with halos, sharp at 1×/1.25× | ⚠️ SDF text exists, style incomplete | ⚠️ real text (rustybuzz), but Point placement only; line labels skipped | n/a — draws nothing | ❌ baked into tiles |
-| **3. Frame cost** | ⚠️ 45.5 / 65.2 ms median at 720p / 1080p in **debug**; release **crashes**; **8.29 MB CPU copy per frame** | ❓ no measurement: no integration exists to measure | ⚠️ unmeasured here; wgpu texture shared with the UI, no CPU copy | n/a | ✅ a few textured quads; unmeasured |
+| **3. Frame cost** | ⚠️ 30.9 / 42.5 ms median at 720p / 1080p in release; **8.29 MB CPU copy per frame** | ❓ no measurement: no integration exists to measure | ⚠️ unmeasured here; wgpu texture shared with the UI, no CPU copy | n/a | ✅ a few textured quads; unmeasured |
 | **4. Licence** | ✅ BSD-2 | ✅ Apache-2.0 (+MIT) | ✅ MIT/Apache-2.0 | ✅ MIT | ✅ ours |
 | **5. Build and packaging** | ⚠️ 378 MB prebuilt or ~2 GB clone; C++ toolchain; 46 s–15 min; vendored patch | ✅ pure Rust | ✅ pure Rust (wgpu) | ✅ pure Rust | ✅ no deps |
 | **6. Maintenance** | ⚠️ upstream active, 621 open issues, wrapper 0.9.x | ⚠️ experimental badge, 70 issues | ⚠️ 0.2.1, API pre-stable, but daily commits | ✅ active, narrow scope | ✅ ours |
@@ -118,9 +118,9 @@ Scale: ✅ meets it with evidence · ⚠️ meets it with a caveat we would carr
 unshare -rn ./target/debug/arcons-cc --probe-map out/probe.png
 sha256sum out/probe.png            # 7e83c87b302576f78c9165110271ffd3461061971efc9fb078f2a17b2504375f
 
-# Frame cost (needs --features map; not in the gate: it wants a GPU).
-cargo run --features map --example map_frame_cost            # 1280x720
-cargo run --features map --example map_frame_cost 1920x1080
+# Frame cost in release (needs --features map; not in the gate: it wants a GPU).
+MLN_PRECOMPILE=1 cargo run --release --features map --example map_frame_cost
+MLN_PRECOMPILE=1 cargo run --release --features map --example map_frame_cost 1920x1080
 ```
 
 The harness is `examples/map_frame_cost.rs`: one `LiveMap` per process, warm (`pump(8)`), then 30
@@ -128,30 +128,36 @@ frames with 120 ms between them, timing `frame_rgba()` — render plus readback,
 pays. Not in `scripts/verify.sh` on purpose: it needs the `map` feature and a real GPU, and the gate
 promises neither.
 
-## Finding: a release build segfaults in the engine
+## Finding: our own C++ build segfaulted in release (#26, fixed)
 
-`cargo build --release --features map` and then `--probe-map` **segfaults**, while the identical debug
-build renders. Coredump:
+Measuring this ticket's frame cost in release turned up a **segfault on the first map frame**, while
+the debug build rendered the same camera, style and seed:
 
 ```
 #0  libglslang.so.16
-#5  mln::vulkan::ShaderProgram::ShaderProgram(...)
+#3  glslang::GlslangToSpv(TIntermediate const&, vector&, SpvBuildLogger*, SpvOptions*)   // logger == nullptr
 #9  mln::RenderLineLayer::update(...)
-#10 mln::RenderOrchestrator::updateLayers(...)
-#11 mln::Renderer::Impl::render(...)
 ```
 
-A C++ crash in shader compilation, reached from the line layer, in release only. It is not this
-ticket's to fix — it is a **v0.1 shipping blocker**: the wall runs the binary we build, and we build
-release. Filed as
-[#26](https://github.com/edwardmanhattan/arcons-cc/issues/26) with the coredump and the reproduction.
+The null logger in glslang 1.4.363 is dereferenced at `mov 0x48(%rsi)` with `rsi = 0`, so the crash is
+glslang's — but what put it there was our build route:
 
-Two consequences for this document:
+| what | result |
+| --- | --- |
+| local C++ checkout, `CMAKE_BUILD_TYPE=Debug` (the debug build) | works |
+| local C++ checkout, `Release` (`-O3`), gcc 15 | **SIGSEGV** |
+| local C++ checkout, `Release` with `-O0` | works |
+| local C++ checkout, `Release` with `-O3 -fno-strict-aliasing` | **SIGSEGV** |
+| upstream's prebuilt amalgam (`MLN_PRECOMPILE=1`), release | works |
 
-- The frame-cost numbers above are **debug** numbers. They are the only honest ones until #26 is
-  understood, and they are a floor: a release build should be faster, if it ever renders.
-- Criterion 3 for `maplibre_native` is ⚠️ rather than ✅ for a second, independent reason: the CPU
-  copy. Even when fast, it is the wrong shape for sharing a GPU with Rune.
+So it is not "release", and it is not the engine's logic: it is MapLibre Native's C++ as compiled by
+**this** machine's compiler at `-O2` and above. Upstream's own artifact — built with their toolchain —
+is fine, which is the answer we ship: `scripts/build-wall.sh` builds the wall's binary from the
+precompiled core and clears `MLN_LOCAL_REPOSITORY` so the development route cannot be picked by
+accident. The frame-cost numbers above are from that binary.
+
+The development route stays useful (a debug build is unaffected, and it is what compiles the C++
+locally when someone is changing the map feature), and `docs/runbook.md` §6 names both.
 
 ## Recommendation
 
