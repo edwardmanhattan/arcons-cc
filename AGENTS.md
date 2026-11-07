@@ -80,7 +80,8 @@ Comment on the issue rather than choosing silently, especially for: the wall's c
 
 ```
 src/main.rs      flags, startup, exit codes
-src/config.rs    paths, --self-check, the command line
+src/config.rs    the command line, the resolved Config, Secret (redacting by construction)
+src/config/      file.rs (config.toml) · credential.rs (mode 0600) · check.rs (--self-check, 0–6)
 src/ui/          the view, markers.rs, unitcard.rs, tokens.rs (the only file that names a colour or a size)
 src/units/       the vocabulary and the view model: Unit, UnitView, Glyph, Picture, motion, card
 src/data.rs      the Minos REST client            (#3)
@@ -89,5 +90,6 @@ src/map/         geometry (no engine, in the gate) + the MapLibre thread (#5)
 vendor/          dependencies patched for reasons recorded in vendor/README.md
 fixtures/        recorded wire data the tests read (see fixtures/README.md)
 docs/spec/       the pinned Minos contract — read-only
-docs/            verification contract, invariants, ADRs
+src/platform.rs  the log, SIGTERM, the start clock
+docs/            verification contract, invariants, ADRs, runbook.md (putting the wall up)
 ```

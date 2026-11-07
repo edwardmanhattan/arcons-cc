@@ -81,33 +81,67 @@ pub struct LiveCheck {
     pub token_remaining: Option<std::time::Duration>,
 }
 
-/// Prove the wall can actually read: sign in, read the picture, parse it, and look at the token's
-/// remaining life.
+/// A signed-in session, kept open for the CLI paths that ask two questions of one wall.
+///
+/// `start` is the login check and `read` is the read check, deliberately separate: "the credential is
+/// refused" (exit 3) and "the credential works and the read fails" (exit 4) are different problems
+/// with different fixes, and one function that does both cannot tell them apart.
 ///
 /// This is the CLI path, not the display: it is allowed to block, because nothing is drawing yet.
-pub fn live_check(minos: &crate::config::Minos) -> Result<LiveCheck, Error> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| Error::Transport(format!("could not start a runtime: {error}")))?;
-    runtime.block_on(async {
-        let http = match minos.refresh_token() {
-            Some(token) => http::Http::with_refresh_token(minos, token.to_string()).await?,
-            None => http::Http::sign_in(minos).await?,
-        };
-        // A read, not a shape check: the picture is what the wall draws, and a 200 with an empty
-        // list would prove the credential works and nothing else.
-        let picture = http.positions().await?;
-        let silent = picture
-            .iter()
-            .filter(|hull| hull.position.is_none())
-            .count();
-        Ok(LiveCheck {
-            vessels: picture.len(),
-            silent,
-            token_remaining: http.token_remaining(),
-        })
-    })
+pub struct Session {
+    http: http::Http,
+}
+
+impl Session {
+    /// Sign in, or exchange the refresh token once. **This is the only call that proves a
+    /// credential**, so a failure here is exit 3 and nothing else.
+    pub fn start(minos: &crate::config::Minos) -> Result<Session, Error> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| Error::Transport(format!("could not start a runtime: {error}")))?;
+        let http = runtime.block_on(async {
+            match minos.refresh_token() {
+                // A refresh token is exchanged once at startup rather than held unproven: without
+                // this, "signed in" would mean "the file has a string in it".
+                Some(token) => {
+                    let http = http::Http::with_refresh_token(minos, token.to_string()).await?;
+                    http.access_token().await?;
+                    Ok::<_, Error>(http)
+                }
+                None => http::Http::sign_in(minos).await,
+            }
+        })?;
+        Ok(Session { http })
+    }
+
+    /// How long the access token still has. `None` when the server stated no lifetime.
+    pub fn token_remaining(&self) -> Option<std::time::Duration> {
+        self.http.token_remaining()
+    }
+
+    /// The picture as the server has it. A read, not a shape check: a `200` with an empty list would
+    /// prove the credential works and nothing else.
+    pub fn read(&mut self) -> Result<LiveCheck, Error> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| Error::Transport(format!("could not start a runtime: {error}")))?;
+        let token_remaining = runtime.block_on(async {
+            let picture = self.http.positions().await?;
+            let silent = picture
+                .iter()
+                .filter(|hull| hull.position.is_none())
+                .count();
+            Ok::<_, Error>(LiveCheck {
+                vessels: picture.len(),
+                silent,
+                token_remaining: self.http.token_remaining(),
+            })
+        })?;
+        let _ = token_remaining.token_remaining;
+        Ok(token_remaining)
+    }
 }
 
 #[cfg(test)]

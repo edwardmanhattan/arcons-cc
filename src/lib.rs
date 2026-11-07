@@ -15,5 +15,6 @@ pub mod config;
 pub mod data;
 pub mod live;
 pub mod map;
+pub mod platform;
 pub mod ui;
 pub mod units;

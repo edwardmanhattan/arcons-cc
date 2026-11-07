@@ -151,6 +151,11 @@ impl UnitView {
 
     /// Which glyph this hull earns, if any.
     pub fn glyph(&self, now: Instant) -> Option<Glyph> {
+        self.glyph_with(now, STALE_AFTER)
+    }
+
+    /// The glyph with the deployment's own staleness threshold, from `config.toml` (`stale_after_s`).
+    pub fn glyph_with(&self, now: Instant, stale_after: Duration) -> Option<Glyph> {
         self.position?;
         if self.backfilled {
             // INV-03: history, whatever its age. The flag and the age are different facts, and this
@@ -158,7 +163,7 @@ impl UnitView {
             return Some(Glyph::History);
         }
         match self.age_seconds(now) {
-            Some(age) if age >= STALE_AFTER.as_secs_f64() => Some(Glyph::Stale),
+            Some(age) if age >= stale_after.as_secs_f64() => Some(Glyph::Stale),
             Some(_) => Some(Glyph::Live),
             None => None,
         }

@@ -13,7 +13,7 @@
 //!   its marker, flips to the other side when it would leave the window, and never clips a corner
 //!   (`INV-10`).
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
@@ -74,14 +74,14 @@ pub struct Card {
 }
 
 impl Card {
-    /// The model for a hull, at `now`.
-    pub fn new(view: &UnitView, now: Instant) -> Self {
+    /// The model for a hull, at `now`, with the deployment's own staleness threshold.
+    pub fn new(view: &UnitView, now: Instant, stale_after: Duration) -> Self {
         Self {
             unit: view.unit.clone(),
             age_at_build: view.age_seconds(now),
             built: now,
             recorded_at: view.position.map(|_| view.received_at),
-            glyph: view.glyph(now),
+            glyph: view.glyph_with(now, stale_after),
             speed_kn: view.speed_kn,
             course_deg: view.course_deg,
             accuracy_m: view.accuracy_m,
@@ -257,6 +257,7 @@ fn clamp(value: f64, low: f64, high: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::units::Pos;
+    use crate::units::STALE_AFTER;
     use chrono::TimeZone;
 
     fn view(speed: Option<f64>, fresh: bool) -> UnitView {
@@ -282,7 +283,7 @@ mod tests {
     #[test]
     fn an_absent_measurement_is_a_dash_with_a_reason_and_a_measured_zero_is_a_zero() {
         // INV-01 where a reader can see it: `0.0` is a measurement, `— not measured` is not.
-        let measured = Card::new(&view(Some(0.0), true), Instant::now());
+        let measured = Card::new(&view(Some(0.0), true), Instant::now(), STALE_AFTER);
         let rows = measured.motion_rows();
         assert_eq!(
             rows[0].1, "0.0 kn",
@@ -290,7 +291,7 @@ mod tests {
         );
         assert!(rows[0].2, "and is marked as real");
 
-        let absent = Card::new(&view(None, true), Instant::now());
+        let absent = Card::new(&view(None, true), Instant::now(), STALE_AFTER);
         let rows = absent.motion_rows();
         assert_eq!(rows[0].1, "— not measured", "an absent speed is not a zero");
         assert!(!rows[0].2, "and is marked as not real");
@@ -304,7 +305,7 @@ mod tests {
     fn a_hull_with_no_fix_says_so_rather_than_showing_zeros() {
         let mut silent = view(None, true);
         silent.position = None;
-        let card = Card::new(&silent, Instant::now());
+        let card = Card::new(&silent, Instant::now(), STALE_AFTER);
         assert_eq!(card.age_text(Instant::now()), "no fix");
         assert_eq!(card.motion_rows()[0].1, "— no fix");
         assert!(
@@ -317,7 +318,7 @@ mod tests {
     fn the_age_text_advances_without_the_model_changing() {
         // INV-06 and the ticket's "once a second" without a re-render: the model is built once, and
         // the text is a function of the clock.
-        let card = Card::new(&view(None, true), Instant::now());
+        let card = Card::new(&view(None, true), Instant::now(), STALE_AFTER);
         let built = card.built;
         let first = card.age_text(built);
         let later = card.age_text(built + std::time::Duration::from_secs(10));
@@ -330,26 +331,26 @@ mod tests {
 
     #[test]
     fn stale_and_backfilled_badges_use_the_markers_vocabulary() {
-        let stale = Card::new(&view(None, false), Instant::now());
+        let stale = Card::new(&view(None, false), Instant::now(), STALE_AFTER);
         assert_eq!(stale.badges(), vec!["stale"]);
 
         let mut history = view(None, true);
         history.backfilled = true;
-        let history = Card::new(&history, Instant::now());
+        let history = Card::new(&history, Instant::now(), STALE_AFTER);
         assert_eq!(history.badges(), vec!["backfilled"]);
 
         let mut both = view(None, false);
         both.backfilled = true;
         // INV-03 wins over the age at the glyph, so the badge says what the marker draws.
         assert_eq!(
-            Card::new(&both, Instant::now()).badges(),
+            Card::new(&both, Instant::now(), STALE_AFTER).badges(),
             vec!["backfilled"]
         );
     }
 
     #[test]
     fn an_empty_commander_list_reads_as_nobody_not_as_failure() {
-        let mut card = Card::new(&view(None, true), Instant::now());
+        let mut card = Card::new(&view(None, true), Instant::now(), STALE_AFTER);
         assert_eq!(
             card.commander_line(),
             ("COMMANDER", "…".to_string()),

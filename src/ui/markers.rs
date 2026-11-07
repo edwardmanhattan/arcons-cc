@@ -49,16 +49,26 @@ pub struct Placed {
 ///
 /// Pure, so the placement can be asserted without a window: the test that no marker exists for a
 /// silent hull asks this function, and the test that a marker lands on its projection asks it too.
-pub fn place(picture: &crate::units::Picture, frame: &Rendered, now: Instant) -> Vec<Placed> {
+pub fn place(
+    picture: &crate::units::Picture,
+    frame: &Rendered,
+    now: Instant,
+    stale_after: std::time::Duration,
+) -> Vec<Placed> {
     picture
         .units()
         .iter()
-        .filter_map(|unit| place_one(unit, frame, now))
+        .filter_map(|unit| place_one(unit, frame, now, stale_after))
         .collect()
 }
 
-fn place_one(unit: &UnitView, frame: &Rendered, now: Instant) -> Option<Placed> {
-    let glyph = unit.glyph(now)?;
+fn place_one(
+    unit: &UnitView,
+    frame: &Rendered,
+    now: Instant,
+    stale_after: std::time::Duration,
+) -> Option<Placed> {
+    let glyph = unit.glyph_with(now, stale_after)?;
     let drawn: Pos = unit.drawn(now)?;
     let (x, y) = frame.project(drawn.lat, drawn.lon);
     Some(Placed {
@@ -229,7 +239,12 @@ mod tests {
         // INV-02: the hull is in the picture, and there is no marker — not at (0,0), not anywhere.
         let mut picture = Picture::default();
         picture.replace_from_feed(&[entry(1, None), entry(8, Some(fix(-6.1, 106.9, 5.0, false)))]);
-        let placed = place(&picture, &frame(), Instant::now());
+        let placed = place(
+            &picture,
+            &frame(),
+            Instant::now(),
+            crate::units::STALE_AFTER,
+        );
         assert_eq!(
             placed.len(),
             1,
@@ -249,7 +264,7 @@ mod tests {
         let frame = frame();
         let mut picture = Picture::default();
         picture.replace_from_feed(&[entry(8, Some(fix(-6.05, 106.95, 5.0, false)))]);
-        let placed = place(&picture, &frame, Instant::now());
+        let placed = place(&picture, &frame, Instant::now(), crate::units::STALE_AFTER);
         assert_eq!(placed.len(), 1);
         let (x, y) = frame.project(-6.05, 106.95);
         assert!(
@@ -272,7 +287,12 @@ mod tests {
             entry(2, Some(fix(-6.11, 106.91, 6.0 * 3600.0, false))),
             entry(3, Some(fix(-6.12, 106.92, 1.0, true))),
         ]);
-        let placed = place(&picture, &frame(), Instant::now());
+        let placed = place(
+            &picture,
+            &frame(),
+            Instant::now(),
+            crate::units::STALE_AFTER,
+        );
         let glyph = |id: i64| {
             placed
                 .iter()
@@ -297,7 +317,12 @@ mod tests {
         // INV-01 on the drawing side: nothing is invented for a measurement nobody took.
         let mut picture = Picture::default();
         picture.replace_from_feed(&[entry(8, Some(fix(-6.1, 106.9, 5.0, false)))]);
-        let placed = place(&picture, &frame(), Instant::now());
+        let placed = place(
+            &picture,
+            &frame(),
+            Instant::now(),
+            crate::units::STALE_AFTER,
+        );
         assert_eq!(
             placed[0].course_deg, None,
             "INV-01: no course, no arrow — and certainly not north"

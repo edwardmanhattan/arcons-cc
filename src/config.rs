@@ -8,11 +8,15 @@
 //! source tree: `INV-08` forbids a token in any log line, and the surest way to leak one is to
 //! check it in. `--self-check` therefore reports *presence*, never contents.
 
-use std::path::PathBuf;
-use std::process::ExitCode;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use crate::map;
 use crate::ui::tokens;
+
+pub mod check;
+pub mod credential;
+pub mod file;
 
 pub const USAGE: &str = "\
 arcons-cc — the live maritime picture on a wall
@@ -23,7 +27,12 @@ USAGE:
 OPTIONS:
     --window-size WxH   open at this size, in points (default 1280x720)
     --fullscreen        cover the primary output, no frame
-    --self-check        report what is configured, and what is missing (exit 2 if anything is)
+    --no-decorations    no title bar, no resize grip: nothing to click on a wall
+    --config PATH       read this config file instead of $XDG_CONFIG_HOME/arcons-cc/config.toml
+    --credentials PATH  read this credential file instead of the one config.toml names
+    --log-file PATH     also write the log there (stderr always gets it)
+    --self-check        check config, credential, login, REST, socket and map seed, and exit
+                        with 0 ok · 1 config · 2 credential · 3 login · 4 REST · 5 socket · 6 seed
     --probe-map         render one map frame to a PNG with no window (needs --features map)
     --out PATH          where --probe-map writes (default out/probe.png)
     --probe-at L,L,Z    the camera to probe (default the wall's start camera)
@@ -52,6 +61,9 @@ pub struct Window {
     pub fullscreen: bool,
     /// Logical size in points.
     pub size: (f32, f32),
+    /// No title bar and no resize grip. A wall has no window manager affordances to click, and a
+    /// title bar is one more thing that can be dragged out of place.
+    pub decorations: bool,
 }
 
 impl Default for Window {
@@ -59,6 +71,7 @@ impl Default for Window {
         Self {
             fullscreen: false,
             size: tokens::WINDOW_SIZE,
+            decorations: true,
         }
     }
 }
@@ -72,6 +85,12 @@ pub struct Args {
     pub out: std::path::PathBuf,
     /// The camera `--probe-map` renders, when it is not the default.
     pub probe_camera: Option<crate::map::geometry::Camera>,
+    /// `--config`: where the configuration is. `None` means the default under `XDG_CONFIG_HOME`.
+    pub config: Option<PathBuf>,
+    /// `--credentials`: the credential file, overriding the one `config.toml` names.
+    pub credentials: Option<PathBuf>,
+    /// `--log-file`: a second place the log goes, for a wall with no terminal attached.
+    pub log_file: Option<PathBuf>,
     /// Arguments this binary does not own, handed to Rune so its headless tooling still works:
     /// `--snap`, `--scene`, `--tree`, `--script`, `--frames`. #9's captures depend on that.
     pub passthrough: Vec<String>,
@@ -88,6 +107,9 @@ impl Args {
             window: Window::default(),
             out: std::path::PathBuf::from("out/probe.png"),
             probe_camera: None,
+            config: None,
+            credentials: None,
+            log_file: None,
             passthrough: Vec::new(),
         };
 
@@ -111,6 +133,19 @@ impl Args {
                     args.probe_camera = Some(parse_camera(&value)?);
                 }
                 "--fullscreen" => args.window.fullscreen = true,
+                "--no-decorations" => args.window.decorations = false,
+                "--config" => {
+                    let value = argv.next().ok_or("--config needs a path")?;
+                    args.config = Some(PathBuf::from(value));
+                }
+                "--credentials" => {
+                    let value = argv.next().ok_or("--credentials needs a path")?;
+                    args.credentials = Some(PathBuf::from(value));
+                }
+                "--log-file" => {
+                    let value = argv.next().ok_or("--log-file needs a path")?;
+                    args.log_file = Some(PathBuf::from(value));
+                }
                 "--window-size" => {
                     let value = argv
                         .next()
@@ -279,6 +314,15 @@ impl Minos {
         }
     }
 
+    /// `"refresh token"` or `"identifier and password"`: what the wall is doing about its identity,
+    /// in words that never include it.
+    pub fn kind(&self) -> &'static str {
+        match &self.credential {
+            Credential::RefreshToken(_) => "refresh token",
+            Credential::Password { .. } => "identifier and password",
+        }
+    }
+
     /// The refresh token, when the wall holds one.
     pub fn refresh_token(&self) -> Option<&str> {
         match &self.credential {
@@ -332,105 +376,229 @@ impl std::fmt::Debug for Minos {
     }
 }
 
-/// Report one file's presence, and remember the gap when it is absent.
-fn report(label: &str, path: &std::path::Path, owner: &str, missing: &mut Vec<String>) {
-    if path.exists() {
-        println!("  {label:<12} present  {}", path.display());
-    } else {
-        println!("  {label:<12} MISSING  {} (ticket {owner})", path.display());
-        missing.push(format!("{label} ({owner})"));
+/// The environment, snapshotted once.
+///
+/// Read through this rather than `std::env` so a test can describe an environment instead of
+/// mutating the process's — two tests that both set `MINOS_BASE_URL` are a flaky test, not a test.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Env(BTreeMap<String, String>);
+
+impl Env {
+    pub fn from_process() -> Self {
+        let mut vars = BTreeMap::new();
+        for name in [
+            "MINOS_BASE_URL",
+            "MINOS_SOCKET_URL",
+            "MINOS_REFRESH_TOKEN",
+            "MINOS_IDENTIFIER",
+            "MINOS_PASSWORD",
+        ] {
+            if let Ok(value) = std::env::var(name) {
+                vars.insert(name.to_string(), value);
+            }
+        }
+        Self(vars)
+    }
+
+    pub fn new<'a, I>(pairs: I) -> Self
+    where
+        I: IntoIterator<Item = (&'a str, &'a str)>,
+    {
+        Self(
+            pairs
+                .into_iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+        )
+    }
+
+    /// A set, non-blank value. Blank is unset: an empty `MINOS_PASSWORD` in a `.env` is a password
+    /// nobody meant to send.
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.0
+            .get(name)
+            .map(String::as_str)
+            .filter(|value| !value.trim().is_empty())
     }
 }
 
-/// Report what is configured and what is missing. Exit 0 when nothing is, else 2.
+/// Why the configuration could not be used, and which exit code says so.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum Problem {
+    /// Exit 1: no URL, an unreadable or misspelled config file, a half-set credential in the env.
+    #[error("{0}")]
+    Unusable(String),
+    /// Exit 2: the credential file is missing, readable by others, or says two things at once.
+    #[error("{0}")]
+    Credentials(credential::Refused),
+}
+
+impl Problem {
+    pub fn code(&self) -> u8 {
+        match self {
+            Problem::Unusable(_) => 1,
+            Problem::Credentials(_) => 2,
+        }
+    }
+}
+
+/// Where a setting came from. The self-check prints it, because "it works on my machine" is usually
+/// a different `config.toml`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    Flag,
+    Env,
+    File,
+    Default,
+}
+
+impl Source {
+    pub fn label(self) -> &'static str {
+        match self {
+            Source::Flag => "flag",
+            Source::Env => "env",
+            Source::File => "file",
+            Source::Default => "default",
+        }
+    }
+}
+
+/// The resolved configuration: what the wall actually uses, and where each part came from.
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub minos: Minos,
+    /// The Centrifugo endpoint. Named explicitly when the socket is not derivable from the REST base
+    /// (a deployment behind a path-prefixing proxy), derived otherwise.
+    pub socket_url: String,
+    pub socket_source: Source,
+    pub map_center: (f64, f64),
+    pub map_zoom: f64,
+    pub stale_after: Duration,
+    pub config_path: PathBuf,
+    pub credentials_path: PathBuf,
+    pub minos_source: Source,
+    pub credential_source: Source,
+}
+
+impl Config {
+    /// Resolve flags, then the environment, then the file, then the default — in that order, and
+    /// saying which one answered.
+    pub fn load(args: &Args, env: &Env) -> Result<Config, Problem> {
+        let config_path = args.config.clone().unwrap_or_else(config_file);
+        let file = file::File::read(&config_path).map_err(Problem::Unusable)?;
+
+        let (price, minos_url, minos_source) = match env.get("MINOS_BASE_URL") {
+            Some(url) => (None, url.to_string(), Source::Env),
+            None => match file.minos_url.clone() {
+                Some(url) => (None, url, Source::File),
+                None => (Some(()), String::new(), Source::Default),
+            },
+        };
+        if price.is_some() {
+            return Err(Problem::Unusable(format!(
+                "minos_url is not configured: set it in {} or in MINOS_BASE_URL",
+                config_path.display()
+            )));
+        }
+
+        let credential_path = args
+            .credentials
+            .clone()
+            .or_else(|| file.credential_path(&config_path))
+            .unwrap_or_else(credential_file);
+        let (credential, credential_source) = resolve_credential(args, env, &credential_path)?;
+        let minos = Minos::new(minos_url, credential);
+
+        let (socket_url, socket_source) = match env.get("MINOS_SOCKET_URL") {
+            Some(url) => (url.to_string(), Source::Env),
+            None => match file.centrifugo_url.clone() {
+                Some(url) => (url, Source::File),
+                None => (minos.socket_url(), Source::Default),
+            },
+        };
+
+        let start = crate::map::geometry::Camera::START;
+        Ok(Config {
+            socket_url,
+            socket_source,
+            map_center: file
+                .map_center
+                .map(|[lat, lon]| (lat, lon))
+                .unwrap_or(start.center),
+            map_zoom: file.map_zoom.unwrap_or(start.zoom),
+            stale_after: Duration::from_secs_f64(
+                file.stale_after_s
+                    .unwrap_or_else(|| crate::units::STALE_AFTER.as_secs_f64()),
+            ),
+            config_path,
+            credentials_path: credential_path,
+            minos_source,
+            credential_source,
+            minos,
+        })
+    }
+}
+
+/// The credential: a flag-named file, then the environment, then the file the config names.
+fn resolve_credential(
+    args: &Args,
+    env: &Env,
+    path: &Path,
+) -> Result<(Credential, Source), Problem> {
+    // An explicit `--credentials` is an instruction: read that file even if the environment could
+    // answer, because the operator asked for *this* credential and a silent substitution is how a
+    // wall signs in as the wrong account.
+    if args.credentials.is_some() {
+        return credential::read(path)
+            .map(|credential| (credential, Source::Flag))
+            .map_err(Problem::Credentials);
+    }
+    if let Some(token) = env.get("MINOS_REFRESH_TOKEN") {
+        return Ok((Credential::RefreshToken(Secret::new(token)), Source::Env));
+    }
+    match (env.get("MINOS_IDENTIFIER"), env.get("MINOS_PASSWORD")) {
+        (Some(identifier), Some(password)) => Ok((
+            Credential::Password {
+                identifier: identifier.to_string(),
+                password: Secret::new(password),
+            },
+            Source::Env,
+        )),
+        // One without the other is a configuration that looks set and is not.
+        (Some(_), None) | (None, Some(_)) => Err(Problem::Unusable(
+            "MINOS_IDENTIFIER and MINOS_PASSWORD are set one at a time: set both, or neither"
+                .to_string(),
+        )),
+        (None, None) => credential::read(path)
+            .map(|credential| (credential, Source::File))
+            .map_err(Problem::Credentials),
+    }
+}
+
+/// The configuration the running process uses.
 ///
-/// Scaffold-era truth: nothing is configured yet, so this exits 2 and names each gap with the
-/// ticket that fills it. #8 keeps the shape and replaces the stubs.
-pub fn self_check() -> ExitCode {
-    println!("arcons-cc {} self-check", env!("CARGO_PKG_VERSION"));
-    println!("  config dir   {}", config_dir().display());
+/// A `static` because Rune's `AppSpec::init` is a plain `fn() -> State`: a state cannot carry the
+/// configuration *in* to the app, so the process installs it once, before the first frame, and
+/// everything that needs it reads it from here. Tests never call [`set_current`], so `current()` is
+/// `None` there and the defaults apply — which is what a test wants.
+static CURRENT: std::sync::OnceLock<Config> = std::sync::OnceLock::new();
 
-    let mut missing: Vec<String> = Vec::new();
+/// Install the configuration for this process. Idempotent: a second call is ignored, because two
+/// configurations in one process is a bug, not a feature.
+pub fn set_current(config: &Config) {
+    let _ = CURRENT.set(config.clone());
+}
 
-    report("config", &config_file(), "#8", &mut missing);
-    // Presence only. Reading it is #8's job, and printing anything from it would be an INV-08 bug.
-    report("credentials", &credential_file(), "#8", &mut missing);
+/// The configuration, once [`set_current`] has run.
+pub fn current() -> Option<&'static Config> {
+    CURRENT.get()
+}
 
-    let seed = map::seed_path();
-    if map::seed_present() {
-        println!("  map seed     present  {}", seed.display());
-    } else {
-        println!("  map seed     MISSING  {}", seed.display());
-        missing.push("the offline map seed (#5)".to_string());
-    }
-
-    // The live checks: sign in, read the picture, parse it, and look at the token's life. Nothing
-    // here prints a value from the credential — only what the server said (INV-08).
-    match Minos::from_env() {
-        Ok(minos) => {
-            println!("  REST         {}", minos.base_url());
-            match crate::data::live_check(&minos) {
-                Ok(check) => {
-                    println!(
-                        "  picture      ok  {} hulls, {} never reported",
-                        check.vessels, check.silent
-                    );
-                    match check.token_remaining {
-                        Some(left) if left.as_secs() > 0 => {
-                            println!("  token        ok  {} s left", left.as_secs());
-                        }
-                        Some(_) => {
-                            println!("  token        EXPIRED at sign-in");
-                            missing.push("a token that is still valid (#3)".to_string());
-                        }
-                        None => {
-                            println!("  token        no lifetime stated by the server");
-                        }
-                    }
-                }
-                Err(error) => {
-                    println!("  REST         FAILED  {error}");
-                    missing.push(format!("a working read (#3): {error}"));
-                }
-            }
-        }
-        Err(names) => {
-            println!(
-                "  REST         not configured  (needs {})",
-                names.join(" and ")
-            );
-            missing.push("Minos configuration (#8)".to_string());
-        }
-    }
-    if let Ok(minos) = Minos::from_env() {
-        println!("  socket       {}", minos.socket_url());
-        match crate::live::actor::probe(&minos) {
-            Ok(probe) if probe.connected && probe.subscribed => {
-                println!("  subscription ok  {}", probe.channel);
-            }
-            Ok(probe) => {
-                println!(
-                    "  subscription FAILED  connected={} subscribed={}",
-                    probe.connected, probe.subscribed
-                );
-                missing.push("a socket subscription (#4)".to_string());
-            }
-            Err(error) => {
-                println!("  subscription FAILED  {error}");
-                missing.push(format!("a socket subscription (#4): {error}"));
-            }
-        }
-    } else {
-        println!("  socket       not checked (needs a Minos configuration: #8)");
-        missing.push("socket subscription (#4)".to_string());
-    }
-
-    if missing.is_empty() {
-        println!("ok");
-        ExitCode::SUCCESS
-    } else {
-        eprintln!("self-check: missing {}", missing.join(", "));
-        ExitCode::from(2)
+/// What the wall is doing about its identity, in words that never include it.
+pub fn credential_kind(credential: &Credential) -> &'static str {
+    match credential {
+        Credential::RefreshToken(_) => "refresh token",
+        Credential::Password { .. } => "identifier and password",
     }
 }
 
