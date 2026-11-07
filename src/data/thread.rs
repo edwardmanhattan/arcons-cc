@@ -28,6 +28,8 @@ pub enum Command {
     Unit(i64),
     /// One hull's command history, newest first.
     Commander(i64),
+    /// One hull's specification versions, newest first.
+    Specifications(i64),
 }
 
 /// What comes back. It carries typed values or an [`Error`] — never a status code, and never a token.
@@ -39,6 +41,10 @@ pub enum Reply {
     Picture(Result<Vec<FeedPosition>, Error>),
     Unit(i64, Result<Box<UnitDetail>, Error>),
     Commander(i64, Result<Vec<UnitCommander>, Error>),
+    Specifications(
+        i64,
+        Result<Vec<crate::data::types::UnitSpecification>, Error>,
+    ),
     /// The backend could not start, or could not sign in. The view loop surfaces it once.
     Failed(String),
 }
@@ -127,6 +133,9 @@ async fn perform(http: &Http, command: Command) -> Reply {
         Command::Picture => Reply::Picture(http.positions().await),
         Command::Unit(id_unit) => Reply::Unit(id_unit, http.unit(id_unit).await.map(Box::new)),
         Command::Commander(id_unit) => Reply::Commander(id_unit, http.commander(id_unit).await),
+        Command::Specifications(id_unit) => {
+            Reply::Specifications(id_unit, http.specifications(id_unit).await)
+        }
     }
 }
 

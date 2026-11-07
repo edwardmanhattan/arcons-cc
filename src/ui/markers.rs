@@ -119,14 +119,18 @@ fn glyph(marker: &Placed, scale: f64) -> El {
             .border(tokens::HAIRLINE, colour),
     };
 
+    let id_unit = marker.id_unit;
     let mut target = el()
-        .key(format!("hit-{}", marker.id_unit))
+        .key(format!("hit-{}", id_unit))
         .absolute(
             (marker.x / scale) as f32 - TARGET / 2.0,
             (marker.y / scale) as f32 - TARGET / 2.0,
         )
         .size(TARGET, TARGET)
         .center()
+        // A press on a marker selects its hull. One card at a time, always (`INV-10`): selecting
+        // replaces the selection, it does not add to it.
+        .on_press(move |state: &mut crate::ui::State| state.select(id_unit))
         .child(symbol);
     if let Some(ring) = accuracy {
         target = target.child(ring);

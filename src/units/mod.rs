@@ -27,6 +27,7 @@
 //! elapsed time since that read ([`Timed`]). A clock that can jump is never consulted, because a fix
 //! that gets younger is a lie the wall cannot take back (`INV-06`).
 
+pub mod card;
 pub mod motion;
 
 use std::time::{Duration, Instant};

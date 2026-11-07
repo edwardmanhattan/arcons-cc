@@ -141,6 +141,14 @@ impl Http {
         self.get(&format!("/units/{id_unit}")).await
     }
 
+    /// `GET /units/{id}/specifications` — append-only versions; the current one has `is_current`.
+    pub async fn specifications(
+        &self,
+        id_unit: i64,
+    ) -> Result<Vec<crate::data::types::UnitSpecification>, Error> {
+        self.get(&format!("/units/{id_unit}/specifications")).await
+    }
+
     /// `GET /units/{id}/commander` — newest first; the current one is the entry with no `to_at`.
     /// An empty list is a valid answer: nobody has ever commanded this hull.
     pub async fn commander(&self, id_unit: i64) -> Result<Vec<UnitCommander>, Error> {
