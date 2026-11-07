@@ -33,6 +33,13 @@ pub const PANEL_RADIUS: f32 = 10.0;
 pub const MARKER: f32 = 12.0;
 /// A marker's hit target: at least 24 pt, because a touch target is a decision about fingers.
 pub const MARKER_TARGET: f32 = 24.0;
+/// A card floats above the map, so it casts something: down a little, blurred, barely there. A flat
+/// card over a busy basemap reads as part of the map.
+pub const CARD_SHADOW_Y: f32 = 6.0;
+pub const CARD_SHADOW_BLUR: f32 = 18.0;
+/// The card's edge. Stronger than a panel hairline: it has to hold its shape over light water.
+pub const CARD_BORDER: f32 = 1.0;
+
 /// The gap between a card's rows: tighter than a panel's, because a card is read in one glance.
 pub const CARD_GAP: f32 = 4.0;
 
@@ -65,6 +72,17 @@ pub fn panel() -> Color {
 }
 
 /// A hairline: white at low alpha, which is what a border on dark actually is.
+/// The card's shadow: the ground colour, mostly transparent, so it grounds the panel without
+/// becoming a second border.
+pub fn shadow() -> Color {
+    oklcha(0.08, 0.01, 250.0, 0.55)
+}
+
+/// The card's border: brighter than a hairline, still not a line you read rather than the content.
+pub fn card_edge() -> Color {
+    oklcha(0.5, 0.02, 250.0, 0.42)
+}
+
 pub fn hairline() -> Color {
     oklcha(1.0, 0.0, 0.0, 0.06)
 }
