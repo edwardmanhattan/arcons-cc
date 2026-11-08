@@ -85,7 +85,7 @@ jobs:
       # next blocker is the one the log shows rather than the one we guessed at.
       - name: the Windows core, and what it would still need
         id: win
-        if: runner.os == 'Windows'
+        if: always() && runner.os == 'Windows'
         shell: bash
         env:
           REV: core-a33d3f00fb9dbf9117ce18edd799aa0ca5bcce5b
