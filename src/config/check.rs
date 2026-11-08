@@ -390,6 +390,13 @@ mod tests {
                 use std::os::unix::fs::PermissionsExt;
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
             }
+            // Windows has no mode to set, and the tests that pass one are about the POSIX rule: the
+            // parameter is still checked for "is it sayable here", not silently dropped (#31 caught this
+            // as an `unused variable` error, which is the matrix doing its job).
+            #[cfg(not(unix))]
+            {
+                let _ = mode;
+            }
             path
         }
 

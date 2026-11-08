@@ -126,56 +126,195 @@ fn the_map_seed_path_in_the_adr_exists() {
     }
 }
 
-#[test]
-fn ci_runs_the_gate_and_never_its_parts() {
-    let workflow = read(".github/workflows/ci.yml");
-
-    // Every command the workflow runs, whether `run: cmd` or a `run: |` block.
+/// The commands a block of workflow text runs, whether `run: cmd` or a `run: |` block. A block ends at
+/// the first line indented less than the `run:` key that opened it.
+fn commands_in(text: &str) -> Vec<String> {
     let mut commands: Vec<String> = Vec::new();
-    let mut in_block = false;
-    for line in workflow.lines() {
-        let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix("run:") {
-            let value = rest.trim();
-            in_block = value == "|" || value == ">";
-            if !in_block && !value.is_empty() {
-                commands.push(value.to_string());
+    let mut block_indent: Option<usize> = None;
+    for line in text.lines() {
+        let indent = line.len() - line.trim_start().len();
+        let trimmed = line.trim();
+        if let Some(open) = block_indent {
+            if trimmed.is_empty() {
+                continue;
             }
-            continue;
-        }
-        if in_block {
-            if trimmed.is_empty() || line.starts_with("      ") {
-                if !trimmed.is_empty() && !trimmed.starts_with('#') {
+            if indent <= open {
+                block_indent = None;
+            } else {
+                if !trimmed.starts_with('#') {
                     commands.push(trimmed.to_string());
                 }
-            } else {
-                in_block = false;
+                continue;
+            }
+        }
+        if let Some(rest) = trimmed.strip_prefix("run:") {
+            let value = rest.trim();
+            if value == "|" || value == ">" {
+                block_indent = Some(indent);
+            } else if !value.is_empty() {
+                commands.push(value.to_string());
             }
         }
     }
+    commands
+}
 
-    assert!(
-        commands
-            .iter()
-            .any(|command| command == "scripts/verify.sh"),
-        "CI must run `scripts/verify.sh` verbatim. Commands found: {commands:#?}"
-    );
-    for command in &commands {
-        let is_gate = command.trim() == "scripts/verify.sh";
-        if command.contains("scripts/verify.sh") && !is_gate {
-            panic!(
-                "CI runs {command:?}: the gate has one invocation and no flags in CI. \
-                 `--fast` skips the captures and the budgets, which is exactly what CI is for."
-            );
+/// The body of one job under `jobs:`: everything between its `  name:` line and the next job's. A job
+/// starts with exactly two spaces of indent and a bare name; steps, keys and block scalars are indented
+/// further, which is what tells the two apart.
+fn job_body<'a>(workflow: &'a str, name: &str) -> Option<&'a str> {
+    let marker = format!("\n  {name}:");
+    let start = workflow.find(&marker)? + marker.len();
+    let rest = &workflow[start..];
+    let mut offset = 0;
+    for line in rest.split_inclusive('\n') {
+        let trimmed = line.trim_end();
+        let is_job = trimmed.starts_with("  ")
+            && !trimmed.starts_with("   ")
+            && trimmed.ends_with(':')
+            && trimmed.len() > 4;
+        if is_job {
+            return Some(&rest[..offset]);
         }
-        for part in ["cargo ", "rustfmt", "clippy", "cargo fmt"] {
-            assert!(
-                !command.contains(part),
-                "CI runs {command:?}, which invokes {part:?} directly.\n  \
-                 The point of the gate is that CI and a human run the same command: CI must never run a part of it on its own."
-            );
+        offset += line.len();
+    }
+    Some(rest)
+}
+
+/// Job names, in file order, by the same rule `job_body` uses.
+fn job_names(workflow: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut in_jobs = false;
+    for line in workflow.lines() {
+        if line.trim_end() == "jobs:" {
+            in_jobs = true;
+            continue;
+        }
+        if !in_jobs || line.trim().is_empty() {
+            continue;
+        }
+        if !line.starts_with(' ') {
+            break;
+        }
+        if let Some(name) = line
+            .trim_end()
+            .strip_prefix("  ")
+            .and_then(|rest| rest.strip_suffix(':'))
+            .filter(|name| !name.is_empty() && !name.starts_with(' ') && !name.starts_with('#'))
+        {
+            names.push(name.to_string());
         }
     }
+    names
+}
+
+/// **The gate job runs the gate, and nothing else runs the gate.**
+///
+/// The claim is about divergence: CI must not be able to pass by running a *part* of `scripts/verify.sh`
+/// where a human runs all of it. That is why the rule is scoped to the job that gates — the build matrix
+/// added in #31 runs `cargo check` on macOS and Windows on purpose, because `verify.sh` is bash and
+/// renders pixels, and those platforms have to prove something cheaper instead.
+#[test]
+fn the_gate_job_runs_the_gate_and_never_its_parts() {
+    let workflow = read(".github/workflows/ci.yml");
+    let names = job_names(&workflow);
+    assert!(
+        names.iter().any(|name| name == "verify"),
+        "there is no `verify` job in CI: the gate has no home. Jobs found: {names:?}"
+    );
+
+    let gate = job_body(&workflow, "verify").expect("the verify job has no body");
+    // Setting up the machine is not checking the code: `apt-get` may install libraries, and the gate
+    // may be the only thing that runs a tool afterwards.
+    let checks: Vec<String> = commands_in(gate)
+        .into_iter()
+        .filter(|command| {
+            ["cargo", "clippy", "rustfmt", "rustup", "scripts/"]
+                .iter()
+                .any(|part| command.contains(part))
+        })
+        .collect();
+    assert_eq!(
+        checks,
+        vec!["scripts/verify.sh".to_string()],
+        "the `verify` job must run `scripts/verify.sh` verbatim and no part of it separately, got \
+         {checks:#?}"
+    );
+
+    for name in &names {
+        if name == "verify" {
+            continue;
+        }
+        let body = job_body(&workflow, name).expect("a job without a body");
+        // Commands, not prose: a comment may name the gate to explain why a job is not the gate.
+        assert!(
+            !commands_in(body)
+                .iter()
+                .any(|command| command.contains("scripts/verify.sh")),
+            "job {name:?} runs scripts/verify.sh: the gate has one home, the job that also uploads \
+             the captures. A platform that cannot run the gate proves something cheaper (#31)."
+        );
+    }
+}
+
+/// The portability matrix (#31) claims macOS and Windows are checked by CI on every push. A matrix in a
+/// document that CI no longer runs is the drift this file exists to catch — so the two lists must match.
+#[test]
+fn the_portability_matrix_is_the_matrix_ci_runs() {
+    let workflow = read(".github/workflows/ci.yml");
+    let check =
+        job_body(&workflow, "check").expect("no `check` job: the build matrix of #31 is gone");
+
+    let mut platforms: Vec<&str> = Vec::new();
+    for line in check.lines() {
+        if let Some(rest) = line.trim().strip_prefix("os: [") {
+            for platform in rest.trim_end_matches([']']).split(',') {
+                platforms.push(platform.trim());
+            }
+        }
+    }
+    platforms.sort_unstable();
+    assert_eq!(
+        platforms,
+        ["macos-latest", "ubuntu-latest", "windows-latest"],
+        "the check job must cover Linux, macOS and Windows (#31)"
+    );
+
+    let doc = read("docs/research/portability.md");
+    for platform in &platforms {
+        assert!(
+            doc.contains(&format!("check ({platform})")),
+            "docs/research/portability.md does not mention the CI job {platform:?} that proves it"
+        );
+    }
+    for word in ["wasm", "Nix", "Windows", "macOS"] {
+        assert!(doc.contains(word), "the matrix must answer for {word}");
+    }
+}
+
+/// The document quotes the engine's own refusal for Windows. If the vendored build script changes its
+/// words, the quote is wrong and the "blocked, with the error" row stops being evidence.
+#[test]
+fn the_portability_document_quotes_the_engine_where_it_refuses_a_platform() {
+    let build = read("vendor/maplibre_native/build.rs");
+    let quoted =
+        "unsupported target: only linux and macos are currently supported by maplibre-native";
+    assert!(
+        build.contains(quoted),
+        "vendor/maplibre_native/build.rs no longer refuses an unknown target with the sentence \
+         docs/research/portability.md quotes. Either the engine learned a platform (good: update the \
+         document and the matrix) or the message moved (update the quote)."
+    );
+    let doc = read("docs/research/portability.md");
+    assert!(
+        doc.contains(quoted),
+        "docs/research/portability.md must quote the engine's refusal verbatim: a blocked row names \
+         the error, not an impression (#31)"
+    );
+    assert!(
+        doc.contains("Verdict: no web wall for v0.1"),
+        "the wasm question must have a one-line answer (#31)"
+    );
 }
 
 /// The wall's binary and the gate's captures are built by different routes, and #26 is why: the local
