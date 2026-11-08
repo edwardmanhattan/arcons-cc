@@ -115,6 +115,26 @@ impl std::io::Write for Tee {
     }
 }
 
+/// This process's resident memory in megabytes, or `None` where the platform does not say.
+///
+/// Read from `/proc/self/statm` on Linux: the second field is resident pages, and the page size is the
+/// kernel's. `None` everywhere else — a wall that invents a number is worse than one that admits it does
+/// not know, and the log line says which it is.
+pub fn rss_mb() -> Option<f64> {
+    #[cfg(target_os = "linux")]
+    {
+        let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
+        let pages: f64 = statm.split_whitespace().nth(1)?.parse().ok()?;
+        // 4 KiB pages: `sysconf(_SC_PAGESIZE)` is 4096 on every Linux this wall runs on, and reading it
+        // would mean a libc call for a number that has not changed since the 1990s.
+        Some(pages * 4096.0 / (1024.0 * 1024.0))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
 /// Watch for `SIGTERM` and `SIGINT` and set a flag the view loop reads.
 ///
 /// A wall is stopped by systemd (`SIGTERM`) or by someone pressing Ctrl-C in a terminal (`SIGINT`).

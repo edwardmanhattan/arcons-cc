@@ -187,7 +187,27 @@ INFO first map frame in 1645 ms
 - `RUNE_GPU_LOG=1` adds Rune's own line (`a surface draws with wgpu Vulkan on …`). Keep it in mind
   when frames are slow: the two lines together say which GPU each half is using.
 
-## 8. When something is wrong
+## 8. The soak, before a release says it is one
+
+```sh
+scripts/soak.sh 30
+```
+
+Thirty minutes of the live picture with **one deliberate reconnect**, then it reads what the wall wrote:
+RSS flat after warm-up (default: no more than +10 MB), the socket came back and re-read the picture
+(`INV-09` — two sessions, two picture reads), no password, refresh token or JWT-shaped string anywhere in
+the log (`INV-08`), and a clean stop. It exits non-zero with the reason, so it is a release check and not
+a ceremony.
+
+Every wall run now logs `alive uptime_ms=… rss_mb=…` every 30 s from the socket thread. That line is the
+point: it says the **process** is alive even when the compositor is not drawing, which is exactly the case
+a soak has to survive. `rss_mb=-1` means the platform will not say — better than an invented number.
+
+**Run it with the wall's window in front.** A window the compositor is not drawing never polls, and a wall
+that is not polling cannot take `SIGTERM`; the soak reports that case as `#43` rather than hiding it. On a
+real wall the window is the thing on the screen, so this is an artefact of soaking on a desktop.
+
+## 9. When something is wrong
 
 | symptom | read this |
 | --- | --- |

@@ -78,6 +78,18 @@ impl LiveThread {
         socket_url: String,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> LiveThread {
+        Self::spawn_with(minos, socket_url, None, wake)
+    }
+
+    /// [`LiveThread::spawn`] with a **deliberate drop** after `drop_after`: the soak's
+    /// `--reconnect-after`, so the reconnect path is exercised against a real socket rather than only in
+    /// a model test (`INV-09`). Fires once, and says so in the log when it does.
+    pub fn spawn_with(
+        minos: Minos,
+        socket_url: String,
+        drop_after: Option<std::time::Duration>,
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> LiveThread {
         let (updates, incoming) = channel();
         let (stop, stopped) = tokio::sync::mpsc::unbounded_channel();
         let wake = Arc::new(wake);
@@ -96,7 +108,7 @@ impl LiveThread {
                         return;
                     }
                 };
-                runtime.block_on(run(minos, socket_url, updates, stopped, wake));
+                runtime.block_on(run(minos, socket_url, drop_after, updates, stopped, wake));
             })
             .expect("the socket thread starts");
         LiveThread {
@@ -134,10 +146,33 @@ pub fn connect_data(token: &str) -> Vec<u8> {
 async fn run(
     minos: Minos,
     socket_url: String,
+    drop_after: Option<std::time::Duration>,
     updates: Sender<Update>,
     mut stopped: tokio::sync::mpsc::UnboundedReceiver<()>,
     wake: Arc<dyn Fn() + Send + Sync>,
 ) {
+    // A heartbeat from the thread that never stops: the wall's own answer to "is this process alive",
+    // independent of whether the compositor is drawing. The *view* logs what it received; this logs that
+    // the process is still here and how much memory it is holding, which is what a soak reads (#42).
+    tokio::spawn(async {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            tracing::info!(
+                uptime_ms = crate::platform::since_start() as u64,
+                rss_mb = crate::platform::rss_mb()
+                    .map(|mb| mb.round() as i64)
+                    .unwrap_or(-1),
+                "alive"
+            );
+        }
+    });
+
+    // The deliberate drop happens once: a wall that drops itself every N seconds is a wall with a bug,
+    // and this flag is what makes the difference a fact in the code rather than a claim in a test.
+    let mut forced = false;
+    let mut sessions: u32 = 0;
     let http = match sign_in(&minos).await {
         Ok(http) => http,
         Err(error) => {
@@ -175,8 +210,27 @@ async fn run(
             }
         };
 
-        match session(&http, &url, &token, &updates, &mut stopped, &wake).await {
+        sessions += 1;
+        tracing::info!(session = sessions, "socket: connecting");
+        let this_drop = if forced { None } else { drop_after };
+        match session(
+            &http,
+            &url,
+            &token,
+            &updates,
+            &mut stopped,
+            &wake,
+            this_drop,
+            sessions,
+        )
+        .await
+        {
             Session::Stopped => return,
+            Session::Ended { code: _, reason } if reason.starts_with("soak:") => {
+                forced = true;
+                tracing::warn!("{reason} — reconnecting once, as the soak asked");
+                wake();
+            }
             Session::Ended { code, reason } => {
                 let refusal = Refusal::from_code(u16::try_from(code).unwrap_or(0));
                 match refusal.map(Refusal::action) {
@@ -229,6 +283,10 @@ enum Session {
     Ended { code: u32, reason: String },
 }
 
+// Eight arguments, and every one of them is a different thing this function must not re-derive for
+// itself: the two clients, the token, where updates go, how it is stopped, how it wakes the view, the
+// soak's deliberate drop, and which session this is. A struct here would only move the same list.
+#[allow(clippy::too_many_arguments)]
 async fn session(
     http: &Http,
     url: &str,
@@ -236,6 +294,8 @@ async fn session(
     updates: &Sender<Update>,
     stopped: &mut tokio::sync::mpsc::UnboundedReceiver<()>,
     wake: &Arc<dyn Fn() + Send + Sync>,
+    drop_after: Option<Duration>,
+    session_number: u32,
 ) -> Session {
     let config = Config::new()
         .with_name("arcons-cc")
@@ -307,7 +367,7 @@ async fn session(
         Ok(Err(())) => {
             // The refusal itself arrives through `on_disconnected`, which is why the reason travels
             // on `ended` rather than being invented here.
-            return wait_for_end(stopped, &mut ended).await;
+            return wait_for_end(stopped, &mut ended, drop_after).await;
         }
         Err(_) => {
             return Session::Ended {
@@ -323,6 +383,14 @@ async fn session(
     // 3. The read that closes the gap. Until it completes, nothing is current.
     match http.positions().await {
         Ok(picture) => {
+            // The read that closes the gap, in the log with its session number: this is the evidence a
+            // soak needs that a reconnect re-read the picture rather than resuming on what it had
+            // (`INV-09`).
+            tracing::info!(
+                session = session_number,
+                units = picture.len(),
+                "socket: picture read after connect"
+            );
             let _ = updates.send(Update::Picture(picture));
             if let Ok(mut trust) = trust.lock() {
                 *trust = trust.after_picture();
@@ -342,15 +410,24 @@ async fn session(
     }
 
     // 4. Hold the connection until it ends or the view loop goes away.
-    wait_for_end(stopped, &mut ended).await
+    wait_for_end(stopped, &mut ended, drop_after).await
 }
 
 async fn wait_for_end(
     stopped: &mut tokio::sync::mpsc::UnboundedReceiver<()>,
     ended: &mut tokio::sync::mpsc::UnboundedReceiver<(u32, String)>,
+    drop_after: Option<Duration>,
 ) -> Session {
     tokio::select! {
         _ = stopped.recv() => Session::Stopped,
+        // The soak's deliberate drop (`--reconnect-after`). A *reason* travels with it, because a reader
+        // must be able to tell a deliberate gap from a network one (`INV-09` says a gap is a gap).
+        _ = async {
+            match drop_after {
+                Some(after) => tokio::time::sleep(after).await,
+                None => std::future::pending().await,
+            }
+        } => Session::Ended { code: 0, reason: "soak: deliberate drop".to_string() },
         code = ended.recv() => match code {
             Some((code, reason)) => Session::Ended { code, reason },
             // The client dropped its sender: treat it as an ended connection rather than hanging.
