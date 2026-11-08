@@ -215,6 +215,33 @@ impl Rendered {
 
 #[cfg(test)]
 mod tests {
+    /// **The zoom convention, pinned.** MapLibre counts a **512 px** world (`WORLD_BASE_PX`), so our z14
+    /// is the zoom classic 256-px slippy maps call z15. Getting this off by one is not a rounding error:
+    /// it halves or doubles every hull on screen, and it is exactly the mistake that makes "a 120 m ship
+    /// is 25 px" true at one zoom and false at the next. Measured against the arithmetic, not a render.
+    #[test]
+    fn the_zoom_convention_is_maplibre_512_pixel_and_not_classic_256() {
+        let jakarta = (-6.108, 106.910);
+        let at = |zoom: f64| meters_per_pixel(jakarta.0, zoom);
+        // 40075016.686 · cos(6.108°) / (512 · 2^14) = 4.75 m/px
+        assert!(
+            (at(14.0) - 4.75).abs() < 0.05,
+            "z14 over Jakarta is 4.75 m/px (512 px world), got {}",
+            at(14.0)
+        );
+        // and each zoom level halves the ground resolution.
+        assert!(
+            (at(15.0) - at(14.0) / 2.0).abs() < 1e-9,
+            "one zoom, half the metres"
+        );
+        // A 120 m hull, the number the symbol/picture threshold was chosen on.
+        let points = 120.0 / at(14.0);
+        assert!(
+            (24.0..=26.0).contains(&points),
+            "a 120 m hull at z14 is a 25 pt ship, got {points}"
+        );
+    }
+
     use super::*;
 
     /// A deterministic generator: a property test needs many cameras, and a seeded LCG is enough for

@@ -15,7 +15,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-SCENES_ALL=(empty picture stale card-open)
+SCENES_ALL=(empty picture stale card-open photo)
 UPDATE=0
 SCENES=()
 

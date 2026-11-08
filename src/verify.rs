@@ -383,6 +383,35 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 lines.extend(assert_card(image, origin, &mut failures));
             }
         }
+        "photo" => {
+            // The picture half of #32: at this zoom the hull is drawn as its **picture**, not its symbol.
+            // The fixture's ink is a colour no token uses, so finding it at the hull's position is proof
+            // that the decoded bytes reached the marker — and its absence would be a symbol drawn at a
+            // zoom where the wall should be showing the ship.
+            let Some(origin) = image.find_panel(ink(tokens::panel())) else {
+                failures.push("photo: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let (px, py) = match marker_in(scene, scene::PHOTO_UNIT) {
+                Ok(at) => at,
+                Err(error) => {
+                    failures.push(error);
+                    return Err(failures);
+                }
+            };
+            let (x, y) = (px + origin.0, py + origin.1);
+            // The fixture's hull is white-ish; the deckhouse is the lighter blue.
+            let hud = [232u8, 243, 255];
+            let found = image.nearest_colour(x, y, hud, 30.0);
+            match found {
+                Some(distance) => lines.push(format!(
+                    "photo: the hull's own picture within {distance:.1} px of ({x:.0}, {y:.0})"
+                )),
+                None => failures.push(format!(
+                    "photo: no picture ink within 30 px of the hull at ({x:.0}, {y:.0}) — the capture                      drew the symbol, so the decoded picture never reached the marker"
+                )),
+            }
+        }
         "stale" => {
             // The dim marker must be dimmer than a live one, by a margin a reader would notice. A
             // threshold of 20 luma steps is roughly "one shade" — bigger than antialiasing noise,
@@ -482,7 +511,14 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     let mut lines = Vec::new();
     let state = crate::scene::state_for(scene);
     let frame = scene_frame();
-    let markers = crate::ui::markers::place(&state.picture, &frame, state.now(), state.stale_after);
+    let markers = crate::ui::markers::place(
+        &state.picture,
+        &frame,
+        state.now(),
+        state.stale_after,
+        state.range,
+        &|_| None,
+    );
 
     match scene {
         "empty" => {

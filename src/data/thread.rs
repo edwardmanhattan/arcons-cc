@@ -20,7 +20,7 @@ use crate::data::http::Http;
 use crate::data::types::{FeedPosition, UnitCommander, UnitDetail};
 
 /// What the view loop asks for. One variant per read the display performs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     /// The standing picture: every hull, whether or not it has reported.
     Picture,
@@ -30,6 +30,10 @@ pub enum Command {
     Commander(i64),
     /// One hull's specification versions, newest first.
     Specifications(i64),
+    /// The fleet register: every hull with its picture URL, in one read.
+    Units,
+    /// One hull's picture, by the presigned URL the register gave.
+    Image(i64, String),
 }
 
 /// What comes back. It carries typed values or an [`Error`] — never a status code, and never a token.
@@ -41,6 +45,10 @@ pub enum Reply {
     Picture(Result<Vec<FeedPosition>, Error>),
     Unit(i64, Result<Box<UnitDetail>, Error>),
     Commander(i64, Result<Vec<UnitCommander>, Error>),
+    /// The fleet register: picture URLs for every hull, in one read.
+    Units(Result<Vec<crate::data::types::UnitSummary>, Error>),
+    /// One hull's picture bytes, fetched off the UI thread and decoded by the view's cache.
+    Image(i64, Result<Vec<u8>, Error>),
     Specifications(
         i64,
         Result<Vec<crate::data::types::UnitSpecification>, Error>,
@@ -132,6 +140,8 @@ async fn perform(http: &Http, command: Command) -> Reply {
     match command {
         Command::Picture => Reply::Picture(http.positions().await),
         Command::Unit(id_unit) => Reply::Unit(id_unit, http.unit(id_unit).await.map(Box::new)),
+        Command::Units => Reply::Units(http.units().await),
+        Command::Image(id_unit, url) => Reply::Image(id_unit, http.image(&url).await),
         Command::Commander(id_unit) => Reply::Commander(id_unit, http.commander(id_unit).await),
         Command::Specifications(id_unit) => {
             Reply::Specifications(id_unit, http.specifications(id_unit).await)

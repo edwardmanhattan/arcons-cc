@@ -86,6 +86,53 @@ fn card_open(state: &mut State) {
     state.select(CARD_UNIT);
 }
 
+/// The hull whose picture the `photo` scene draws: it has a fix in the fixture.
+pub const PHOTO_UNIT: i64 = CARD_UNIT;
+
+/// The picture fixture: a hull silhouette, drawn from above. Its **content** is not the point — that it
+/// is a real decoded image reaching the marker is, and a scene may read a file in this repository while
+/// it may never open a socket (`INV-11`).
+pub const PHOTO_FIXTURE: &[u8] = include_bytes!("../fixtures/scenes/hull.png");
+
+/// The `photo` scene: close enough that a hull is its picture, with the dimensions and the bytes a real
+/// wall would have read. No network is touched: this is the same drawing path the live wall uses, fed from
+/// files instead of from Minos.
+fn photo(state: &mut State) {
+    load(state);
+    state.range = crate::units::mark::Range::Picture;
+    state.sizes.insert(
+        PHOTO_UNIT,
+        crate::units::mark::Size {
+            length_m: 120.0,
+            beam_m: 16.0,
+        },
+    );
+    state
+        .image_bytes
+        .insert(PHOTO_UNIT, std::sync::Arc::from(PHOTO_FIXTURE));
+    // **Decoded before the first frame.** A capture that raced the decoder would be a capture of a
+    // symbol on some runs and a picture on others — the determinism `INV-11` promises, and exactly the
+    // class of bug #35 was. Bounded, because a scene that hangs is worse than one that draws the symbol.
+    let bytes: std::sync::Arc<[u8]> = std::sync::Arc::from(PHOTO_FIXTURE);
+    let image = state.image_cache().load(bytes);
+    for _ in 0..400 {
+        if image.is_ready() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    // Centred on the hull, at the zoom where a 120 m ship is a 25 pt picture.
+    if let Some(view) = state
+        .picture
+        .units()
+        .iter()
+        .find(|unit| unit.unit.id_unit == PHOTO_UNIT)
+        && let Some(drawn) = view.drawn(state.now())
+    {
+        state.camera = Camera::new((drawn.lat, drawn.lon), crate::units::mark::PHOTO_ZOOM);
+    }
+}
+
 /// One scene: a name and the function that builds its state.
 pub type Scene = (&'static str, fn(&mut State));
 
@@ -95,6 +142,7 @@ pub const SCENES: &[Scene] = &[
     ("picture", picture),
     ("stale", stale),
     ("card-open", card_open),
+    ("photo", photo),
 ];
 
 /// Look a scene up by the name `scripts/capture.sh` was given.
@@ -162,7 +210,10 @@ mod tests {
     fn every_scene_is_named_and_can_be_built() {
         // `--list-scenes` prints these; a scene that panics on build is a capture that fails at
         // 2 a.m. with a backtrace instead of a picture.
-        assert_eq!(names(), vec!["empty", "picture", "stale", "card-open"]);
+        assert_eq!(
+            names(),
+            vec!["empty", "picture", "stale", "card-open", "photo"]
+        );
         for name in names() {
             let state = state_for(name);
             if name == "empty" {

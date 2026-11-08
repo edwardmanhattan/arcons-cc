@@ -106,6 +106,12 @@ A scene is deterministic by construction: `fixtures/scenes/feed.json` instead of
 virtual clock instead of `Instant::now()`, no socket and no map surface. Two runs are identical
 bytes (`INV-11`), which is what makes a golden a check rather than a suggestion.
 
+`photo` carries one more rule, because it is the first scene with an image in it: **the picture is
+decoded before the first frame**. A capture that raced the decoder would be a capture of a symbol on
+some runs and of a ship on others — the same class of bug as a wall-clock redraw (#35) — so the scene
+waits for `Image::is_ready()` with a bound, and a picture that cannot decode draws the symbol rather
+than hanging the capture.
+
 The two checks do different jobs, and neither substitutes for the other:
 
 - **The golden** answers *"did anything change?"* — a tone, a gap, a moved label. It is bytes, so it
