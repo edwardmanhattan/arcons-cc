@@ -5,6 +5,9 @@ name: verify
 on:
   push:
   pull_request:
+  # The Windows-core probe below downloads 1.3 GB, so it does not run on every push: dispatch this
+  # workflow when you want its answer (#46).
+  workflow_dispatch:
 
 jobs:
   # #31: the crate must build where it might be packaged, and a platform that breaks must be a red job
@@ -85,7 +88,7 @@ jobs:
       # next blocker is the one the log shows rather than the one we guessed at.
       - name: the Windows core, and what it would still need
         id: win
-        if: always() && runner.os == 'Windows'
+        if: always() && runner.os == 'Windows' && github.event_name == 'workflow_dispatch'
         shell: bash
         env:
           REV: core-a33d3f00fb9dbf9117ce18edd799aa0ca5bcce5b
