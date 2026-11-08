@@ -588,7 +588,11 @@ fn tick_card_age(state: &mut State) -> bool {
     let Some(card) = &state.card else {
         return false;
     };
-    let text = card.age_text(std::time::Instant::now());
+    // The age advances on the **frame** clock, not the wall clock: `poll`'s answer decides when Rune
+    // rebuilds the element tree, so a real-clock comparison here makes *when* the card is redrawn
+    // depend on how fast the machine is — which is exactly how a capture stops being reproducible
+    // (#35). Same rule as every other `now` in the view: `State::now()` and nothing else.
+    let text = card.age_text(state.now());
     if text == state.last_age {
         return false;
     }
@@ -992,6 +996,36 @@ mod tests {
             height: 720,
         });
         state
+    }
+
+    /// The card's age advances on the **frame** clock. #35: it advanced on the wall clock, so `poll`
+    /// answered "changed" at a moment that depended on how fast the machine was — and since `poll`'s
+    /// answer is what makes Rune rebuild the element tree, *which* age was drawn into a capture was a
+    /// race. On a fast machine a two-second scene drew `4 s old`; on a slow one, `5 s old`.
+    #[test]
+    fn the_card_redraws_on_the_frame_clock_and_not_the_wall_clock() {
+        let mut state = state_with_two_hulls();
+        state.select(8);
+        // Settle: the first tick after a selection records the text it drew.
+        tick_card_age(&mut state);
+        assert!(
+            !tick_card_age(&mut state),
+            "nothing has moved, nothing to redraw"
+        );
+
+        state.logical = 1.0;
+        assert!(
+            tick_card_age(&mut state),
+            "one second of the frame clock is a redraw; no wall-clock time passed in this test at all,              which is the whole point"
+        );
+        assert_eq!(
+            state.last_age, "5 s old",
+            "the fixture's fix is 4 s old at logical 0"
+        );
+
+        state.logical = 2.0;
+        assert!(tick_card_age(&mut state));
+        assert_eq!(state.last_age, "6 s old");
     }
 
     /// A fix from the socket has to **move a hull**, not tick a counter.

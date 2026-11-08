@@ -115,6 +115,19 @@ The two checks do different jobs, and neither substitutes for the other:
   `ui::tokens` and geometry from `map::geometry::project`, so it cannot outlive the palette or the
   layout it describes.
 
+### The clock a capture runs on
+
+A scene has exactly one clock: `ui::State::now()`, which is `origin + logical`, and `logical` comes from
+Rune's **virtual** frame clock (`--at 2 --fps 60` ends at exactly 2.0 s). Nothing in a drawing or
+change-detection path may read the wall clock, and `tests/scaffold.rs` fails the build if one does.
+
+The reason is subtler than "a machine's speed must not show": Rune rebuilds the element tree **only when
+`poll` says something changed**, so a wall-clock comparison inside `poll` decides *when* a new value is
+drawn. `card-open` did exactly that with the card's age, and the result was a capture whose text said
+`4 s old` on a fast machine and `5 s old` on a slow one — intermittently, on CI's software rasteriser
+and under load, which read as a flaky test rather than as a clock (#35). The fix was one line, and the
+tripwire is the rule.
+
 ### Goldens are one machine's bytes; determinism is every machine's
 
 `scripts/capture.sh` renders every scene **twice** and compares the two: that half of `INV-11` holds
