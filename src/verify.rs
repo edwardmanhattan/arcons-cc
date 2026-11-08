@@ -73,6 +73,29 @@ impl Image {
         })
     }
 
+    /// A synthetic capture, for testing the comparison itself. Not reachable from the binary: a real
+    /// capture is always read from a file, and a constructor that could be called at run time would
+    /// invite a comparison of something that never rendered.
+    #[cfg(test)]
+    pub fn synthetic(width: u32, height: u32, fill: [u8; 4]) -> Image {
+        Image {
+            width,
+            height,
+            pixels: fill
+                .iter()
+                .copied()
+                .cycle()
+                .take((width as usize) * (height as usize) * 4)
+                .collect(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn set(&mut self, x: u32, y: u32, pixel: [u8; 4]) {
+        let index = ((y as usize * self.width as usize) + x as usize) * 4;
+        self.pixels[index..index + 4].copy_from_slice(&pixel);
+    }
+
     pub fn at(&self, x: u32, y: u32) -> [u8; 4] {
         let index = ((y as usize * self.width as usize) + x as usize) * 4;
         let pixel = &self.pixels[index..index + 4];
@@ -531,6 +554,93 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     }
 }
 
+/// How two captures differ, in the only two numbers that decide whether a change is a change.
+///
+/// **Why a tolerance exists at all.** The goldens are bytes from one rasteriser; CI renders with
+/// lavapipe, a CPU Vulkan driver. Measured on 2026-11-08 across all four scenes, the two agree to
+/// within **1/255 on 3–23 pixels of 921,600** — rounding at a glyph edge, not a different picture. A
+/// byte compare therefore has to be the reference machine's privilege, or it proves nothing on CI. A
+/// bounded compare can run everywhere, which is the point: CI must hold the goldens too, or a
+/// consistent change (a moved card, a shifted token colour) passes CI and is caught only by whoever
+/// happens to run the gate locally.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Difference {
+    /// Pixels with any channel differing, alpha included.
+    pub differing: usize,
+    /// The largest single-channel difference, 0–255.
+    pub max_delta: u8,
+}
+
+impl Difference {
+    /// Identical, which is what two renders of one scene must be on one machine.
+    pub const NONE: Difference = Difference {
+        differing: 0,
+        max_delta: 0,
+    };
+
+    pub fn is_identical(self) -> bool {
+        self.differing == 0
+    }
+}
+
+/// Compare two captures. Different sizes are not a difference to be counted: they are a different
+/// picture, and a golden of the wrong shape must fail loudly rather than report "0 differing".
+pub fn difference(a: &Image, b: &Image) -> Result<Difference, String> {
+    if (a.width, a.height) != (b.width, b.height) {
+        return Err(format!(
+            "the images are different sizes: {}x{} against {}x{}",
+            a.width, a.height, b.width, b.height
+        ));
+    }
+    let mut differing = 0;
+    let mut max_delta = 0u8;
+    for (pa, pb) in a
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.pixels.as_chunks::<4>().0)
+    {
+        let delta = pa
+            .iter()
+            .zip(pb)
+            .map(|(x, y)| x.abs_diff(*y))
+            .max()
+            .unwrap_or(0);
+        if delta > 0 {
+            differing += 1;
+            max_delta = max_delta.max(delta);
+        }
+    }
+    Ok(Difference {
+        differing,
+        max_delta,
+    })
+}
+
+/// Whether a difference is within the stated bounds: no channel further than `tolerance`, and no more
+/// than `budget` pixels differing at all.
+///
+/// **Both bounds are needed**, and this is the whole argument for the pair. `budget` alone lets a change
+/// to a couple of hundred pixels of *text* through; `tolerance` alone lets a whole panel shift by a
+/// rounding step. Together they say "the picture is the same picture, rendered by a slightly different
+/// machine" — and nothing more.
+pub fn within(diff: Difference, tolerance: u8, budget: usize) -> Result<(), String> {
+    if diff.max_delta > tolerance {
+        return Err(format!(
+            "a channel differs by {} (tolerance {tolerance}): {} pixels differ in total",
+            diff.max_delta, diff.differing
+        ));
+    }
+    if diff.differing > budget {
+        return Err(format!(
+            "{} pixels differ (budget {budget}), the largest difference {} /255",
+            diff.differing, diff.max_delta
+        ));
+    }
+    Ok(())
+}
+
 /// The whole check for one scene: its pixels, then its structure.
 pub fn check(scene: &str, png: &Path) -> Result<Vec<String>, Vec<String>> {
     let image = match Image::read(png) {
@@ -651,5 +761,106 @@ mod tests {
             lines.iter().any(|line| line.contains("no markers")),
             "{lines:?}"
         );
+    }
+
+    #[cfg(test)]
+    mod difference_tests {
+        use super::*;
+
+        fn image(width: u32, height: u32, fill: [u8; 4]) -> Image {
+            Image::synthetic(width, height, fill)
+        }
+
+        #[test]
+        fn two_renders_of_one_scene_have_no_difference_at_all() {
+            let a = image(4, 4, [10, 20, 30, 255]);
+            let b = image(4, 4, [10, 20, 30, 255]);
+            let diff = difference(&a, &b).expect("same size");
+            assert_eq!(diff, Difference::NONE);
+            assert!(diff.is_identical());
+            assert!(
+                within(diff, 0, 0).is_ok(),
+                "identical passes even with no room"
+            );
+        }
+
+        /// The case that used to make CI skip the goldens: a rasteriser's rounding.
+        #[test]
+        fn a_rounding_difference_passes_the_bounds_and_fails_a_byte_compare() {
+            let mut a = image(100, 100, [10, 20, 30, 255]);
+            // 23 pixels off by one step, the worst measured between lavapipe and the integrated GPU.
+            for i in 0..23 {
+                a.set(i % 100, i / 100, [11, 20, 30, 255]);
+            }
+            let b = image(100, 100, [10, 20, 30, 255]);
+            let diff = difference(&a, &b).expect("same size");
+            assert_eq!(
+                diff,
+                Difference {
+                    differing: 23,
+                    max_delta: 1
+                }
+            );
+            assert!(within(diff, 2, 200).is_ok(), "within the stated bounds");
+            assert!(
+                within(diff, 0, 0).is_err(),
+                "and not byte-identical, which is what `ARCONS_GOLDENS=exact` asks for"
+            );
+        }
+
+        /// The change a tolerance must still catch: one pixel, far enough off to be a different colour.
+        #[test]
+        fn one_pixel_of_a_different_colour_fails_however_few_pixels_are_involved() {
+            let mut a = image(100, 100, [10, 20, 30, 255]);
+            a.set(50, 50, [10, 20, 200, 255]);
+            let b = image(100, 100, [10, 20, 30, 255]);
+            let diff = difference(&a, &b).expect("same size");
+            assert_eq!(diff.differing, 1);
+            assert_eq!(diff.max_delta, 170);
+            let reason = within(diff, 2, 200).expect_err("a channel moved 170 steps");
+            assert!(reason.contains("170"), "{reason}");
+        }
+
+        /// The other bound: a large area one step off. A `tolerance` alone would wave it through, which is
+        /// why both numbers exist.
+        #[test]
+        fn a_whole_panel_one_step_off_fails_the_budget() {
+            let mut a = image(100, 100, [10, 20, 30, 255]);
+            for y in 0..40 {
+                for x in 0..40 {
+                    a.set(x, y, [11, 20, 30, 255]);
+                }
+            }
+            let b = image(100, 100, [10, 20, 30, 255]);
+            let diff = difference(&a, &b).expect("same size");
+            assert_eq!(diff.max_delta, 1);
+            assert_eq!(diff.differing, 1600);
+            let reason = within(diff, 2, 200).expect_err("1600 pixels is more than the budget");
+            assert!(reason.contains("1600"), "{reason}");
+            assert!(
+                within(diff, 2, 2000).is_ok(),
+                "and a budget of 2000 would allow it"
+            );
+        }
+
+        /// Different sizes are not a big difference: they are not the same picture, and a golden of the
+        /// wrong shape must say so rather than report a number.
+        #[test]
+        fn a_different_size_is_an_error_not_a_difference() {
+            let a = image(4, 4, [0, 0, 0, 255]);
+            let b = image(5, 4, [0, 0, 0, 255]);
+            let error = difference(&a, &b).expect_err("sizes differ");
+            assert!(error.contains("4x4") && error.contains("5x4"), "{error}");
+        }
+
+        /// Alpha counts: a pixel that is transparent where the golden is opaque is a different pixel, even
+        /// if every colour channel matches.
+        #[test]
+        fn alpha_is_compared_too() {
+            let mut a = image(2, 2, [0, 0, 0, 255]);
+            a.set(0, 0, [0, 0, 0, 0]);
+            let b = image(2, 2, [0, 0, 0, 255]);
+            assert_eq!(difference(&a, &b).expect("same size").differing, 1);
+        }
     }
 }

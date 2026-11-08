@@ -32,7 +32,11 @@ OPTIONS:
     --credentials PATH  read this credential file instead of the one config.toml names
     --log-file PATH     also write the log there (stderr always gets it)
     --assert SCENE      check a capture's pixels and tree (scripts/assert.sh calls this)
-    --image PATH        the capture --assert reads
+    --image PATH        the capture --assert reads, and the candidate --compare compares
+    --compare PATH      compare --image against this golden, within --tolerance/--budget, and exit 1
+                        if the difference is a change rather than a rounding difference
+    --tolerance N       how far one channel may differ, in 255ths (default 2)
+    --budget N          how many pixels may differ at all (default 200)
     --tree PATH         the element tree to check too
     --self-check        check config, credential, login, REST, socket and map seed, and exit
                         with 0 ok · 1 config · 2 credential · 3 login · 4 REST · 5 socket · 6 seed
@@ -58,6 +62,9 @@ pub enum Command {
     ProbeMap,
     /// Check a capture: pixels with numbers, and the element tree for structure.
     Assert,
+    /// Compare two captures within a stated tolerance, and exit 1 if the difference is a change rather
+    /// than a rounding difference. `scripts/capture.sh` uses it against a golden.
+    Compare,
 }
 
 /// How the window should open. `--fullscreen` wins over `--window-size`.
@@ -98,8 +105,14 @@ pub struct Args {
     pub log_file: Option<PathBuf>,
     /// `--assert`: the scene whose assertions to run.
     pub assert_scene: Option<String>,
-    /// `--image`: the capture `--assert` reads.
+    /// `--image`: the capture `--assert` reads, and the candidate `--compare` compares.
     pub image: Option<PathBuf>,
+    /// `--compare`: the golden to compare `--image` against.
+    pub compare_with: Option<PathBuf>,
+    /// How far any one channel may differ, in steps of 255, before it is a different picture.
+    pub tolerance: u8,
+    /// How many pixels may differ at all before it is a different picture.
+    pub budget: usize,
     /// `--tree`: the element tree to check beside the capture.
     pub tree: Option<PathBuf>,
     /// Arguments this binary does not own, handed to Rune so its headless tooling still works:
@@ -123,6 +136,13 @@ impl Args {
             log_file: None,
             assert_scene: None,
             image: None,
+            compare_with: None,
+            // Measured on two rasterisers (lavapipe and this laptop's iGPU, 2026-11-08): at most 23
+            // pixels of 921,600 differ, by at most 1/255. Ten times that is still far below a real
+            // change, and it leaves room for another driver's rounding. `tests/verify.rs` pins the
+            // behaviour, and `docs/verification.md` says why the numbers are these.
+            tolerance: 2,
+            budget: 200,
             tree: None,
             passthrough: Vec::new(),
         };
@@ -140,6 +160,23 @@ impl Args {
                 "--image" => {
                     let value = argv.next().ok_or("--image needs a path")?;
                     args.image = Some(PathBuf::from(value));
+                }
+                "--compare" => {
+                    let value = argv.next().ok_or("--compare needs the golden's path")?;
+                    args.compare_with = Some(PathBuf::from(value));
+                    args.command = Command::Compare;
+                }
+                "--tolerance" => {
+                    let value = argv.next().ok_or("--tolerance needs a number")?;
+                    args.tolerance = value
+                        .parse()
+                        .map_err(|_| "--tolerance is a number of 255ths, 0 to 255")?;
+                }
+                "--budget" => {
+                    let value = argv.next().ok_or("--budget needs a number")?;
+                    args.budget = value
+                        .parse()
+                        .map_err(|_| "--budget is a number of pixels")?;
                 }
                 "--tree" => {
                     let value = argv.next().ok_or("--tree needs a path")?;

@@ -128,10 +128,27 @@ drawn. `card-open` did exactly that with the card's age, and the result was a ca
 and under load, which read as a flaky test rather than as a clock (#35). The fix was one line, and the
 tripwire is the rule.
 
-### Goldens are one machine's bytes; determinism is every machine's
+### A golden is compared within a stated tolerance, everywhere
 
-`scripts/capture.sh` renders every scene **twice** and compares the two: that half of `INV-11` holds
-anywhere, and CI runs it. The committed golden was made by this laptop's renderer, and CI's software
-path antialiases a glyph edge differently — so CI sets `ARCONS_GOLDENS=off` and keeps the
-determinism check and every assertion. On the reference machine the byte comparison runs, which is
-where a palette or a spacing change is caught. Say which machine made a golden when it changes.
+`scripts/capture.sh` renders every scene **twice** and compares the bytes: on one machine, twice, a
+capture must be identical (`INV-11`'s machine-independent half).
+
+Against the committed golden, the compare is **bounded**, not byte-exact:
+
+| bound | value | why that number |
+| --- | --- | --- |
+| no channel differs by more than | **2 / 255** | two rasterisers (this laptop's iGPU and CI's lavapipe) were measured at **1/255**, on at most 23 pixels of 921,600 |
+| pixels differing at all | **200** | ~10× the worst measured case, and small enough that a moved label or a torn panel cannot hide |
+
+Both bounds are needed and neither is enough: a budget alone would let 200 pixels of *text* change, and a
+tolerance alone would let a whole panel shift by a rounding step. The measured numbers are printed on
+every run — a tolerance nobody can see the margin of is a tolerance that quietly widens.
+
+`ARCONS_GOLDENS=exact` demands bytes (`tolerance 0`, `budget 0`): for the reference machine, or when a
+human wants to know the pixels are the reviewed ones rather than merely the same picture. There is no
+`off`: skipping the goldens in CI is how a *consistent* change — a card moved, a token's colour shifted
+— passes CI and fails only on one laptop.
+
+A golden changes only through `--update-goldens`, run by a human who has looked at the capture, and the
+PR says which machine made it.
+

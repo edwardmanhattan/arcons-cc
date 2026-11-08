@@ -71,6 +71,62 @@ fn assert_capture(args: &config::Args) -> ExitCode {
     }
 }
 
+/// `--compare`: two captures, one difference, and whether it is a change or a rounding step.
+///
+/// `scripts/capture.sh` runs this against a golden on **every** machine, which is the point: a byte
+/// compare can only be the reference machine's, so CI used to skip goldens altogether. The numbers are
+/// printed on success too — a tolerance nobody can see the margin of is a tolerance that silently
+/// widens.
+fn compare_captures(args: &config::Args) -> ExitCode {
+    let (Some(candidate), Some(golden)) = (args.image.as_deref(), args.compare_with.as_deref())
+    else {
+        eprintln!("arcons-cc: --compare needs a golden and --image PATH for the candidate");
+        return ExitCode::from(64);
+    };
+    let read = |path: &std::path::Path| arcons_cc::verify::Image::read(path);
+    let (candidate_image, golden_image) = match (read(candidate), read(golden)) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(error), _) | (_, Err(error)) => {
+            eprintln!("arcons-cc: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let difference = match arcons_cc::verify::difference(&candidate_image, &golden_image) {
+        Ok(difference) => difference,
+        Err(error) => {
+            eprintln!("arcons-cc: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let verdict = arcons_cc::verify::within(difference, args.tolerance, args.budget);
+    match verdict {
+        Ok(()) if difference.is_identical() => {
+            println!("identical to {} — byte for byte", golden.display());
+            ExitCode::SUCCESS
+        }
+        Ok(()) => {
+            println!(
+                "matches {} within tolerance: {} px differ, max Δ{}/255 (tolerance {}, budget {})",
+                golden.display(),
+                difference.differing,
+                difference.max_delta,
+                args.tolerance,
+                args.budget
+            );
+            ExitCode::SUCCESS
+        }
+        Err(reason) => {
+            eprintln!(
+                "DIFFERS from {} — {reason} (tolerance {}, budget {})",
+                golden.display(),
+                args.tolerance,
+                args.budget
+            );
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn self_check(args: &config::Args) -> ExitCode {
     let mut out = String::new();
     let outcome = config::check::run(
@@ -120,6 +176,7 @@ fn main() -> ExitCode {
     match args.command {
         config::Command::SelfCheck => self_check(&args),
         config::Command::Assert => assert_capture(&args),
+        config::Command::Compare => compare_captures(&args),
         config::Command::ProbeMap => probe_map(
             args.probe_camera
                 .unwrap_or(arcons_cc::map::geometry::Camera::START),

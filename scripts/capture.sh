@@ -80,24 +80,28 @@ for scene in "${SCENES[@]}"; do
     continue
   fi
 
-  # The committed golden was made by one renderer. Another renderer (CI's software path) antialiases
-  # a glyph edge differently, so comparing across machines would fail for a reason that is not about
-  # the wall. `ARCONS_GOLDENS=off` keeps CI to determinism + assertions; the reference machine
-  # compares bytes.
-  if [ "${ARCONS_GOLDENS:-on}" = "off" ]; then
-    echo "  golden comparison skipped (ARCONS_GOLDENS=off): assertions still run"
-    continue
-  fi
+  # The golden is compared on **every** machine, within a stated tolerance: two rasterisers (this
+  # laptop's iGPU and CI's lavapipe) were measured to differ by at most 1/255 on at most 23 pixels of
+  # 921,600, so a byte compare can only ever be the reference machine's privilege — and CI skipping the
+  # goldens is how a consistent change (a moved card, a shifted token colour) passes CI. The numbers
+  # are printed on every run; a tolerance nobody can see the margin of is a tolerance that widens.
   golden="fixtures/golden/$scene.png"
+  tolerance="${ARCONS_TOLERANCE:-2}"
+  budget="${ARCONS_BUDGET:-200}"
+  # `ARCONS_GOLDENS=exact` demands bytes: for the reference machine, when a human wants to know that the
+  # pixels are the reviewed ones and not merely the same picture.
+  if [ "${ARCONS_GOLDENS:-on}" = "exact" ]; then
+    tolerance=0
+    budget=0
+  fi
   if [ ! -f "$golden" ]; then
     echo "  no golden at $golden: run scripts/capture.sh --update-goldens $scene" >&2
     status=1
-  elif ! cmp -s "out/$scene.png" "$golden"; then
-    # Bytes, not "looks similar": a capture that differs by one byte is a change nobody reviewed.
-    echo "  \033[31mDIFFERS\033[0m from $golden — a human must look, then --update-goldens" >&2
-    status=1
+  elif ./target/debug/arcons-cc --compare "$golden" --image "out/$scene.png" \
+      --tolerance "$tolerance" --budget "$budget"; then
+    :
   else
-    echo "  identical to $golden (INV-11)"
+    status=1
   fi
 done
 
