@@ -69,7 +69,13 @@ for scene in "${SCENES[@]}"; do
   if cmp -s "out/$scene.first.png" "out/$scene.png"; then
     echo "  two runs identical (INV-11)"
   else
-    echo "  [31mTWO RUNS DIFFER[0m — nondeterminism in the render, which no golden can fix" >&2
+    # Both runs are kept, and named. A mismatch is the one failure that cannot be diagnosed from the
+    # log alone, so the next thing anyone does is look at the two images — which needs them to exist
+    # and to be told apart. CI uploads `out/` when the gate fails.
+    printf '  \033[31mTWO RUNS DIFFER\033[0m — nondeterminism in the render, which no golden can fix\n' >&2
+    printf '    kept %s (%s bytes, %s) and %s (%s bytes, %s)\n' \
+      "out/$scene.first.png" "$(stat -c %s "out/$scene.first.png")" "$(sha256sum "out/$scene.first.png" | cut -c1-12)" \
+      "out/$scene.png" "$(stat -c %s "out/$scene.png")" "$(sha256sum "out/$scene.png" | cut -c1-12)" >&2
     status=1
     continue
   fi
