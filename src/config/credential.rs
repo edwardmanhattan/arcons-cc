@@ -27,6 +27,12 @@ pub enum Refused {
     Permissions { path: PathBuf, mode: u32 },
     #[error("{path}: {error}")]
     Shape { path: PathBuf, error: String },
+    #[error(
+        "cannot tell whether {path} is private on this platform (it has no POSIX file modes), and a \
+         credential file nobody can check is a credential file to refuse: keep the secret in the \
+         environment (MINOS_REFRESH_TOKEN, or MINOS_IDENTIFIER and MINOS_PASSWORD) instead"
+    )]
+    Unverifiable { path: PathBuf },
 }
 
 impl Refused {
@@ -35,7 +41,8 @@ impl Refused {
             Refused::Missing { path }
             | Refused::Unreadable { path, .. }
             | Refused::Permissions { path, .. }
-            | Refused::Shape { path, .. } => path,
+            | Refused::Shape { path, .. }
+            | Refused::Unverifiable { path } => path,
         }
     }
 }
@@ -80,22 +87,43 @@ pub fn read(path: &Path) -> Result<Credential, Refused> {
 /// Refuse a file another user can read. Split out so the test does not have to create a real 0644
 /// file *and* a real credential to prove the rule.
 pub fn admit_mode(path: &Path, metadata: &std::fs::Metadata) -> Result<(), Refused> {
+    mode_verdict(path, mode_from(metadata))
+}
+
+/// The mode a platform can state for a file, or `None` when it has no such notion.
+fn mode_from(metadata: &std::fs::Metadata) -> Option<u32> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mode = metadata.permissions().mode() & 0o777;
-        if mode & 0o077 != 0 {
-            return Err(Refused::Permissions {
-                path: path.to_path_buf(),
-                mode,
-            });
-        }
+        Some(metadata.permissions().mode() & 0o777)
     }
     #[cfg(not(unix))]
     {
-        let _ = (path, metadata);
+        // Windows has ACLs, not modes. Reading them is a dependency and a policy of its own; until
+        // that is decided, the wall says it cannot verify rather than pretending it did (`#31`).
+        let _ = metadata;
+        None
     }
-    Ok(())
+}
+
+/// The rule, with the mode as a value: **every** branch is testable on any platform, including the one
+/// where the platform itself has no modes to check.
+///
+/// A missing mode is a refusal, not a pass. The gap this closes was found by the cross-platform matrix
+/// (`#31`): `cfg(not(unix))` used to `let _ = (path, metadata)` and return `Ok`, so a wall on Windows
+/// would have read a credential file whose permissions nothing had looked at — silently, because the
+/// code that would have said so was compiled out.
+pub fn mode_verdict(path: &Path, mode: Option<u32>) -> Result<(), Refused> {
+    match mode {
+        Some(mode) if mode & 0o077 != 0 => Err(Refused::Permissions {
+            path: path.to_path_buf(),
+            mode,
+        }),
+        Some(_) => Ok(()),
+        None => Err(Refused::Unverifiable {
+            path: path.to_path_buf(),
+        }),
+    }
 }
 
 /// The contents, checked. Public so a test can prove the shapes without touching the filesystem.
@@ -137,17 +165,7 @@ pub fn parse(path: &Path, text: &str) -> Result<Credential, Refused> {
 
 /// The file mode, for the self-check line. Never the contents.
 pub fn mode_of(path: &Path) -> Option<u32> {
-    let metadata = std::fs::metadata(path).ok()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        Some(metadata.permissions().mode() & 0o777)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = metadata;
-        None
-    }
+    mode_from(&std::fs::metadata(path).ok()?)
 }
 
 #[cfg(test)]
@@ -157,6 +175,42 @@ mod tests {
 
     fn path() -> PathBuf {
         PathBuf::from("/cfg/credentials.toml")
+    }
+
+    #[test]
+    fn a_platform_that_cannot_state_a_mode_refuses_the_file_instead_of_passing_it() {
+        // `#31`: the non-unix branch used to discard the metadata and return `Ok`, so a wall on Windows
+        // read a credential nobody had checked. The rule is now a value, and this is the branch that runs
+        // there — testable here because it takes `None` rather than a real Windows filesystem.
+        let refused = mode_verdict(&path(), None).unwrap_err();
+        assert!(
+            matches!(refused, Refused::Unverifiable { .. }),
+            "a missing mode must refuse: {refused:?}"
+        );
+        let text = refused.to_string();
+        assert!(
+            text.contains("MINOS_REFRESH_TOKEN"),
+            "the refusal names the way out: {text}"
+        );
+        assert_eq!(refused.path(), path());
+    }
+
+    #[test]
+    fn the_mode_rule_is_about_group_and_other_bits_only() {
+        // 0700 is private to its owner and fine; anything a group or a stranger can read is not.
+        assert!(mode_verdict(&path(), Some(0o600)).is_ok());
+        assert!(mode_verdict(&path(), Some(0o700)).is_ok());
+        for mode in [0o640, 0o604, 0o660, 0o644, 0o777] {
+            let refused = mode_verdict(&path(), Some(mode)).unwrap_err();
+            assert!(
+                matches!(refused, Refused::Permissions { mode: m, .. } if m == mode),
+                "{mode:04o} must be refused: {refused:?}"
+            );
+            assert!(
+                refused.to_string().contains("chmod 600"),
+                "the refusal names the fix"
+            );
+        }
     }
 
     #[test]
