@@ -15,7 +15,7 @@ use crate::config::Minos;
 use crate::data::Error;
 use crate::data::auth::{Auth, Refresher};
 use crate::data::types::{
-    Envelope, ErrorResponse, FeedPosition, TokenPair, UnitCommander, UnitDetail,
+    Envelope, ErrorResponse, FeedPosition, TokenPair, UnitCommander, UnitDetail, UnitSummary,
 };
 
 /// A request timeout. The wall is on a LAN or a VPN; a read that takes longer than this is a stall to
@@ -151,6 +151,29 @@ impl Http {
 
     /// `GET /units/{id}/commander` — newest first; the current one is the entry with no `to_at`.
     /// An empty list is a valid answer: nobody has ever commanded this hull.
+    /// `GET /units` — the fleet register, for the picture URLs and (later) the taxonomy the symbol
+    /// needs. One call: the wall must not read one hull at a time to draw a harbour.
+    pub async fn units(&self) -> Result<Vec<UnitSummary>, Error> {
+        self.get("/units").await
+    }
+
+    /// The bytes at a **presigned** URL: a hull's photograph.
+    ///
+    /// No bearer token: the URL carries its own authorisation, and sending ours would be a credential in
+    /// a request to a storage host we do not control. The whole body is read here because the cache wants
+    /// bytes and the decode belongs off this thread anyway.
+    pub async fn image(&self, url: &str) -> Result<Vec<u8>, Error> {
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(transport)?
+            .error_for_status()
+            .map_err(|error| Error::Transport(format!("the picture: {error}")))?;
+        Ok(response.bytes().await.map_err(transport)?.to_vec())
+    }
+
     pub async fn commander(&self, id_unit: i64) -> Result<Vec<UnitCommander>, Error> {
         self.get(&format!("/units/{id_unit}/commander")).await
     }

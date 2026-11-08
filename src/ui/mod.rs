@@ -82,6 +82,26 @@ pub struct State {
     marker_press: bool,
     /// When the last "socket" heartbeat was logged, on the frame clock.
     last_report: f64,
+    /// Whether the wall is drawing symbols or pictures, latched with hysteresis on the frame's zoom
+    /// (`units::mark`). One latch for the wall: the decision is about the zoom, not about a hull.
+    pub range: crate::units::mark::Range,
+    /// Dimensions of hulls the wall has read, for scaling a picture. Absent means "not read yet", which
+    /// draws the picture clamped rather than at a scale nobody measured.
+    pub sizes: std::collections::HashMap<i64, crate::units::mark::Size>,
+    /// Presigned picture URLs from the fleet register, by hull.
+    pub image_urls: std::collections::HashMap<i64, String>,
+    /// Decode-and-fetch cache for the pictures. Created in `setup`, because it needs the waker.
+    pub images: Option<rune::ImageCache>,
+    /// `true` once the register has been asked for, so a failed read is retried on the next zoom-in
+    /// rather than on every frame.
+    pub asked_register: bool,
+    /// Hulls whose dimensions have been asked for, so the wall does not ask on every frame.
+    pub asked_sizes: std::collections::HashSet<i64>,
+    /// Picture bytes by hull, as fetched. The view hands them to Rune's cache, which decodes them off the
+    /// UI thread and shares them by content — so a hull's photograph is decoded once, not per frame.
+    pub image_bytes: std::collections::HashMap<i64, std::sync::Arc<[u8]>>,
+    /// Hulls whose picture has been asked for, so a missing one is not re-asked every frame.
+    pub asked_images: std::collections::HashSet<i64>,
 }
 
 impl Default for State {
@@ -117,6 +137,14 @@ impl Default for State {
             headless: false,
             marker_press: false,
             last_report: 0.0,
+            range: crate::units::mark::Range::default(),
+            sizes: std::collections::HashMap::new(),
+            image_urls: std::collections::HashMap::new(),
+            images: None,
+            asked_register: false,
+            asked_sizes: std::collections::HashSet::new(),
+            image_bytes: std::collections::HashMap::new(),
+            asked_images: std::collections::HashSet::new(),
         }
     }
 }
@@ -125,6 +153,16 @@ impl State {
     /// The clock every age in the view is measured against. The *only* source of "now" in the view,
     /// which is what makes a capture reproducible: `--scene` drives `logical` from Rune's virtual
     /// clock, and a windowed run from the real one.
+    /// The decode cache, created on first use.
+    ///
+    /// Its waker is a no-op: this wall redraws while a picture is *pending* (`poll`), so it never needs to
+    /// be woken. That keeps the cache usable from a scene, where the app's waker does not exist yet — and
+    /// one cache for the process, so a decoded picture is decoded once.
+    pub fn image_cache(&mut self) -> &rune::ImageCache {
+        self.images
+            .get_or_insert_with(|| rune::ImageCache::new(std::sync::Arc::new(|| {})))
+    }
+
     pub fn now(&self) -> std::time::Instant {
         self.origin + std::time::Duration::from_secs_f64(self.logical)
     }
@@ -337,8 +375,21 @@ fn picture(state: &State, scale: f32) -> El {
         return content;
     };
     let now = state.now();
-    let placed = markers::place(&state.picture, &frame, now, state.stale_after);
-    let mut layer = content.child(markers::layer(&placed, &frame, scale));
+    let range = state.range;
+    let sizes = |id_unit: i64| state.sizes.get(&id_unit).copied();
+    let placed = markers::place(
+        &state.picture,
+        &frame,
+        now,
+        state.stale_after,
+        range,
+        &sizes,
+    );
+    let pictures = markers::Pictures {
+        cache: state.images.as_ref(),
+        bytes: &state.image_bytes,
+    };
+    let mut layer = content.child(markers::layer(&placed, &frame, scale, &pictures));
 
     // The card points at its marker's DRAWN position — not the fix — so it follows a hull that is
     // travelling and a map that has been panned. Placement is arithmetic in `units::card::place`,
@@ -548,10 +599,57 @@ fn drain_card_reads(state: &mut State) -> bool {
     if replies.is_empty() {
         return false;
     }
-    let Some(card) = state.card.as_mut() else {
-        return false;
-    };
+    // The register and the dimensions are about the wall, not about the card: they are taken whether or
+    // not anything is selected, and they are what a picture is scaled from.
     let mut changed = false;
+    for reply in &replies {
+        match reply {
+            crate::data::Reply::Units(Ok(rows)) => {
+                state.image_urls.clear();
+                for row in rows {
+                    if let Some(url) = &row.image_url {
+                        state.image_urls.insert(row.id, url.clone());
+                    }
+                }
+                changed = true;
+            }
+            crate::data::Reply::Image(id_unit, Ok(bytes)) => {
+                state
+                    .image_bytes
+                    .insert(*id_unit, std::sync::Arc::from(bytes.as_slice()));
+                changed = true;
+            }
+            crate::data::Reply::Image(id_unit, Err(error)) => {
+                // A picture that cannot be fetched draws the symbol, and says why once.
+                eprintln!("arcons-cc: the picture for hull {id_unit} did not arrive: {error}");
+            }
+            crate::data::Reply::Units(Err(error)) => {
+                eprintln!("arcons-cc: the fleet register did not read: {error}");
+            }
+            crate::data::Reply::Specifications(id, Ok(versions)) => {
+                // The newest version is the one in force: the list is newest first.
+                if let Some(size) = versions.first().and_then(size_of) {
+                    state.sizes.insert(*id, size);
+                    changed = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    let replies: Vec<crate::data::Reply> = replies
+        .into_iter()
+        .filter(|reply| {
+            matches!(
+                reply,
+                crate::data::Reply::Unit(..)
+                    | crate::data::Reply::Commander(..)
+                    | crate::data::Reply::Specifications(..)
+            )
+        })
+        .collect();
+    let Some(card) = state.card.as_mut() else {
+        return changed;
+    };
     for reply in replies {
         match reply {
             crate::data::Reply::Unit(id, result) if Some(id) == state.selected => {
@@ -579,6 +677,17 @@ fn drain_card_reads(state: &mut State) -> bool {
         }
     }
     changed
+}
+
+/// A hull's length and beam from one specification version, when both were measured.
+///
+/// Both are needed: a picture scaled from a length and drawn at a guessed beam is a picture that lies
+/// about its shape. Absent either one, the hull is drawn clamped (`units::mark`) and says so.
+fn size_of(version: &crate::data::types::UnitSpecification) -> Option<crate::units::mark::Size> {
+    Some(crate::units::mark::Size {
+        length_m: version.loa_m?,
+        beam_m: version.beam_m?,
+    })
 }
 
 /// Once a second, the age text changes: redraw the card, and nothing else.
@@ -691,6 +800,8 @@ fn apply_update(state: &mut State, update: crate::live::Update) {
 fn setup(state: &mut State, waker: rune::Waker) {
     // A scene is offline by construction: `--snap` renders a fixture, and a capture that opened a
     // socket would be a capture that depends on a server being awake.
+    // The image cache decodes; it does not fetch, so a headless scene can use the same path a wall uses.
+    state.image_cache();
     if rune::is_headless() {
         state.headless = true;
         // A scene declares its own viewport: there is no map thread to hand one over, and markers
@@ -758,7 +869,71 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
         state.frame_seen = state.frame;
         changed = true;
     }
+    // The range follows the frame's zoom, not the camera's: mid-gesture they disagree, and a hull must
+    // not switch representation while it is still projected against the previous frame.
+    if let Some(frame) = state.frame {
+        let latched = state.range.update(frame.camera.zoom);
+        if latched != state.range {
+            state.range = latched;
+            changed = true;
+        }
+    }
+    // In picture range the wall needs two things the feed does not carry: the register (picture URLs,
+    // one read for the fleet) and each hull's dimensions (what the picture is scaled by). Both are
+    // asked for a bounded number per frame, off the UI thread, and neither is asked in symbol range
+    // where nothing uses them.
+    if state.range == crate::units::mark::Range::Picture
+        && let Some(backend) = &state.backend
+    {
+        if !state.asked_register {
+            state.asked_register = true;
+            backend.request(crate::data::Command::Units);
+        }
+        let mut asked_images = 0;
+        for unit in state.picture.units() {
+            if asked_images >= 2 {
+                break;
+            }
+            let id = unit.unit.id_unit;
+            if unit.position.is_some()
+                && !state.image_bytes.contains_key(&id)
+                && !state.asked_images.contains(&id)
+                && let Some(url) = state.image_urls.get(&id).cloned()
+            {
+                state.asked_images.insert(id);
+                backend.request(crate::data::Command::Image(id, url));
+                asked_images += 1;
+            }
+        }
+        let mut asked = 0;
+        for unit in state.picture.units() {
+            if asked >= 4 {
+                break;
+            }
+            if unit.position.is_some()
+                && !state.sizes.contains_key(&unit.unit.id_unit)
+                && !state.asked_sizes.contains(&unit.unit.id_unit)
+            {
+                state.asked_sizes.insert(unit.unit.id_unit);
+                backend.request(crate::data::Command::Specifications(unit.unit.id_unit));
+                asked += 1;
+            }
+        }
+    }
 
+    // A picture still decoding is a reason to draw the next frame: the cache decodes on its own thread
+    // and wakes the app, but a headless render is not waiting on a waker — and a marker that would
+    // become a picture one frame later must not be frozen as a symbol for the whole capture.
+    if state.range == crate::units::mark::Range::Picture
+        && let Some(cache) = &state.images
+    {
+        for (id, bytes) in &state.image_bytes {
+            let _ = id;
+            if !cache.load(bytes.clone()).is_ready() {
+                changed = true;
+            }
+        }
+    }
     // A marker still travelling between two fixes needs the next frame drawn, and stops asking on its
     // own when the travel window ends: a wall at rest rebuilds nothing.
     if state.picture.travelling(state.now()) {

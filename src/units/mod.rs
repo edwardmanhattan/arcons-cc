@@ -28,6 +28,7 @@
 //! that gets younger is a lie the wall cannot take back (`INV-06`).
 
 pub mod card;
+pub mod mark;
 pub mod motion;
 
 use std::time::{Duration, Instant};

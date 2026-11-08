@@ -43,6 +43,8 @@ pub struct Placed {
     pub lat: f64,
     /// The zoom of the frame it is drawn on.
     pub zoom: f64,
+    /// Symbol or picture, and the picture's size and rotation when it is one (`units::mark`).
+    pub mark: crate::units::mark::Mark,
 }
 
 /// Project every hull that has a fix, and nothing else.
@@ -54,11 +56,13 @@ pub fn place(
     frame: &Rendered,
     now: Instant,
     stale_after: std::time::Duration,
+    range: crate::units::mark::Range,
+    sizes: &dyn Fn(i64) -> Option<crate::units::mark::Size>,
 ) -> Vec<Placed> {
     picture
         .units()
         .iter()
-        .filter_map(|unit| place_one(unit, frame, now, stale_after))
+        .filter_map(|unit| place_one(unit, frame, now, stale_after, range, sizes))
         .collect()
 }
 
@@ -67,6 +71,8 @@ fn place_one(
     frame: &Rendered,
     now: Instant,
     stale_after: std::time::Duration,
+    range: crate::units::mark::Range,
+    sizes: &dyn Fn(i64) -> Option<crate::units::mark::Size>,
 ) -> Option<Placed> {
     let glyph = unit.glyph_with(now, stale_after)?;
     let drawn: Pos = unit.drawn(now)?;
@@ -80,6 +86,7 @@ fn place_one(
         accuracy_m: unit.accuracy_m,
         lat: drawn.lat,
         zoom: frame.camera.zoom,
+        mark: crate::units::mark::mark(range, unit, frame, sizes(unit.unit.id_unit))?,
     })
 }
 
@@ -88,7 +95,7 @@ fn place_one(
 /// `scale` converts the frame's device pixels into the points Rune lays out in: the frame is rendered
 /// at device resolution so its labels are sharp, and a marker placed in device pixels on a 2× panel
 /// would sit at twice its coordinate.
-pub fn layer(placed: &[Placed], frame: &Rendered, scale: f32) -> El {
+pub fn layer(placed: &[Placed], frame: &Rendered, scale: f32, pictures: &Pictures) -> El {
     let scale = if scale > 0.0 { f64::from(scale) } else { 1.0 };
     let mut layer = el()
         .key("markers")
@@ -100,15 +107,76 @@ pub fn layer(placed: &[Placed], frame: &Rendered, scale: f32) -> El {
             frame.height as f32 / scale as f32,
         );
     for marker in placed {
-        layer = layer.child(glyph(marker, scale));
+        layer = layer.child(glyph(marker, scale, pictures));
     }
     layer
 }
 
-/// The mark a hull earns: its symbol. The picture at close zoom is #39's half of #32.
-fn glyph(marker: &Placed, scale: f64) -> El {
+/// Where the pictures come from: Rune's fetch-and-decode cache, and the URL each hull's photograph is
+/// at. Both are absent in a headless scene, where nothing may touch the network (`INV-11`).
+pub struct Pictures<'a> {
+    pub cache: Option<&'a rune::ImageCache>,
+    /// Fetched bytes by hull. Rune has no HTTP client on native, so the wall fetches and the cache
+    /// decodes — and shares by content, which is what keeps a 25 pt picture from being decoded per frame.
+    pub bytes: &'a std::collections::HashMap<i64, std::sync::Arc<[u8]>>,
+}
+
+impl Pictures<'_> {
+    /// A hull's picture, if one is named and the cache has finished decoding it.
+    ///
+    /// **Not ready is not a failure**: a picture that has not arrived draws the symbol, because a hull
+    /// that vanishes while its photograph downloads is worse than a hull drawn as what it is.
+    fn ready(&self, id_unit: i64) -> Option<rune::Image> {
+        let cache = self.cache?;
+        let bytes = self.bytes.get(&id_unit)?;
+        let image = cache.load(bytes.clone());
+        image.is_ready().then_some(image)
+    }
+}
+
+/// The mark a hull earns: its picture when the range is close enough and one is ready, else its symbol.
+fn glyph(marker: &Placed, scale: f64, pictures: &Pictures) -> El {
     let accuracy = accuracy_ring(marker);
-    let symbol = crate::ui::symbol::mark(marker.id_unit, marker.glyph, GLYPH);
+    let mark = match marker.mark {
+        crate::units::mark::Mark::Picture {
+            length_pt,
+            beam_pt,
+            rotation,
+            ..
+        } => match pictures.ready(marker.id_unit) {
+            Some(image) => {
+                // The picture is sized from length and beam and turned about its centre: a hull drawn
+                // at the wrong size is a wrong measurement, and one turned about its corner drifts off
+                // its own position.
+                let picture = el()
+                    .key(format!("marker-{}", marker.id_unit))
+                    .size(length_pt, beam_pt)
+                    .pixels_fit(image.pixels(), rune::SurfaceFit::Fill)
+                    .rotate(rotation.unwrap_or(0.0).to_radians());
+                let id_unit = marker.id_unit;
+                let mut target = el()
+                    .key(format!("hit-{}", id_unit))
+                    .absolute(
+                        (marker.x / scale) as f32 - TARGET / 2.0,
+                        (marker.y / scale) as f32 - TARGET / 2.0,
+                    )
+                    .size(TARGET.max(length_pt), TARGET.max(beam_pt))
+                    .center()
+                    .on_press(move |state: &mut crate::ui::State| state.press_marker(id_unit))
+                    .child(picture);
+                if let Some(ring) = accuracy {
+                    target = target.child(ring);
+                }
+                // No heading tick: the picture's own rotation is its heading.
+                return target;
+            }
+            None => crate::ui::symbol::mark(marker.id_unit, marker.glyph, GLYPH),
+        },
+        crate::units::mark::Mark::Symbol => {
+            crate::ui::symbol::mark(marker.id_unit, marker.glyph, GLYPH)
+        }
+    };
+    let symbol = mark;
 
     let id_unit = marker.id_unit;
     let mut target = el()
@@ -225,6 +293,8 @@ mod tests {
             &frame(),
             Instant::now(),
             crate::units::STALE_AFTER,
+            crate::units::mark::Range::Symbol,
+            &|_| None,
         );
         assert_eq!(
             placed.len(),
@@ -245,7 +315,14 @@ mod tests {
         let frame = frame();
         let mut picture = Picture::default();
         picture.replace_from_feed(&[entry(8, Some(fix(-6.05, 106.95, 5.0, false)))]);
-        let placed = place(&picture, &frame, Instant::now(), crate::units::STALE_AFTER);
+        let placed = place(
+            &picture,
+            &frame,
+            Instant::now(),
+            crate::units::STALE_AFTER,
+            crate::units::mark::Range::Symbol,
+            &|_| None,
+        );
         assert_eq!(placed.len(), 1);
         let (x, y) = frame.project(-6.05, 106.95);
         assert!(
@@ -273,6 +350,8 @@ mod tests {
             &frame(),
             Instant::now(),
             crate::units::STALE_AFTER,
+            crate::units::mark::Range::Symbol,
+            &|_| None,
         );
         let glyph = |id: i64| {
             placed
@@ -303,6 +382,8 @@ mod tests {
             &frame(),
             Instant::now(),
             crate::units::STALE_AFTER,
+            crate::units::mark::Range::Symbol,
+            &|_| None,
         );
         assert_eq!(
             placed[0].course_deg, None,

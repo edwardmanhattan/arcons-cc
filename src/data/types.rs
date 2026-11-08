@@ -109,6 +109,23 @@ pub struct UnitDetail {
     pub unit_status: Helper,
 }
 
+/// One row of `GET /units`: the wall's map from hull to photograph.
+///
+/// The live feed carries positions and nothing else, so `image_url` — the only place a hull's picture is
+/// named — has to come from the unit register. One read for the whole fleet, not one per hull.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UnitSummary {
+    pub id: i64,
+    pub name: String,
+    #[serde(default)]
+    pub hull_number: Option<String>,
+    /// A **presigned** URL, absent when the hull has no photograph. It changes when the picture is
+    /// replaced *and* when the signature expires, so it is cached by value and refreshed, never assumed
+    /// stable.
+    #[serde(default)]
+    pub image_url: Option<String>,
+}
+
 /// One entry of `GET /units/{id}/commander`, newest first.
 ///
 /// **The current commander is the entry with no `to_at`.** There is no "who commands it now" route,
