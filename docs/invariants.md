@@ -88,3 +88,8 @@ Fixtures in, virtual clock, same scene, same bytes. Without this, goldens are no
 
 The number lives in one place (`ui/tokens.rs` or `tests/budget.rs`), and the failure prints the measured
 value next to the limit.
+
+The frame-CPU number is the **reference machine's** (this laptop), and the test says so by measuring a fixed
+reference workload in the same run and dividing: 8 ms is the wall's budget, and how slow the machine running
+the check is cancels out. `#48` is why — CI ran 2.3× slower than the wall and the same commit landed on both
+sides of the line.
