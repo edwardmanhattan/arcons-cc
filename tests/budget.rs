@@ -4,6 +4,12 @@
 //! moves — the work the wall does per frame when an operator pans or zooms — and fails with the
 //! measured number beside the limit (`INV-12`).
 //!
+//! **The number is measured on the reference machine, whatever machine runs the test** (`#48`). Wall-clock
+//! milliseconds do not travel: the same commit measured 4.1 ms on the laptop the budget was set on and
+//! 9.6 ms on a shared CI runner, so the gate passed or failed on the runner's mood. Every run therefore
+//! times a fixed reference workload too (`boxes_view`) and divides by how much slower this machine is
+//! than the reference — so a slower *runner* is allowed to be slower, and a slower *wall* is not.
+//!
 //! It is `#[ignore]` so the inner loop stays fast, and `scripts/verify.sh` runs it by name:
 //! `cargo test --all-targets -- --include-ignored budget`. It measures **CPU**, not GPU: layout,
 //! projection and element building. The map's own frame cost is MapLibre's, and the probe in #5 is
@@ -18,6 +24,14 @@ use chrono::{TimeZone, Utc};
 
 /// The wall's limit for camera pan/zoom at 1080p with 200 units, in milliseconds of frame CPU.
 const LIMIT_MS: f64 = 8.0;
+
+/// What that same machine measures for a fixed reference workload, in milliseconds per frame.
+///
+/// This is the measurement that makes the budget a budget instead of a lottery (`#48`). A shared CI
+/// runner is **2.3× slower** than the laptop the 8 ms was set on: the same commit measured 4.1 ms here and
+/// 8.7 and 9.6 ms there, so the gate failed and passed on the machine's mood. Wall-clock milliseconds do
+/// not travel between machines; a *ratio* to a workload that machine also runs does.
+const CALIBRATION_MS: f64 = 0.585;
 
 fn picture_with(units: usize) -> Picture {
     let entries: Vec<_> = (0..units)
@@ -48,6 +62,45 @@ fn picture_with(units: usize) -> Picture {
     let mut picture = Picture::default();
     picture.replace_from_feed(&entries);
     picture
+}
+
+/// A fixed reference frame: 200 plain boxes, no text, no markers, no shapes. It measures what this
+/// machine charges for a frame of layout and scene, which is the part of the budget that is not ours.
+fn boxes_view(_state: &State, _cx: &mut rune::Cx<State>) -> rune::El {
+    use rune::el;
+    let mut root = el().size(1920.0, 1080.0);
+    for index in 0..200 {
+        root = root.child(
+            el().key(format!("box-{index}"))
+                .absolute((index % 20) as f32 * 90.0, (index / 20) as f32 * 100.0)
+                .size(24.0, 24.0),
+        );
+    }
+    root
+}
+
+/// How much slower this machine is than the one the budget was set on, as a factor ≥ 0.
+///
+/// Never below 0.25 or above 10: a calibration that ran on a machine so odd it fell outside that range
+/// would scale the budget into meaninglessness, and a refused measurement is better than a wrong one.
+fn machine_factor() -> f64 {
+    const FRAMES: u32 = 60;
+    let mut runtime = rune::Runtime::new(
+        State::default(),
+        boxes_view,
+        (1920.0, 1080.0),
+        rune::Env {
+            system_dark: true,
+            scale: 1.0,
+        },
+    );
+    runtime.frame(0.0);
+    let started = Instant::now();
+    for _ in 0..FRAMES {
+        runtime.frame(1.0 / 60.0);
+    }
+    let per_frame = started.elapsed().as_secs_f64() * 1000.0 / f64::from(FRAMES);
+    (per_frame / CALIBRATION_MS).clamp(0.25, 10.0)
 }
 
 #[test]
@@ -108,13 +161,20 @@ fn budget_200_markers_pan_zoom_frame_cpu() {
     }
     let per_frame_ms = started.elapsed().as_secs_f64() * 1000.0 / f64::from(FRAMES);
 
+    // The budget is the wall's; the machine is whatever is running the test. `machine_factor` is how much
+    // slower this one is than the reference, so the number compared against the limit is "milliseconds on
+    // the reference machine" — a slower runner is allowed to be slower, a slower *wall* is not (#48).
+    let factor = machine_factor();
+    let reference_ms = per_frame_ms / factor;
     println!(
-        "INV-12: {per_frame_ms:.3} ms frame CPU with 200 markers and a panning camera (limit {LIMIT_MS} ms, {}x{})",
+        "INV-12: {per_frame_ms:.3} ms frame CPU with 200 markers and a panning camera \
+         = {reference_ms:.3} ms on the reference machine (machine ×{factor:.2}; limit {LIMIT_MS} ms, {}x{})",
         tokens::WINDOW_SIZE.0,
         tokens::WINDOW_SIZE.1
     );
     assert!(
-        per_frame_ms < LIMIT_MS,
-        "INV-12: {per_frame_ms:.3} ms per frame with 200 markers exceeds the {LIMIT_MS} ms budget"
+        reference_ms < LIMIT_MS,
+        "INV-12: {per_frame_ms:.3} ms per frame with 200 markers is {reference_ms:.3} ms on the reference \
+         machine (×{factor:.2}), which exceeds the {LIMIT_MS} ms budget"
     );
 }

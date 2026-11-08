@@ -105,12 +105,14 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Budgets. Numbers, not vibes. Named as tests that print the measured value.
+# 4. Budgets. Numbers, not vibes. Named as tests that print the measured value — and `--nocapture` puts
+# that number in CI's log, because a budget whose measurement is only visible on failure cannot be audited
+# (`#48`).
 # ---------------------------------------------------------------------------
 if [ "$FAST" -eq 1 ]; then
   skip "budgets" "--fast"
 elif have_crate; then
-  step "budgets (frame CPU, memory)" cargo test --all-targets -- --include-ignored budget
+  step "budgets (frame CPU, memory)" cargo test --all-targets -- --include-ignored --nocapture budget
 else
   skip "budgets" "no crate yet"
 fi
