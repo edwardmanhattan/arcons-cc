@@ -89,6 +89,8 @@ jobs:
         shell: bash
         env:
           REV: core-a33d3f00fb9dbf9117ce18edd799aa0ca5bcce5b
+          # Without this the build script takes the from-source route and never looks at the local path.
+          MLN_PRECOMPILE: "1"
         run: |
           set -o pipefail
           base="https://github.com/maplibre/maplibre-native/releases/download/$REV"
@@ -99,7 +101,7 @@ jobs:
           ls -l "$dir"
           MLN_CORE_LIBRARY_PATH="$dir/core.lib" \
           MLN_CORE_LIBRARY_HEADERS_PATH="$dir/headers.tar.gz" \
-          cargo check --features map --lib --locked 2>&1 | tee win-core.log || true
+          cargo build --features map --bin arcons-cc --locked 2>&1 | tee win-core.log || true
           {
             echo "### Windows core handed to the build script: $(grep -cE '^error' win-core.log) error lines"
             echo '```'
