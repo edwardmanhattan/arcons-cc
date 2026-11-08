@@ -36,3 +36,13 @@ jobs:
           # the half of INV-11 that is true everywhere — two runs of a scene are identical — and the
           # assertions; the reference machine compares against fixtures/golden/.
           ARCONS_GOLDENS: off
+
+      # A capture that differs from itself is the one failure whose cause is an image, not a log line.
+      # Upload the renders so the next person can diff them instead of guessing.
+      - name: captures (even when the gate failed)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures
+          path: out/*.png
+          if-no-files-found: ignore
