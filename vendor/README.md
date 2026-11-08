@@ -54,3 +54,16 @@ map feature is off in the gate, so neither is on `scripts/verify.sh`'s path.
 Rune is a git dependency pinned by rev today. Vendoring it makes an offline build possible and is
 recorded on `THIRD-PARTY-NOTICES.md` as MIT © 2026 Anomaly; the trigger is "before v0.1 ships", not
 "when it is inconvenient".
+
+## `maplibre_native` — the link name of a precompiled core (#46)
+
+`bundle_precompiled` derived the link name with `replacen("lib", "", 1).replace(".a", "")`. That is right for
+the Linux and macOS cores, which are `libmaplibre-native-core-amalgam-<os>-<arch>-<api>.a`, and wrong for
+upstream's Windows cores, which are `maplibre-native-core-windows-x64-<api>.lib`: the first "lib" is inside
+"maplibre", so the directive named a file (`mapre-native-core-windows-x64-vulkan.lib`) that cannot exist. It
+is now a prefix strip plus a suffix strip for `.a` or `.lib`, which is equivalent on Linux and macOS and
+correct on Windows.
+
+Nothing else about Windows is patched: the probe in CI (`map (windows-latest)`, manual dispatch only)
+records what the build script does with that core, and `docs/research/portability.md` says why the wall does
+not draw on Windows yet.

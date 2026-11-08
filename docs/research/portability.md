@@ -3,9 +3,10 @@
 - **Ticket:** [#31](https://github.com/edwardmanhattan/arcons-cc/issues/31), under epic #1
 - **Date:** 2026-11-08
 - **Answer in one line:** Linux is proven and is what ships. macOS arm64 is a *build* target with an
-  engine asset to match it. Windows builds the UI and **cannot build the map engine from the
-  precompiled route at all**. Nix is not a platform but a constraint: its sandbox forbids the
-  download the wall's map build depends on. **The web is not a port — it is a different map.**
+  engine asset to match it. Windows builds the UI, and its map core exists but is not self-contained, so
+  the wall cannot draw there yet — **not for v1**, with the two errors that stop it written down below.
+  Nix is not a platform but a constraint: its sandbox forbids the download the wall's map build depends
+  on. **The web is not a port — it is a different map.**
 
 The rule for every row below is the ticket's rule: a "blocked" row names the command and the error,
 not an impression. Where the answer is "nobody has run it", it says that instead.
@@ -18,7 +19,7 @@ not an impression. Where the answer is "nobody has run it", it says that instead
 | layer | Linux (Arch) | Debian/Ubuntu | macOS arm64 | Windows x64 | Nix | wasm |
 | --- | --- | --- | --- | --- | --- | --- |
 | **crate, no map engine** | ✅ `scripts/verify.sh` | ✅ CI `check (ubuntu-latest)` | 🔨 CI `check (macos-latest)` | 🔨 CI `check (windows-latest)` | 🔨 same tree, same `cargo check` | — Rune's web target is experimental and the map is the product |
-| **map engine** | ✅ Vulkan, offline seed | ✅ same amalgam, same job | ✅ **builds** on `macos-latest` (Metal amalgam; nobody has run it) | ❌ `panic: unsupported target` | ❌ the build downloads | ❌ no wasm backend at all |
+| **map engine** | ✅ Vulkan, offline seed | ✅ same amalgam, same job | ✅ **builds** on `macos-latest` (Metal amalgam; nobody has run it) | ❌ a core exists, but it is not self-contained — see below | ❌ the build downloads | ❌ no wasm backend at all |
 | **socket** | ✅ live | ✅ same crates | 🔨 | 🔨 | 🔨 | ❌ `tokio-tungstenite` has no wasm path |
 | **credential file mode** | ✅ refused unless `0600` | ✅ | ✅ (POSIX modes) | ❌ **refused by design** — Windows has ACLs, not modes; the wall now refuses and names the environment instead | ✅ | — |
 | **stops on `SIGTERM`** | ✅ ordered exit 0 (#43) | ✅ | ✅ (same `libc` path) | ❌ no POSIX signals; needs a console-close handler | ✅ | — |
@@ -100,19 +101,45 @@ says so.
   that no Linux toolchain could have: `src/config/check.rs`'s test helper took a file `mode` that only
   the `cfg(unix)` branch used, so `cargo clippy -D warnings` failed with `unused variable: mode`. That is
   the matrix earning its keep on the first push.
-- **The map does not build from the precompiled route**, at any feature combination. The `map
-  (windows-latest)` job fails in `maplibre_native`'s build script, before it ever looks for an asset:
+- **The map does not build — and the reason changed once we looked properly.** Upstream *does* publish
+  Windows cores for the pinned revision; the build script simply never looks for them:
 
   ```
-  thread 'main' panicked at vendor\maplibre_native\build.rs:168:9:
-  unsupported target: only linux and macos are currently supported by maplibre-native
+  maplibre-native-core-windows-x64-egl.lib
+  maplibre-native-core-windows-x64-opengl.lib
+  maplibre-native-core-windows-x64-vulkan.lib
   ```
 
-  There is no `amalgam-windows-*` release asset to point it at.
-- **The from-source route** is the vendored crate's CMake path with vcpkg-provided dependencies
-  (`MLN_WITH_OPENGL`/Vulkan) — the same route that #26 showed produces a segfaulting binary at `-O2`
-  on this machine's toolchain, plus a report from the sister project (TFG) that the map fails to load
-  on Windows. Two independent reasons not to promise it.
+  So the first answer ("there is no asset") was wrong, and the probe in CI is how that was found. Handing
+  that core to the build script through the local-path route it already supports
+  (`MLN_PRECOMPILE=1`, `MLN_CORE_LIBRARY_PATH`, `MLN_CORE_LIBRARY_HEADERS_PATH`) gets exactly one step
+  further:
+
+  ```
+  warning: maplibre_native@0.9.3: Local library and headers will be used
+  thread 'main' panicked at vendor\maplibre_native\build.rs:918:9:
+  MapLibre Windows vcpkg library directory is missing: …\mln\core.lib\platform\windows\vendor\vcpkg\installed\x64-windows\lib
+  ```
+
+  Two facts follow, both measured on `windows-latest`:
+
+  1. **The core is 1.3 GB** (`maplibre-native-core-windows-x64-vulkan.lib`, 1 299 074 320 bytes) and is not
+     an amalgam — unlike the Linux and macOS cores, whose dependencies are bundled and whose names say
+     `amalgam`. A Windows link needs the dependency libraries beside it.
+  2. **The build script's Windows dependency path is for a source tree**, not for a precompiled core: it
+     derives the vcpkg directory from the *core's* path, so even a machine with vcpkg installed would be
+     pointed at the wrong place. `uv`, `curl` and `z` are linked unconditionally.
+
+  Finishing this is therefore three changes to the vendored crate (recognise the Windows asset names,
+  compute the link name correctly — see below — and resolve vcpkg for the precompiled route), plus a vcpkg
+  install in CI and whatever the core is missing statically, followed by a *runtime* question: the sister
+  project (TFG) reports the map failing to load on Windows even when built.
+
+  One real bug came out of the probe and is fixed: `bundle_precompiled` computed the link name with
+  `replacen("lib", "", 1)`, which on `maplibre-native-core-windows-x64-vulkan.lib` produced
+  `mapre-native-core-windows-x64-vulkan.lib` — a directive for a file that cannot exist, because the first
+  "lib" is in "maplibre". It is now a prefix and a suffix strip (`.a` or `.lib`).
+
 - **The credential is refused, and that is the fix.** `src/config/credential.rs` used to compile the
   mode check out on non-unix platforms (`let _ = (path, metadata); Ok(())`), so a wall on Windows would
   have read a credential file whose permissions nothing had examined — silently, because the code that
@@ -194,9 +221,10 @@ in a row, delete `continue-on-error` and make it real.
 
 ## Follow-ups filed
 
-- **[#46](https://github.com/edwardmanhattan/arcons-cc/issues/46)** — the Windows map engine: needs an
-  upstream `amalgam-windows-*` asset for the pinned revision, or a CMake route we trust at `-O2`, plus a
-  note upstream that "only linux and macos" means "only arm64 macOS".
+- **[#46](https://github.com/edwardmanhattan/arcons-cc/issues/46)** — closed as **not for v1**, with the
+  evidence above. It is not a dead end: the cores exist, and the path is a vendored-crate change plus a
+  vcpkg install plus a runtime check. Revisit when a Windows wall is actually wanted; run
+  `gh workflow run verify` and read the job summary to see whether upstream made the core self-contained.
 - **[#43](https://github.com/edwardmanhattan/arcons-cc/issues/43)** (closed) — the missing console
   handler is *not* filed separately: `SIGTERM` does not exist on Windows, and a console-close handler
   is worth writing when a Windows wall is possible at all, i.e. after #46.

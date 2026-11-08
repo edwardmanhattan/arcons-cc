@@ -5,6 +5,9 @@ name: verify
 on:
   push:
   pull_request:
+  # The Windows-core probe below downloads 1.3 GB, so it does not run on every push: dispatch this
+  # workflow when you want its answer (#46).
+  workflow_dispatch:
 
 jobs:
   # #31: the crate must build where it might be packaged, and a platform that breaks must be a red job
@@ -78,6 +81,36 @@ jobs:
         env:
           # The precompiled core, when the platform has one: 378 MB of download beats an hour of C++.
           MLN_PRECOMPILE: "1"
+
+      # #46: upstream *does* publish Windows cores for the pinned revision —
+      # `maplibre-native-core-windows-x64-{egl,opengl,vulkan}.lib` — they are just not what the build
+      # script looks for. This step hands it one through the local-path route it already supports, so the
+      # next blocker is the one the log shows rather than the one we guessed at.
+      - name: the Windows core, and what it would still need
+        id: win
+        if: always() && runner.os == 'Windows' && github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          REV: core-a33d3f00fb9dbf9117ce18edd799aa0ca5bcce5b
+          # Without this the build script takes the from-source route and never looks at the local path.
+          MLN_PRECOMPILE: "1"
+        run: |
+          set -o pipefail
+          base="https://github.com/maplibre/maplibre-native/releases/download/$REV"
+          dir="$RUNNER_TEMP/mln"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/core.lib" "$base/maplibre-native-core-windows-x64-vulkan.lib"
+          curl -fsSL -o "$dir/headers.tar.gz" "$base/maplibre-native-headers.tar.gz"
+          ls -l "$dir"
+          MLN_CORE_LIBRARY_PATH="$dir/core.lib" \
+          MLN_CORE_LIBRARY_HEADERS_PATH="$dir/headers.tar.gz" \
+          cargo build --features map --bin arcons-cc --locked 2>&1 | tee win-core.log || true
+          {
+            echo "### Windows core handed to the build script: $(grep -cE '^error' win-core.log) error lines"
+            echo '```'
+            grep -E 'error|panicked|MapLibre Windows|warning: Local library' win-core.log | head -20 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: what the map engine said
         if: always()

@@ -430,13 +430,20 @@ fn bundle_precompiled() -> Info {
 
     // These `cargo:rustc-link-lib` must be done before curl and GL,
     // especially on Linux before 1.90 (1.90 introduced new linker on Linux)
+    // **The prefix and the suffix, not the first "lib" anywhere** (#46): upstream's Windows cores are
+    // called `maplibre-native-core-windows-x64-vulkan.lib`, and `replacen("lib", "", 1)` turned that into
+    // `mapre-native-core-windows-x64-vulkan.lib` — a link directive for a file that does not exist.
     let lib_name = cpp_root
         .file_name()
         .expect("static library base has a file name")
         .to_string_lossy()
-        .to_string()
-        .replacen("lib", "", 1)
-        .replace(".a", "");
+        .to_string();
+    let lib_name = lib_name.strip_prefix("lib").unwrap_or(&lib_name);
+    let lib_name = lib_name
+        .strip_suffix(".a")
+        .or_else(|| lib_name.strip_suffix(".lib"))
+        .unwrap_or(lib_name)
+        .to_string();
 
     Info {
         lib_name,
