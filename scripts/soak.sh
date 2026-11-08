@@ -48,11 +48,12 @@ printf '\033[1m▶ soak %s minutes\033[0m — log %s, deliberate drop at %s s\n'
 ./target/debug/arcons-cc --no-decorations --log-file "$LOG" \
   --reconnect-after "$DROP_AFTER_S" >/dev/null 2>&1 &
 WALL=$!
-# A wall is the thing on the screen. The compositor may not draw a hidden window at all, and a wall that is
-# not drawing never polls — so the soak puts it in front, which is the only honest condition to soak.
+# A wall is the thing on the screen, so the soak asks the compositor to put it there. It is not required:
+# since #43 the wall runs its model on a one-second wake and stops on SIGTERM whether or not anything is
+# drawing it — the soak checks that by stopping a wall it may never have uncovered.
 sleep 3
 if command -v hyprctl >/dev/null 2>&1; then
-  hyprctl dispatch focuswindow class:arcons-cc >/dev/null 2>&1 || true
+  hyprctl dispatch focuswindow title:"Arcons Command Center" >/dev/null 2>&1 || true
 fi
 cleanup() { [ -n "${WALL:-}" ] && kill -TERM "$WALL" 2>/dev/null; wait "$WALL" 2>/dev/null; }
 trap cleanup EXIT
@@ -67,29 +68,25 @@ while [ "$SECONDS" -lt "$TOTAL" ]; do
   sleep 10
 done
 
-# SIGTERM is how systemd stops a wall. On a visible wall it quits through the runtime's own path and exits
-# 0; a window the compositor is not drawing never polls, so the runtime cannot take the quit and the
-# process dies of the signal (#43). Both are recorded, because a soak that hides a difference is a soak
-# that lies about the one thing it is checking.
+# SIGTERM is how systemd stops a wall: it must quit through the runtime's own path and exit 0, whether or
+# not the compositor has been drawing it (#43). Ten seconds is generous for five; anything else is a wall
+# that would have been SIGKILLed by systemd, which is the hard exit that leaves the driver complaining.
 kill -TERM "$WALL" 2>/dev/null
+STOPPED=0
 for _ in $(seq 1 10); do
-  kill -0 "$WALL" 2>/dev/null || break
   sleep 1
+  kill -0 "$WALL" 2>/dev/null || { STOPPED=1; break; }
 done
-KILLED=0
-if kill -0 "$WALL" 2>/dev/null; then
-  KILLED=1
+if [ "$STOPPED" -eq 0 ]; then
   kill -KILL "$WALL" 2>/dev/null
-  printf '  stop: SIGTERM ignored for 10 s, killed — the window was not drawing (#43)\n'
+  wait "$WALL" 2>/dev/null
+  WALL=""
+  fail "SIGTERM was ignored for 10 s: the wall cannot be stopped by systemd (#43)"
 fi
 wait "$WALL"; STATUS=$?
 WALL=""
-case "$STATUS" in
-  0)   printf '  stop: SIGTERM, ordered exit 0\n' ;;
-  143) printf '  stop: SIGTERM killed the process (no poll: hidden window, #43)\n' ;;
-  137) [ "$KILLED" -eq 1 ] || fail "the wall was killed by SIGKILL and the soak did not do it" ;;
-  *)   fail "the wall exited $STATUS, which is neither 0, 143 nor our own SIGKILL" ;;
-esac
+[ "$STATUS" -eq 0 ] || fail "the wall exited $STATUS on SIGTERM, not 0"
+printf '  stop: SIGTERM, ordered exit 0\n'
 
 # The log is written with ANSI colour (a terminal can read it; a grep cannot). One plain copy, and every
 # check below reads that.

@@ -814,6 +814,14 @@ fn setup(state: &mut State, waker: rune::Waker) {
         });
         return;
     }
+    // A stop has to reach the loop even when nothing is drawing (`#43`): the flag alone is unread while
+    // the event loop waits for an event no compositor is going to send.
+    let stopping = waker.clone();
+    crate::platform::wake_on_termination(move || stopping());
+    // And keep the model moving while the compositor is not drawing it: a quiet feed plus a covered
+    // window is otherwise a wall that has stopped thinking (`#43`).
+    let ticking = waker.clone();
+    crate::platform::keep_alive(move || ticking());
     start_socket(state, waker.clone());
     if let Some(config) = config::current() {
         // The card's three reads run here, on the reads thread, never on the UI thread.

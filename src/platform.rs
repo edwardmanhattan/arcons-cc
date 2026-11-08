@@ -145,23 +145,94 @@ pub fn watch_for_termination() -> Arc<AtomicBool> {
     let flag = Arc::new(AtomicBool::new(false));
     let installed = TERMINATE.set(Arc::clone(&flag)).is_ok();
     if installed {
-        #[cfg(unix)]
-        {
-            // `signal` is async-signal-safe and this handler does one relaxed store: no allocation,
-            // no lock, nothing to deadlock in a signal context.
-            unsafe {
-                libc::signal(
-                    libc::SIGTERM,
-                    handle_terminate as *const () as libc::sighandler_t,
-                );
-                libc::signal(
-                    libc::SIGINT,
-                    handle_terminate as *const () as libc::sighandler_t,
-                );
-            }
-        }
+        install();
     }
     flag
+}
+
+/// Install the handlers. Callable twice on purpose: `main` asks for them before anything else so an early
+/// `SIGTERM` is orderly, and the window setup asks again because that is the last moment before the event
+/// loop takes over. Installing twice costs two syscalls and cannot lose the flag — `TERMINATE` outlives
+/// both calls, and the handler only ever stores into it.
+pub fn install() {
+    #[cfg(unix)]
+    {
+        // `signal` is async-signal-safe and this handler does one relaxed store: no allocation, no lock,
+        // nothing to deadlock in a signal context.
+        unsafe {
+            libc::signal(
+                libc::SIGTERM,
+                handle_terminate as *const () as libc::sighandler_t,
+            );
+            libc::signal(
+                libc::SIGINT,
+                handle_terminate as *const () as libc::sighandler_t,
+            );
+        }
+    }
+}
+
+/// Turn the signal flag into a **wake**, because a flag on its own stops nothing.
+///
+/// This is the whole of `#43`. `poll` — the only place that reads `terminated()` — runs when a wake or a
+/// due timer reaches the loop, and a wall sitting still with a quiet feed produces neither. A signal that
+/// only sets a flag therefore stops nothing: the soak that filed this waited ten seconds and then
+/// `SIGKILL`ed the process (exit 137), which is the hard exit `src/platform.rs` exists to avoid.
+///
+/// A signal handler may only set a flag (no allocation, no wake, nothing that could deadlock in a signal
+/// context), so the flag is turned into a wake here, on an ordinary thread. The wake is Rune's own
+/// `WakeEvent::App`, which runs `poll` whatever the window is doing — visible, hidden or minimised.
+pub fn wake_on_termination(wake: impl Fn() + Send + 'static) {
+    install();
+    std::thread::Builder::new()
+        .name("terminate".into())
+        .spawn(move || until(terminated, wake, POLL, None))
+        .ok();
+}
+
+/// Keep the model in step with the clock while nothing is drawing (`#43`).
+///
+/// A compositor sends no events for a window it is not drawing, and the wall's poll cadence then depends
+/// on traffic: socket updates wake it, a quiet feed does not. That leaves the model — ages, travelling
+/// markers, the thirty-second heartbeat in the log — tied to a feed that may publish nothing for hours.
+/// One wake a second removes the dependency: an idle wall costs 1.0 % of a core, measured over thirty
+/// seconds with the window on a workspace nobody was looking at.
+pub fn keep_alive(wake: impl Fn() + Send + 'static) {
+    std::thread::Builder::new()
+        .name("tick".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                wake();
+            }
+        })
+        .ok();
+}
+
+/// How often the watcher looks at the flag: a stop that takes a tenth of a second feels immediate, and
+/// a tenth of a second of a sleeping thread costs nothing.
+const POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Wait for `terminated` to say yes, then `wake` once and return. Split out from the thread so the rule
+/// is a test rather than a story: **one** wake, never a stream of them while the loop is already quitting.
+fn until(
+    mut terminated: impl FnMut() -> bool,
+    mut wake: impl FnMut(),
+    poll: std::time::Duration,
+    attempts: Option<usize>,
+) {
+    let mut looked = 0;
+    loop {
+        if terminated() {
+            wake();
+            return;
+        }
+        looked += 1;
+        if attempts.is_some_and(|limit| looked >= limit) {
+            return;
+        }
+        std::thread::sleep(poll);
+    }
 }
 
 /// Whether a terminate signal has arrived.
@@ -190,6 +261,45 @@ pub fn first_frame(what: &str) {
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    #[test]
+    fn a_terminate_signal_wakes_the_loop_once_and_only_when_it_has_arrived() {
+        // The bug was that the flag was never read, so the test is about the *transition*: no wake before
+        // the signal, exactly one after, and none afterwards (`#43`).
+        let mut signalled = 0;
+        let mut wakes = 0;
+        until(
+            || {
+                signalled += 1;
+                signalled > 3
+            },
+            || wakes += 1,
+            std::time::Duration::from_millis(0),
+            Some(10),
+        );
+        assert_eq!(
+            wakes, 1,
+            "one wake is what turns the flag into a quit; a stream is a spin"
+        );
+        assert_eq!(
+            signalled, 4,
+            "it looked until the signal arrived, then stopped"
+        );
+    }
+
+    #[test]
+    fn a_wall_that_nobody_stops_is_left_alone() {
+        // Nothing signalled: the watcher gives up its attempts without ever waking the loop, so a wall
+        // that is simply running is never poked by its own kill switch.
+        let mut wakes = 0;
+        until(
+            || false,
+            || wakes += 1,
+            std::time::Duration::from_millis(0),
+            Some(5),
+        );
+        assert_eq!(wakes, 0);
+    }
 
     #[test]
     fn the_clock_and_the_flag_are_usable_without_a_window() {

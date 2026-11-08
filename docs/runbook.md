@@ -203,9 +203,11 @@ Every wall run now logs `alive uptime_ms=… rss_mb=…` every 30 s from the soc
 point: it says the **process** is alive even when the compositor is not drawing, which is exactly the case
 a soak has to survive. `rss_mb=-1` means the platform will not say — better than an invented number.
 
-**Run it with the wall's window in front.** A window the compositor is not drawing never polls, and a wall
-that is not polling cannot take `SIGTERM`; the soak reports that case as `#43` rather than hiding it. On a
-real wall the window is the thing on the screen, so this is an artefact of soaking on a desktop.
+**The window does not have to be in front.** The soak asks the compositor to raise it, and does not rely on
+it: since `#43` the wall is woken once a second whether or not anything is drawing it, and a `SIGTERM`
+turns the signal flag into a wake so the loop reaches the ordered quit path — measured at **60–120 ms,
+exit 0**, on a window sitting on a workspace nobody is looking at (before the fix: ignored for the full ten
+seconds the soak waited, then `SIGKILL`ed). A soak that fails this is a wall systemd would have hard-killed.
 
 ## 9. When something is wrong
 
