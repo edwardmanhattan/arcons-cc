@@ -29,8 +29,15 @@ pub const GAP: f32 = 8.0;
 pub const HAIRLINE: f32 = 1.0;
 pub const PANEL_RADIUS: f32 = 10.0;
 
-/// A marker glyph's diameter, in points.
-pub const MARKER: f32 = 12.0;
+/// A hull's symbol, in points. **Twenty-four, and measured** (`docs/research/nato-symbology.md`): the
+/// frame takes the outside of the box and the icon's reach inside it is 0.578 of the box for the
+/// unknown-affiliation quatrefoil, so at the old 12 pt marker the icon was 6.9 pt across with a 0.86 pt
+/// stroke — a dot with a halo, which is worse than the plain glyph it replaced because it costs four
+/// more vertices to say the same "something is here". It is also the touch target, so nothing moves.
+pub const SYMBOL: f32 = 24.0;
+/// The frame's stroke as a fraction of the symbol's box, floored by the shape's own minimum. A literal
+/// is chunky at one size and invisible at another; `0.072 × 24 = 1.73 pt`.
+pub const SYMBOL_STROKE: f32 = 0.072;
 /// A marker's hit target: at least 24 pt, because a touch target is a decision about fingers.
 pub const MARKER_TARGET: f32 = 24.0;
 /// The card's edge. Stronger than a panel hairline: it has to hold its shape over light water.

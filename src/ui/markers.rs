@@ -25,8 +25,8 @@ use crate::map::geometry::Rendered;
 use crate::ui::tokens;
 use crate::units::{Glyph, Pos, UnitView};
 
-/// The glyph's diameter, in points. In `tokens` with every other size, not here.
-pub const GLYPH: f32 = tokens::MARKER;
+/// The symbol's side, in points. In `tokens` with every other size, not here.
+pub const GLYPH: f32 = tokens::SYMBOL;
 /// The hit target's side, in points: at least 24, whatever the glyph is.
 pub const TARGET: f32 = tokens::MARKER_TARGET;
 
@@ -105,29 +105,10 @@ pub fn layer(placed: &[Placed], frame: &Rendered, scale: f32) -> El {
     layer
 }
 
-/// The glyph a marker earns — the seam MIL-STD-2525 will land behind.
+/// The mark a hull earns: its symbol. The picture at close zoom is #39's half of #32.
 fn glyph(marker: &Placed, scale: f64) -> El {
-    let (radius, fill, border) = match marker.glyph {
-        Glyph::Live => (GLYPH / 2.0, tokens::accent(), None),
-        Glyph::Stale => (GLYPH / 2.0, tokens::ink_dim(), None),
-        // History is hollow: a ring with nothing in it, which reads as an outline rather than a hull
-        // that is here now.
-        Glyph::History => (GLYPH / 2.0, tokens::bg(), Some(tokens::ink_dim())),
-    };
     let accuracy = accuracy_ring(marker);
-    let symbol = match border {
-        None => el()
-            .key(format!("marker-{}", marker.id_unit))
-            .size(radius * 2.0, radius * 2.0)
-            .radius(radius)
-            .fill(fill),
-        Some(colour) => el()
-            .key(format!("marker-{}", marker.id_unit))
-            .size(radius * 2.0, radius * 2.0)
-            .radius(radius)
-            .fill(fill)
-            .border(tokens::HAIRLINE, colour),
-    };
+    let symbol = crate::ui::symbol::mark(marker.id_unit, marker.glyph, GLYPH);
 
     let id_unit = marker.id_unit;
     let mut target = el()

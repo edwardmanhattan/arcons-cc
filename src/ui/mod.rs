@@ -16,6 +16,7 @@
 //! so the gate stays free of C++ and of a network. `--probe-map` is the headless witness.
 
 pub mod markers;
+pub mod symbol;
 pub mod tokens;
 pub mod unitcard;
 
