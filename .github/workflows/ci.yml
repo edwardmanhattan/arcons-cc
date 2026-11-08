@@ -31,11 +31,9 @@ jobs:
 
       - name: the gate
         run: scripts/verify.sh
-        env:
-          # Goldens are bytes from one renderer; CI's software path antialiases differently. CI holds
-          # the half of INV-11 that is true everywhere — two runs of a scene are identical — and the
-          # assertions; the reference machine compares against fixtures/golden/.
-          ARCONS_GOLDENS: off
+        # No `ARCONS_GOLDENS=off`: CI compares the goldens within the tolerance `capture.sh` states
+        # (2/255 on at most 200 pixels), which is what two rasterisers were measured to need. Skipping
+        # goldens in CI is how a consistent change passes CI and fails only on one laptop.
 
       # A capture that differs from itself is the one failure whose cause is an image, not a log line.
       # Upload the renders so the next person can diff them instead of guessing.
