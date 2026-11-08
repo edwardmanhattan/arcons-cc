@@ -123,9 +123,22 @@ says so.
 
   Two facts follow, both measured on `windows-latest`:
 
-  1. **The core is 1.3 GB** (`maplibre-native-core-windows-x64-vulkan.lib`, 1 299 074 320 bytes) and is not
-     an amalgam — unlike the Linux and macOS cores, whose dependencies are bundled and whose names say
-     `amalgam`. A Windows link needs the dependency libraries beside it.
+  1. **The core is not an amalgam, and upstream says so in its own release workflow**
+     (`.github/workflows/core-release.yml` at the pinned revision):
+
+     ```yaml
+     # macOS
+     cmake --preset macos-metal … -DMLN_CREATE_AMALGAMATION=ON
+     cp build-macos-metal/libmbgl-core-amalgam.a libmaplibre-native-core-amalgam-macos-arm64-metal.a
+
+     # Windows — no MLN_CREATE_AMALGAMATION anywhere in the job
+     cmake --build --preset windows-${{ matrix.renderer }}-core
+     Copy-Item build-windows-${{ matrix.renderer }}/mbgl-core.lib maplibre-native-core-windows-x64-${{ matrix.renderer }}.lib
+     ```
+
+     So the Windows asset is bare `mbgl-core.lib` (1 299 074 320 bytes, debug info and all), and its
+     dependencies stay in vcpkg — `platform/windows/windows.cmake` at the same revision does
+     `find_package(CURL|JPEG|libuv|PNG|WebP|ICU … REQUIRED)`. **The asset exists; the amalgam does not.**
   2. **The build script's Windows dependency path is for a source tree**, not for a precompiled core: it
      derives the vcpkg directory from the *core's* path, so even a machine with vcpkg installed would be
      pointed at the wrong place. `uv`, `curl` and `z` are linked unconditionally.
