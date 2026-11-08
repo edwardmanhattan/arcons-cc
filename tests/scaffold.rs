@@ -105,3 +105,35 @@ fn only_tokens_names_a_colour_or_a_size() {
         offenders.join("\n  ")
     );
 }
+
+/// The view reads one clock: [`crate::ui::State::now`]. Nothing in a drawing or change-detection path
+/// may read the wall clock, because `poll`'s answer decides when Rune rebuilds the element tree — a
+/// real-clock comparison there makes *when* something is drawn depend on the machine's speed, which is
+/// how a capture stops being reproducible (#35: a two-second scene drew `4 s old` on a fast machine and
+/// `5 s old` on a slow one, and the two-run check caught it as flakiness rather than as a clock).
+///
+/// The one exception is the origin of the clock itself.
+#[test]
+fn the_view_reads_no_clock_but_the_frame_clock() {
+    for file in ["src/ui/mod.rs", "src/ui/markers.rs", "src/ui/unitcard.rs"] {
+        let source = read(file);
+        let code = match source.find("#[cfg(test)]") {
+            Some(at) => &source[..at],
+            None => &source[..],
+        };
+        for (number, line) in code.lines().enumerate() {
+            let code_only = !line.trim_start().starts_with("//");
+            let reads_clock = line.contains("Instant::now()") || line.contains("SystemTime::now()");
+            if !code_only || !reads_clock {
+                continue;
+            }
+            assert!(
+                line.contains("origin:"),
+                "{file}:{} reads the wall clock:\n  {line}\n  \
+                 Use `State::now()`. If this really is the clock's origin, it must be the `origin:` \
+                 line and nowhere else.",
+                number + 1
+            );
+        }
+    }
+}
