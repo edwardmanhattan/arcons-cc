@@ -38,6 +38,7 @@ OPTIONS:
     --tolerance N       how far one channel may differ, in 255ths (default 2)
     --budget N          how many pixels may differ at all (default 200)
     --tree PATH         the element tree to check too
+    --reconnect-after S drop the socket once, S seconds after connecting (the soak's deliberate gap)
     --self-check        check config, credential, login, REST, socket and map seed, and exit
                         with 0 ok · 1 config · 2 credential · 3 login · 4 REST · 5 socket · 6 seed
     --probe-map         render one map frame to a PNG with no window (needs --features map)
@@ -113,6 +114,9 @@ pub struct Args {
     pub tolerance: u8,
     /// How many pixels may differ at all before it is a different picture.
     pub budget: usize,
+    /// `--reconnect-after`: drop the socket once, this many seconds after connecting. A soak aid: the
+    /// reconnect path is otherwise only exercised by a network that happens to blink.
+    pub reconnect_after: Option<std::time::Duration>,
     /// `--tree`: the element tree to check beside the capture.
     pub tree: Option<PathBuf>,
     /// Arguments this binary does not own, handed to Rune so its headless tooling still works:
@@ -143,6 +147,7 @@ impl Args {
             // behaviour, and `docs/verification.md` says why the numbers are these.
             tolerance: 2,
             budget: 200,
+            reconnect_after: None,
             tree: None,
             passthrough: Vec::new(),
         };
@@ -177,6 +182,13 @@ impl Args {
                     args.budget = value
                         .parse()
                         .map_err(|_| "--budget is a number of pixels")?;
+                }
+                "--reconnect-after" => {
+                    let value = argv.next().ok_or("--reconnect-after needs seconds")?;
+                    let seconds: u64 = value
+                        .parse()
+                        .map_err(|_| "--reconnect-after is a whole number of seconds")?;
+                    args.reconnect_after = Some(std::time::Duration::from_secs(seconds));
                 }
                 "--tree" => {
                     let value = argv.next().ok_or("--tree needs a path")?;
@@ -542,6 +554,9 @@ pub struct Config {
     pub credentials_path: PathBuf,
     pub minos_source: Source,
     pub credential_source: Source,
+    /// A **soak aid**: drop the socket once, this long after connecting. Never set in a deployment; the
+    /// flag exists so the reconnect path can be exercised on purpose instead of by luck.
+    pub reconnect_after: Option<Duration>,
 }
 
 impl Config {
@@ -598,6 +613,7 @@ impl Config {
             credentials_path: credential_path,
             minos_source,
             credential_source,
+            reconnect_after: args.reconnect_after,
             minos,
         })
     }

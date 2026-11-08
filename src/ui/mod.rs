@@ -80,8 +80,8 @@ pub struct State {
     /// Set by a marker's press, so the map's press handler does not undo it in the same click.
     /// Reset at the top of every frame's poll.
     marker_press: bool,
-    /// When the last "socket" heartbeat was logged, on the frame clock.
-    last_report: f64,
+    /// When the last "socket" heartbeat was logged, on the wall's own uptime clock (ms).
+    last_report_ms: u64,
     /// Whether the wall is drawing symbols or pictures, latched with hysteresis on the frame's zoom
     /// (`units::mark`). One latch for the wall: the decision is about the zoom, not about a hull.
     pub range: crate::units::mark::Range,
@@ -136,7 +136,7 @@ impl Default for State {
             logical: 0.0,
             headless: false,
             marker_press: false,
-            last_report: 0.0,
+            last_report_ms: 0,
             range: crate::units::mark::Range::default(),
             sizes: std::collections::HashMap::new(),
             image_urls: std::collections::HashMap::new(),
@@ -735,9 +735,10 @@ fn start_socket(state: &mut State, wake: rune::Waker) {
         // not an error, and `--self-check` is where it is reported.
         return;
     };
-    state.live = Some(LiveThread::spawn(
+    state.live = Some(LiveThread::spawn_with(
         config.minos.clone(),
         config.socket_url.clone(),
+        config.reconnect_after,
         move || wake(),
     ));
     // A spawned actor is not a live wall: the header says "connecting" until the socket has proved
@@ -942,12 +943,20 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     // Every 30 s the log says what the wall has received, so "it is not moving" is a line in a file
     // rather than a report that ends in a relaunch (#28). Nothing here is drawn: the header already
     // carries the count, and a wall has no console.
-    if !state.headless && elapsed - state.last_report >= REPORT_EVERY.as_secs_f64() {
-        state.last_report = elapsed;
+    // On the wall's own clock, not the frame clock: a log line is about *time passing*, and a window the
+    // compositor is not drawing must still say once a minute that it is alive. Headless scenes skip it —
+    // there is no elapsed time there, only a virtual clock (`INV-11`).
+    let uptime_ms = crate::platform::since_start() as u64;
+    if !state.headless
+        && uptime_ms.saturating_sub(state.last_report_ms) >= REPORT_EVERY.as_millis() as u64
+    {
+        state.last_report_ms = uptime_ms;
         tracing::info!(
             fixes = state.fixes,
             units = state.picture.units().len(),
             link = ?state.link,
+            // A number or -1: a wall whose platform cannot say must say so, not invent a figure.
+            rss_mb = crate::platform::rss_mb().map(|mb| mb.round() as i64).unwrap_or(-1),
             "socket"
         );
     }
