@@ -112,13 +112,14 @@ pub fn layer(placed: &[Placed], frame: &Rendered, scale: f32, pictures: &Picture
     layer
 }
 
-/// Where the pictures come from: Rune's fetch-and-decode cache, and the URL each hull's photograph is
-/// at. Both are absent in a headless scene, where nothing may touch the network (`INV-11`).
+/// Where the pictures come from: one **decoded** handle per hull, owned by the state.
+///
+/// The state asks the cache once, when a hull's bytes arrive (`State::offer_picture`), and keeps the
+/// handle. Asking here instead — per marker per frame — both re-ran the decode (the cache keeps a weak
+/// entry per content hash, so a dropped handle expires it) and left `poll` unable to tell when a decode
+/// finished, which is how a wall ended up drawing symbols over fetched photographs (`#51`).
 pub struct Pictures<'a> {
-    pub cache: Option<&'a rune::ImageCache>,
-    /// Fetched bytes by hull. Rune has no HTTP client on native, so the wall fetches and the cache
-    /// decodes — and shares by content, which is what keeps a 25 pt picture from being decoded per frame.
-    pub bytes: &'a std::collections::HashMap<i64, std::sync::Arc<[u8]>>,
+    pub images: &'a std::collections::HashMap<i64, rune::Image>,
 }
 
 impl Pictures<'_> {
@@ -127,10 +128,10 @@ impl Pictures<'_> {
     /// **Not ready is not a failure**: a picture that has not arrived draws the symbol, because a hull
     /// that vanishes while its photograph downloads is worse than a hull drawn as what it is.
     fn ready(&self, id_unit: i64) -> Option<rune::Image> {
-        let cache = self.cache?;
-        let bytes = self.bytes.get(&id_unit)?;
-        let image = cache.load(bytes.clone());
-        image.is_ready().then_some(image)
+        self.images
+            .get(&id_unit)
+            .filter(|image| image.is_ready())
+            .cloned()
     }
 }
 

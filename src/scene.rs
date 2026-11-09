@@ -107,14 +107,13 @@ fn photo(state: &mut State) {
             beam_m: 16.0,
         },
     );
-    state
-        .image_bytes
-        .insert(PHOTO_UNIT, std::sync::Arc::from(PHOTO_FIXTURE));
     // **Decoded before the first frame.** A capture that raced the decoder would be a capture of a
     // symbol on some runs and a picture on others — the determinism `INV-11` promises, and exactly the
     // class of bug #35 was. Bounded, because a scene that hangs is worse than one that draws the symbol.
+    // The handle is kept by the state, exactly as the live wall keeps it when the bytes arrive.
     let bytes: std::sync::Arc<[u8]> = std::sync::Arc::from(PHOTO_FIXTURE);
     let image = state.image_cache().load(bytes);
+    state.pictures.insert(PHOTO_UNIT, image.clone());
     for _ in 0..400 {
         if image.is_ready() {
             break;
