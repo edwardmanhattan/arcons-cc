@@ -85,10 +85,16 @@ if [ "$FAST" -eq 1 ]; then
 elif have scripts/capture.sh; then
   run_scenes() {
     local ok=0
-    local scenes="${SCENES:-empty,picture,stale,card-open}"
     # The captures run the binary, not a test harness: build it here so `capture.sh` in CI and on a
     # laptop runs the same file.
     cargo build -q || return 1
+    # **The scenes come from the binary, not from a list in this script.** `photo` was added in #41 and
+    # never rendered by the gate, because this line named four scenes by hand — and it spent ten days
+    # drawing the NATO symbol over a golden that had been regenerated blind (`#54`). A scene that exists is
+    # a scene the gate renders; adding one without a golden is a red gate, which is the correct moment to
+    # make a human look at it.
+    local scenes="${SCENES:-$(./target/debug/arcons-cc --scenes | paste -sd, -)}"
+    [ -n "$scenes" ] || { echo "  the binary listed no scenes"; return 1; }
     for scene in ${scenes//,/ }; do
       scripts/capture.sh "$scene" || ok=1
       if have scripts/assert.sh; then

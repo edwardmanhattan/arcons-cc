@@ -41,6 +41,7 @@ OPTIONS:
     --reconnect-after S drop the socket once, S seconds after connecting (the soak's deliberate gap)
     --self-check        check config, credential, login, REST, socket and map seed, and exit
                         with 0 ok · 1 config · 2 credential · 3 login · 4 REST · 5 socket · 6 seed
+    --scenes            list the scenes a capture can render, one per line
     --probe-map         render one map frame to a PNG with no window (needs --features map)
     --out PATH          where --probe-map writes (default out/probe.png)
     --probe-at L,L,Z    the camera to probe (default the wall's start camera)
@@ -61,6 +62,10 @@ pub enum Command {
     SelfCheck,
     /// Render one map frame to a PNG with no window. CI's map witness.
     ProbeMap,
+    /// Print the names of the scenes a capture can render, one per line, and exit 0. `scripts/verify.sh`
+    /// reads this rather than keeping its own list: a scene the gate does not render is a scene nothing
+    /// checks, which is how `photo` spent ten days drawing the wrong thing behind a green gate (`#54`).
+    Scenes,
     /// Check a capture: pixels with numbers, and the element tree for structure.
     Assert,
     /// Compare two captures within a stated tolerance, and exit 1 if the difference is a change rather
@@ -195,6 +200,7 @@ impl Args {
                     args.tree = Some(PathBuf::from(value));
                 }
                 "--self-check" => args.command = Command::SelfCheck,
+                "--scenes" => args.command = Command::Scenes,
                 "--probe-map" => args.command = Command::ProbeMap,
                 "--out" => {
                     let value = argv

@@ -690,8 +690,9 @@ fn drain_card_reads(state: &mut State) -> bool {
 
 /// Apply one reply from the reads thread. Split out of the drain loop so a test can hand the state a reply
 /// without a backend: what a failure does to the *next* request is the behaviour `#53` is about, and it is
-/// not observable through a socket.
-fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool {
+/// not observable through a socket. The `photo` scene uses the same door, so a capture covers the route the
+/// wall actually takes for a picture (`#54`) instead of a shortcut past it.
+pub(crate) fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool {
     let mut changed = false;
     match reply {
         crate::data::Reply::Units(Ok(register)) => {
@@ -1386,6 +1387,9 @@ mod tests {
         let landed_at = landed_at.expect(
             "the fixture picture never decoded: the wall would draw a symbol forever (#51)",
         );
+        // The number the ticket asks for: the frame at which the picture became drawable. A frame count,
+        // not a duration, so it says the same thing on a slow machine and a fast one.
+        println!("the picture became drawable on frame {landed_at}");
         assert!(
             state.pictures[&8].is_ready(),
             "the state owns the handle, so the decode's result survives the frame that asked for it"

@@ -95,8 +95,10 @@ pub const PHOTO_UNIT: i64 = CARD_UNIT;
 pub const PHOTO_FIXTURE: &[u8] = include_bytes!("../fixtures/scenes/hull.png");
 
 /// The `photo` scene: close enough that a hull is its picture, with the dimensions and the bytes a real
-/// wall would have read. No network is touched: this is the same drawing path the live wall uses, fed from
-/// files instead of from Minos.
+/// wall would have read. No network is touched: this is the same **route** the live wall takes — the bytes
+/// arrive as a `Reply::Image` and go through `ui::apply_reply`, which is what offers them to the cache and
+/// schedules the frame that draws them (`#54`). A capture of this scene therefore covers bytes → cache →
+/// marker, not just the drawing half.
 fn photo(state: &mut State) {
     load(state);
     state.range = crate::units::mark::Range::Picture;
@@ -107,15 +109,21 @@ fn photo(state: &mut State) {
             beam_m: 16.0,
         },
     );
-    // **Decoded before the first frame.** A capture that raced the decoder would be a capture of a
-    // symbol on some runs and a picture on others — the determinism `INV-11` promises, and exactly the
-    // class of bug #35 was. Bounded, because a scene that hangs is worse than one that draws the symbol.
-    // The handle is kept by the state, exactly as the live wall keeps it when the bytes arrive.
-    let bytes: std::sync::Arc<[u8]> = std::sync::Arc::from(PHOTO_FIXTURE);
-    let image = state.image_cache().load(bytes);
-    state.pictures.insert(PHOTO_UNIT, image.clone());
+    // **The reply path, then decoded before the first frame.** The reply is the live wall's own door
+    // (`apply_reply` → `offer_picture`), so a regression in *that* — the bug #51 was — breaks a golden
+    // instead of a screenshot nobody takes. The wait is what makes it a capture: `INV-11` promises two
+    // runs identical, and a frame that raced the decoder would be a symbol on some runs and a ship on
+    // others (#35). Bounded, because a scene that hangs is worse than one that draws the symbol.
+    crate::ui::apply_reply(
+        state,
+        &crate::data::Reply::Image(PHOTO_UNIT, Ok(PHOTO_FIXTURE.to_vec())),
+    );
     for _ in 0..400 {
-        if image.is_ready() {
+        if state
+            .pictures
+            .get(&PHOTO_UNIT)
+            .is_some_and(|image| image.is_ready())
+        {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(2));

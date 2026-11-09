@@ -112,6 +112,22 @@ some runs and of a ship on others — the same class of bug as a wall-clock redr
 waits for `Image::is_ready()` with a bound, and a picture that cannot decode draws the symbol rather
 than hanging the capture.
 
+`photo` also goes through the **reply path** (`ui::apply_reply` with a `Reply::Image`), not a shortcut
+into the cache: a capture then covers bytes → cache → marker, which is the route a wall takes (#54).
+
+**The gate renders every scene the binary lists**, and the list comes from the binary:
+
+```sh
+cargo run -- --scenes            # empty · picture · stale · card-open · photo
+scripts/verify.sh                # renders and asserts each one
+```
+
+That is not a convenience. Until #54 the list was written by hand in `scripts/verify.sh`, and it
+omitted `photo` — so a scene added in #41 was never captured, its golden was regenerated blind in #42
+(a NATO symbol where the ship belonged), and the gate stayed green for ten days while the scene drew the
+wrong thing. A scene that exists is a scene the gate renders; a new one without a golden is a red gate,
+which is the right moment to make a human look at it.
+
 The two checks do different jobs, and neither substitutes for the other:
 
 - **The golden** answers *"did anything change?"* — a tone, a gap, a moved label. It is bytes, so it
