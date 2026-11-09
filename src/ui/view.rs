@@ -83,6 +83,32 @@ pub fn synthetic_frame(
     }
 }
 
+/// A draggable border between two panes: the split it belongs to, and where the line is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Border {
+    /// A pane on the `a` side, and one on the `b` side. The pair names the split exactly — an id alone
+    /// cannot, because a pane has a border on each of its sides.
+    pub a: ViewId,
+    pub b: ViewId,
+    pub dir: Dir,
+    /// The line's own coordinate along the split axis.
+    pub at: f32,
+    /// The split's length along that axis, and where it starts, so a pointer reads as a ratio.
+    pub start: f32,
+    pub span: f32,
+}
+
+impl Border {
+    /// The ratio a pointer asks for. Clamped to `(0, 1)`: the minimum pane size is the rectangle
+    /// function's job, and a ratio of exactly 0 or 1 would have no side to grow back into.
+    pub fn ratio_for(&self, pointer: f32) -> f32 {
+        if self.span <= 0.0 {
+            return 0.5;
+        }
+        ((pointer - self.start) / self.span).clamp(0.05, 0.95)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum Node {
     Leaf(ViewId),
@@ -187,12 +213,37 @@ impl Layout {
         true
     }
 
-    /// Set a split's ratio directly, for the border drag. Which split is a property of the two panes
-    /// being dragged apart, so the id given is either side and the split is the one that contains it.
-    pub fn set_ratio(&mut self, id: ViewId, ratio: f32) -> bool {
+    /// Set the ratio of the split a border belongs to — the drag on the border between two panes.
+    ///
+    /// The border names both sides, because an id names only one: with three panes, "the border at
+    /// pane 2" is ambiguous between its left and its right edge, and picking the wrong one drags a
+    /// line the operator is not holding.
+    pub fn set_ratio(&mut self, border: &Border, ratio: f32) -> bool {
         let mut set = false;
-        self.root = set_ratio_on(self.root.clone(), id, ratio, &mut set);
+        self.root = set_ratio_on(self.root.clone(), border, ratio, &mut set);
         set
+    }
+
+    /// The border nearest a point in the viewport's points, if the point is within `grip / 2` of it.
+    ///
+    /// The **deepest** border wins: in a three-pane layout the split between two panes and the outer
+    /// split can be a pixel apart at a corner, and the one the operator sees under the pointer is the
+    /// inner one.
+    pub fn border_at(&self, viewport: Viewport, at: (f32, f32), grip: f32) -> Option<Border> {
+        let mut found = None;
+        find_border(
+            &self.root,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: viewport.w as f32,
+                h: viewport.h as f32,
+            },
+            at,
+            grip.max(1.0) / 2.0,
+            &mut found,
+        );
+        found
     }
 
     /// The rectangles, one per pane, **covering the viewport exactly**: no gaps between panes, no
@@ -284,7 +335,7 @@ fn remove_leaf(node: Node, target: ViewId, removed: &mut bool) -> Node {
     }
 }
 
-fn set_ratio_on(node: Node, id: ViewId, ratio: f32, set: &mut bool) -> Node {
+fn set_ratio_on(node: Node, border: &Border, ratio: f32, set: &mut bool) -> Node {
     match node {
         Node::Leaf(leaf) => Node::Leaf(leaf),
         Node::Split {
@@ -293,19 +344,7 @@ fn set_ratio_on(node: Node, id: ViewId, ratio: f32, set: &mut bool) -> Node {
             a,
             b,
         } => {
-            if contains_leaf(&a, id) || contains_leaf(&b, id) {
-                // The **innermost** split that holds the pane and its neighbour: a drag on a border
-                // moves the border it touched, not an ancestor's.
-                let nested = contains_leaf(&a, id) && !matches!(*a, Node::Leaf(_))
-                    || contains_leaf(&b, id) && !matches!(*b, Node::Leaf(_));
-                if nested {
-                    return Node::Split {
-                        dir,
-                        ratio: current,
-                        a: Box::new(set_ratio_on(*a, id, ratio, set)),
-                        b: Box::new(set_ratio_on(*b, id, ratio, set)),
-                    };
-                }
+            if contains_leaf(&a, border.a) && contains_leaf(&b, border.b) {
                 *set = true;
                 let clamped = if ratio.is_finite() {
                     ratio.clamp(0.05, 0.95)
@@ -315,17 +354,71 @@ fn set_ratio_on(node: Node, id: ViewId, ratio: f32, set: &mut bool) -> Node {
                 return Node::Split {
                     dir,
                     ratio: clamped,
-                    a: Box::new(*a),
-                    b: Box::new(*b),
+                    a,
+                    b,
                 };
             }
             Node::Split {
                 dir,
                 ratio: current,
-                a: Box::new(set_ratio_on(*a, id, ratio, set)),
-                b: Box::new(set_ratio_on(*b, id, ratio, set)),
+                a: Box::new(set_ratio_on(*a, border, ratio, set)),
+                b: Box::new(set_ratio_on(*b, border, ratio, set)),
             }
         }
+    }
+}
+
+/// Depth-first, so the last border found at a point is the innermost one.
+fn find_border(node: &Node, rect: Rect, at: (f32, f32), reach: f32, found: &mut Option<Border>) {
+    let Node::Split { dir, ratio, a, b } = node else {
+        return;
+    };
+    let inside = at.0 >= rect.x - reach
+        && at.0 <= rect.right() + reach
+        && at.1 >= rect.y - reach
+        && at.1 <= rect.bottom() + reach;
+    if !inside {
+        return;
+    }
+    let (a_rect, b_rect) = split_rects(*dir, *ratio, rect);
+    find_border(a, a_rect, at, reach, found);
+    find_border(b, b_rect, at, reach, found);
+    // `at`/`start`/`span` are the split's own axis — what a ratio is measured along. The line's
+    // *extent* is the other axis, and only the hit test uses it.
+    let (line, start, span) = match dir {
+        Dir::Horizontal => (b_rect.x.min(rect.right()), rect.x, rect.w),
+        Dir::Vertical => (b_rect.y.min(rect.bottom()), rect.y, rect.h),
+    };
+    let (along_from, along_to) = match dir {
+        Dir::Horizontal => (rect.y, rect.bottom()),
+        Dir::Vertical => (rect.x, rect.right()),
+    };
+    let across = match dir {
+        Dir::Horizontal => at.0,
+        Dir::Vertical => at.1,
+    };
+    let along = match dir {
+        Dir::Horizontal => at.1,
+        Dir::Vertical => at.0,
+    };
+    let on_line = (across - line).abs() <= reach;
+    let on_span = along >= along_from - reach && along <= along_to + reach;
+    if on_line && on_span {
+        *found = Some(Border {
+            a: first_leaf(a),
+            b: first_leaf(b),
+            dir: *dir,
+            at: line,
+            start,
+            span,
+        });
+    }
+}
+
+fn first_leaf(node: &Node) -> ViewId {
+    match node {
+        Node::Leaf(id) => *id,
+        Node::Split { a, .. } => first_leaf(a),
     }
 }
 
@@ -339,34 +432,40 @@ fn contains_leaf(node: &Node, id: ViewId) -> bool {
 fn walk_rects(node: &Node, rect: Rect, out: &mut Vec<(ViewId, Rect)>) {
     match node {
         Node::Leaf(id) => out.push((*id, rect)),
-        Node::Split { dir, ratio, a, b } => match dir {
-            Dir::Horizontal => {
-                let a_w = split_length(rect.w, *ratio);
-                walk_rects(a, Rect { w: a_w, ..rect }, out);
-                walk_rects(
-                    b,
-                    Rect {
-                        x: rect.x + a_w,
-                        w: (rect.w - a_w).max(0.0),
-                        ..rect
-                    },
-                    out,
-                );
-            }
-            Dir::Vertical => {
-                let a_h = split_length(rect.h, *ratio);
-                walk_rects(a, Rect { h: a_h, ..rect }, out);
-                walk_rects(
-                    b,
-                    Rect {
-                        y: rect.y + a_h,
-                        h: (rect.h - a_h).max(0.0),
-                        ..rect
-                    },
-                    out,
-                );
-            }
-        },
+        Node::Split { dir, ratio, a, b } => {
+            let (a_rect, b_rect) = split_rects(*dir, *ratio, rect);
+            walk_rects(a, a_rect, out);
+            walk_rects(b, b_rect, out);
+        }
+    }
+}
+
+/// The two rectangles a split makes of one. **The only place the ratio becomes pixels**, so the drawn
+/// panes, the border a drag grabs and a capture's assertion cannot disagree about where a pane is.
+fn split_rects(dir: Dir, ratio: f32, rect: Rect) -> (Rect, Rect) {
+    match dir {
+        Dir::Horizontal => {
+            let a_w = split_length(rect.w, ratio);
+            (
+                Rect { w: a_w, ..rect },
+                Rect {
+                    x: rect.x + a_w,
+                    w: (rect.w - a_w).max(0.0),
+                    ..rect
+                },
+            )
+        }
+        Dir::Vertical => {
+            let a_h = split_length(rect.h, ratio);
+            (
+                Rect { h: a_h, ..rect },
+                Rect {
+                    y: rect.y + a_h,
+                    h: (rect.h - a_h).max(0.0),
+                    ..rect
+                },
+            )
+        }
     }
 }
 
@@ -430,8 +529,15 @@ mod tests {
                     layout.close(target);
                 }
                 _ => {
-                    let ratio = rng.between(0.0, 1.0) as f32;
-                    layout.set_ratio(target, ratio);
+                    // A drag on a border: found the way the gesture finds it, from a point on the line.
+                    let point = (
+                        rng.between(1.0, 1279.0) as f32,
+                        rng.between(1.0, 719.0) as f32,
+                    );
+                    if let Some(border) = layout.border_at(viewport(), point, 400.0) {
+                        let ratio = rng.between(0.0, 1.0) as f32;
+                        layout.set_ratio(&border, ratio);
+                    }
                 }
             }
         }
@@ -558,7 +664,12 @@ mod tests {
         let first = layout.ids()[0];
         let second = layout.split(first, Dir::Horizontal).unwrap();
         // Drag the border all the way: the ratio is clamped, and the pane keeps a usable width.
-        assert!(layout.set_ratio(second, 0.0));
+        let border = layout
+            .border_at(viewport(), (639.0, 360.0), tokens::PANE_GRIP)
+            .expect("the border between the two panes");
+        assert_eq!((border.a, border.b), (first, second));
+        assert_eq!(border.dir, Dir::Horizontal);
+        assert!(layout.set_ratio(&border, 0.0));
         let rects = layout.rects(viewport());
         let (narrow, other) = if rects[0].0 == first {
             (rects[0].1, rects[1].1)
@@ -605,6 +716,60 @@ mod tests {
             Dir::Vertical,
             "a tall pane splits up/down"
         );
+    }
+
+    /// #69: the border is grabbed on the line, and only there — a drag that starts a few pixels away
+    /// pans the map under it, which is what an operator expects from a grip that is 6 pt wide.
+    #[test]
+    fn a_border_is_grabbed_only_on_the_line() {
+        let mut layout = Layout::single();
+        let first = layout.ids()[0];
+        let second = layout.split(first, Dir::Horizontal).unwrap();
+        let grip = tokens::PANE_GRIP;
+
+        let on = layout
+            .border_at(viewport(), (640.0, 400.0), grip)
+            .expect("the border at the middle of a two-pane layout");
+        assert_eq!((on.a, on.b), (first, second));
+        assert_eq!(on.dir, Dir::Horizontal);
+        assert!((on.at - 640.0).abs() < 0.001, "the line is at {0}", on.at);
+        // Half a grip either side is still the border; twice that is the map.
+        assert!(
+            layout
+                .border_at(viewport(), (640.0 + grip / 2.0, 400.0), grip)
+                .is_some()
+        );
+        assert!(
+            layout
+                .border_at(viewport(), (640.0 - grip / 2.0, 400.0), grip)
+                .is_some()
+        );
+        assert!(
+            layout
+                .border_at(viewport(), (640.0 + grip, 400.0), grip)
+                .is_none(),
+            "a point a grip away from the line is not on it"
+        );
+        assert!(layout.border_at(viewport(), (300.0, 400.0), grip).is_none());
+
+        // A point on the line asks for the ratio it points at, clamped so the split can always grow
+        // back: 0 and 1 are not ratios, they are a pane that has been deleted.
+        assert!((on.ratio_for(640.0) - 0.5).abs() < 1e-6);
+        assert!((on.ratio_for(768.0) - 0.6).abs() < 1e-3);
+        assert_eq!(on.ratio_for(0.0), 0.05, "clamped, not zero");
+        assert_eq!(on.ratio_for(5000.0), 0.95);
+
+        // Three panes: the deepest border under the pointer wins, so the one the operator sees is the
+        // one that moves.
+        let mut three = Layout::single();
+        let left = three.ids()[0];
+        let right = three.split(left, Dir::Horizontal).unwrap();
+        let bottom = three.split(right, Dir::Vertical).unwrap();
+        let deepest = three
+            .border_at(viewport(), (960.0, 360.0), 8.0)
+            .expect("the border inside the right half");
+        assert_eq!(deepest.dir, Dir::Vertical, "{deepest:?}");
+        assert_eq!((deepest.a, deepest.b), (right, bottom));
     }
 
     #[test]

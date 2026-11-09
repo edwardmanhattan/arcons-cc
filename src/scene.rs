@@ -184,7 +184,24 @@ fn panes(state: &mut State) {
     if let Some(id) = ids.get(PANES_FOCUSED) {
         state.layout.focus(*id);
     }
+    // **One border dragged** (#69), through the two calls the gesture makes: find the border under the
+    // pointer, ask it for the ratio the pointer means. The root split is dragged from half to 58%, so
+    // the capture is of a layout someone moved rather than of a layout a constructor produced — and
+    // `assert.sh` projects against the same `Layout::rects`, so a drag that moved a hull out of its
+    // pane fails there.
+    let viewport = state.pane_viewport();
+    let middle = (viewport.w as f32 / 2.0, viewport.h as f32 / 2.0);
+    if let Some(border) = state
+        .layout
+        .border_at(viewport, middle, crate::ui::tokens::PANE_GRIP)
+    {
+        let pointer = border.start + border.span * PANES_DRAGGED;
+        state.layout.set_ratio(&border, border.ratio_for(pointer));
+    }
 }
+
+/// Where the `panes` scene drags its first border to: the share of the panel the first pane keeps.
+pub const PANES_DRAGGED: f32 = 0.58;
 
 /// One scene: a name and the function that builds its state.
 pub type Scene = (&'static str, fn(&mut State));

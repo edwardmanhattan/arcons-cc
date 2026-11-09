@@ -560,14 +560,19 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 let top = (origin_y + f64::from(rect.y) + 10.0).max(0.0) as u32;
                 let bottom =
                     ((origin_y + f64::from(rect.y + rect.h) - 10.0) as u32).min(image.height);
-                let mut luma: Vec<u8> = (top..bottom)
-                    .map(|y| image.luma(x.min(image.width - 1), y))
-                    .collect();
-                if luma.is_empty() {
-                    continue;
+                // Three columns, and the brightest of their medians: the panel this capture has is
+                // found by its fill colour, so its rectangle can be a pixel off the one the view laid
+                // out — a single column would then miss a one-pixel line.
+                let mut best = 0;
+                for column in x.saturating_sub(1)..=(x + 1).min(image.width - 1) {
+                    let mut luma: Vec<u8> = (top..bottom).map(|y| image.luma(column, y)).collect();
+                    if luma.is_empty() {
+                        continue;
+                    }
+                    luma.sort_unstable();
+                    best = best.max(luma[luma.len() / 2]);
                 }
-                luma.sort_unstable();
-                edges.push((*id, luma[luma.len() / 2]));
+                edges.push((*id, best));
             }
             let Some((_, focused_luma)) = edges.iter().find(|(id, _)| *id == focused) else {
                 failures.push(format!("panes: the focused pane {focused} has no edge"));
