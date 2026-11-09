@@ -157,6 +157,15 @@ The empty cases, each with its drawn answer, because "nothing is drawn" is a lie
 | stale | the same symbol, dimmed — status is ours, not the standard's |
 | backfilled | history styling, never `present` (`INV-03`) |
 
+The table is about **symbols**. A **picture** is different in one way that matters: its orientation is a
+measurement, so it cannot be left to a default. The backend stores every hull photograph **bow-east**
+(`GET /units/8` is 2167 × 280, the flight deck and the bow ramp at the right edge; `/units/5` matches),
+so the drawn angle is `course − IMAGE_BOW_DEGREES` (`units::mark`, 90° — [#63](https://github.com/edwardmanhattan/arcons-cc/issues/63)).
+A hull steaming east draws the image exactly as stored, a hull steaming north is turned a quarter to
+port, and **no course** lands at −90° — bow north, the way a ship icon is drawn, which is not a claim
+that the hull is steaming north. Before #63 the constant did not exist and a hull steaming north was
+drawn broadside.
+
 ## 8. Recommendation
 
 1. **Draw one frame, one icon.** Affiliation unknown; dimension land/sea surface; status ours; icon

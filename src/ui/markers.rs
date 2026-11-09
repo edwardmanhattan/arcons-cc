@@ -153,7 +153,9 @@ fn glyph(marker: &Placed, scale: f64, pictures: &Pictures) -> El {
                     .key(format!("marker-{}", marker.id_unit))
                     .size(length_pt, beam_pt)
                     .pixels_fit(image.pixels(), rune::SurfaceFit::Fill)
-                    .rotate(rotation.unwrap_or(0.0).to_radians());
+                    // `rotation` is already `course − IMAGE_BOW_DEGREES`: the picture's stored bow is
+                    // east, so the turn belongs to `units::mark` and nothing here has a default (#63).
+                    .rotate(rotation.to_radians());
                 let id_unit = marker.id_unit;
                 let mut target = el()
                     .key(format!("hit-{}", id_unit))
