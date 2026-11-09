@@ -38,6 +38,9 @@ pub struct State {
     /// The camera the operator is holding. The map thread renders it; markers project against the
     /// camera of the frame on screen instead (`INV-04`), which is not the same number mid-gesture.
     pub camera: Camera,
+    /// Whether the first map frame's camera has been reported. One log line per process, so a wall showing
+    /// the wrong sea leaves a trace rather than a screenshot to argue with (`#56`).
+    pub camera_reported: bool,
     /// The frame the map last handed over: its camera and size are what markers project against.
     /// `None` until the first frame, and always `None` without `--features map`.
     pub frame: Option<crate::map::geometry::Rendered>,
@@ -167,6 +170,7 @@ impl Default for State {
             pictures: std::collections::HashMap::new(),
             pictures_pending: std::collections::HashSet::new(),
             asked_images: std::collections::HashSet::new(),
+            camera_reported: false,
             register_attempts: 0,
             register_retry_at: None,
             image_retries: std::collections::HashMap::new(),
@@ -958,7 +962,31 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
 
     // "Start to first map frame" is a number in the log rather than a claim in a ticket. Without the
     // engine there is no map frame, so the first view pass is what gets timed.
-    if state.frame.is_some() {
+    if let Some(frame) = state.frame {
+        // **The camera the map actually rendered, once.** `frame.camera` is what the map thread drew and
+        // what markers project against (`INV-04`); `state.camera` is what the configuration asked for. They
+        // disagreeing is a wall showing the wrong sea — which is what #56 was filed for and could not be
+        // reproduced, so the next report gets a line to look at instead of a screenshot to argue with.
+        if !state.headless && !state.camera_reported {
+            state.camera_reported = true;
+            tracing::info!(
+                lat = frame.camera.center.0,
+                lon = frame.camera.center.1,
+                zoom = frame.camera.zoom,
+                width = frame.width,
+                height = frame.height,
+                asked_lat = state.camera.center.0,
+                asked_lon = state.camera.center.1,
+                asked_zoom = state.camera.zoom,
+                "the map's first frame"
+            );
+            if frame.camera != state.camera {
+                tracing::warn!(
+                    "the map drew a different camera than the one asked for: markers project against the \
+                     drawn frame, so this is the picture the wall shows (#56)"
+                );
+            }
+        }
         crate::platform::first_frame("first map frame");
     } else if cfg!(not(feature = "map")) {
         crate::platform::first_frame("first frame (no map engine)");
