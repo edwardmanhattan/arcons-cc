@@ -175,6 +175,12 @@ fn main() -> ExitCode {
 
     match args.command {
         config::Command::SelfCheck => self_check(&args),
+        config::Command::Scenes => {
+            for scene in arcons_cc::scene::names() {
+                println!("{scene}");
+            }
+            ExitCode::SUCCESS
+        }
         config::Command::Assert => assert_capture(&args),
         config::Command::Compare => compare_captures(&args),
         config::Command::ProbeMap => probe_map(
