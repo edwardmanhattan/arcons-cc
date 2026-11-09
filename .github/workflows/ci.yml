@@ -72,14 +72,51 @@ jobs:
       - name: cmake, for the C++ cores that build from source
         run: cmake --version
 
+      # #60: the Metal core is 378 MB from GitHub's release CDN, and on 2026-11-09 that CDN answered 504
+      # three times in a row — which made this *report* flicker for a reason that has nothing to do with the
+      # crate. So the asset is fetched once per pinned revision and cached by revision, and the build script
+      # is handed the local copy (`MLN_CORE_LIBRARY_PATH`), which it already supports: no download inside
+      # `cargo`, no CDN on the critical path, and a warm run skips both.
+      - name: the Metal core, by revision
+        id: core
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/arcons-cc/mln
+          key: mln-core-core-a33d3f00fb9dbf9117ce18edd799aa0ca5bcce5b-macos-arm64-metal-v1
+
+      - name: fetch the Metal core when the cache is cold
+        if: runner.os == 'macOS' && steps.core.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          REV: core-a33d3f00fb9dbf9117ce18edd799aa0ca5bcce5b
+        run: |
+          set -euo pipefail
+          dir="$HOME/.cache/arcons-cc/mln"
+          mkdir -p "$dir"
+          base="https://github.com/maplibre/maplibre-native/releases/download/$REV"
+          # A 504 is the CDN having a bad minute, not a missing asset: retry before failing.
+          curl -fL --retry 5 --retry-all-errors --retry-delay 5 \
+            -o "$dir/core.a" "$base/libmaplibre-native-core-amalgam-macos-arm64-metal.a"
+          curl -fL --retry 5 --retry-all-errors --retry-delay 5 \
+            -o "$dir/headers.tar.gz" "$base/maplibre-native-headers.tar.gz"
+          ls -l "$dir"
+
       - name: cargo check, map engine
         id: map
         run: |
           set -o pipefail
+          if [ -f "$HOME/.cache/arcons-cc/mln/core.a" ]; then
+            export MLN_CORE_LIBRARY_PATH="$HOME/.cache/arcons-cc/mln/core.a"
+            export MLN_CORE_LIBRARY_HEADERS_PATH="$HOME/.cache/arcons-cc/mln/headers.tar.gz"
+            echo "using the cached core at $MLN_CORE_LIBRARY_PATH"
+          fi
           cargo check --features map --all-targets --locked 2>&1 | tee map.log
         shell: bash
         env:
-          # The precompiled core, when the platform has one: 378 MB of download beats an hour of C++.
+          # The precompiled core, when the platform has one: 378 MB of download beats an hour of C++. On
+          # Windows this still panics with the documented `unsupported target` (#46), which is the point of
+          # the job.
           MLN_PRECOMPILE: "1"
 
       # #46: upstream *does* publish Windows cores for the pinned revision —
