@@ -19,7 +19,7 @@ from a fixed clock, so a capture is reproducible and a test can count what is in
 `rune` (github.com/anomalyco/rune), **pinned by rev**:
 
 ```
-rune = "7ead7d63fcf6f9dd9669385a8b90e2ae80015d7b"
+rune = "46cfcd64cf348ea9391c5db01f0d488c548d74d9"
 ```
 
 Why:
@@ -39,6 +39,36 @@ large — the build pulls a few hundred crates and wants Vulkan.
 The pin is by **rev, never `branch = "dev"`**: `dev` moves, and a wall display that silently changes
 renderer is not verifiable. `tests/doc_claims.rs` (#12) will fail if this ADR and `Cargo.toml`
 disagree about the rev.
+
+### The rev, and what we now take from upstream (#65)
+
+Was `7ead7d63fcf6f9dd9669385a8b90e2ae80015d7b` (2026-11-06); now
+`46cfcd64cf348ea9391c5db01f0d488c548d74d9` (2026-11-09), 159 commits on. Nothing in `src/` changed for
+the bump: these are things we **intend to use**, not things this commit switches on. Each is a
+sentence, because an ADR that lists an API without saying what it buys is a changelog.
+
+- **`Tx::clock` / `Tx::wake_at`** — timers are events, so the 1 Hz keep-alive (#43) becomes a wake
+  rather than a thread, and the Multi View render budget (#64) can be scheduled per pane without a
+  thread per pane. Not adopted yet: today's threads are the working version, and a rewrite belongs in
+  those tickets.
+- **Focus as an API** (`Tx::focus`, `El::autofocus`, `ModalFocus`, `El::focus_fill`) — "the active
+  pane" with a focus ring is upstream's model instead of our own key routing, which is what #64's
+  panes need and what `card-open` fakes today.
+- **`rune-kit::shell::TabStrip` / `TabDragState`**, with `Reorder` and `El::matched_crop` — drag to
+  reorder with the incoming gap drawn where the dragged thing will land. That is #64's drag-to-swap,
+  already written and public upstream; we write the adoption, not the interaction.
+- Smaller, and the reason `El` is worth re-measuring upstream: `El` is 192 bytes with in-place
+  builders (#337), popup tooltips, scroll modes and RTL. None of it is load-bearing for v0.1.
+
+The bump is not free, and the frame budget is where it shows. **`INV-12`'s raw CPU went up ~7–10%**
+(4.09–4.12 → 4.38–4.76 ms per frame with 200 markers, this laptop, Intel iGPU), while the
+**reference-machine number went down** (4.23–4.32 → 3.77–4.12 ms) because the fixed calibration
+workload upstream got ~20% more expensive in the same bump (machine factor ×0.95–0.97 → ×1.14–1.18).
+So the normalised budget — the one the gate enforces — improved, and the honest reading is "our
+per-marker work is now a smaller share of a Rune frame", not "Rune frames got cheaper". The ratio
+assumes the reference workload is a constant; a renderer bump is exactly when it is not. #48's design
+still leaves 3.8–4.1 ms against a limit of 8, so the budget stays where it is; the numbers in this
+paragraph are the new measurement.
 
 ## Decision 2 — MapLibre Native (`maplibre_native`)
 
