@@ -9,8 +9,10 @@
 //! cargo run --features map --example map_frame_cost 1920x1080
 //! ```
 //!
-//! One size per process on purpose: a second `LiveMap` in the same process crashes glslang, which is
-//! a fact about the engine rather than something this harness should paper over.
+//! One size per process: that is how these numbers were taken, not a limit of the engine — four live
+//! maps in one process load and render (`examples/map_panes`, and `docs/research/multi-view.md`
+//! measures them). The old note here said a second `LiveMap` crashed glslang; that was the from-source
+//! `-O2` build of #26, not this route.
 //!
 //! Both `main`s below: without the feature the example builds and says so rather than failing
 //! `cargo clippy --all-targets`, which the gate runs without `map`.
