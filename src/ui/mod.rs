@@ -109,6 +109,17 @@ pub struct State {
     pub pictures_pending: std::collections::HashSet<i64>,
     /// Hulls whose picture has been asked for, so a missing one is not re-asked every frame.
     pub asked_images: std::collections::HashSet<i64>,
+    /// How many register reads have failed in a row. Never reset by the passage of time: a wall that cannot
+    /// read `/units` should be able to say how long it has not been able to.
+    pub register_attempts: u32,
+    /// When a failed read may be asked for again, on the wall's own clock. Absent means "no waiting".
+    ///
+    /// A refusal used to be permanent: `asked_register` and `asked_images` were set before the request and
+    /// never cleared, so one `403`, one expired presigned URL or one dropped response meant no pictures for
+    /// the life of the process, with nothing said (`#53`).
+    pub register_retry_at: Option<std::time::Instant>,
+    /// Pictures that failed, with their attempt count and when to ask again.
+    pub image_retries: std::collections::HashMap<i64, Retry>,
     /// How many hulls the fleet register returned, across every page it took. The heartbeat repeats it so a
     /// truncated register is visible on a wall (`#52`) — `registered=25` next to `units=127` is the alarm.
     pub registered: usize,
@@ -156,6 +167,9 @@ impl Default for State {
             pictures: std::collections::HashMap::new(),
             pictures_pending: std::collections::HashSet::new(),
             asked_images: std::collections::HashSet::new(),
+            register_attempts: 0,
+            register_retry_at: None,
+            image_retries: std::collections::HashMap::new(),
             registered: 0,
         }
     }
@@ -629,44 +643,7 @@ fn drain_card_reads(state: &mut State) -> bool {
     // not anything is selected, and they are what a picture is scaled from.
     let mut changed = false;
     for reply in &replies {
-        match reply {
-            crate::data::Reply::Units(Ok(register)) => {
-                state.image_urls.clear();
-                state.registered = register.units.len();
-                tracing::info!(
-                    rows = register.units.len(),
-                    pages = register.pages,
-                    total = register.total_records,
-                    truncated = register.truncated,
-                    "the fleet register was read"
-                );
-                for row in &register.units {
-                    if let Some(url) = &row.image_url {
-                        state.image_urls.insert(row.id, url.clone());
-                    }
-                }
-                changed = true;
-            }
-            crate::data::Reply::Image(id_unit, Ok(bytes)) => {
-                state.offer_picture(*id_unit, std::sync::Arc::from(bytes.as_slice()));
-                changed = true;
-            }
-            crate::data::Reply::Image(id_unit, Err(error)) => {
-                // A picture that cannot be fetched draws the symbol, and says why once.
-                eprintln!("arcons-cc: the picture for hull {id_unit} did not arrive: {error}");
-            }
-            crate::data::Reply::Units(Err(error)) => {
-                eprintln!("arcons-cc: the fleet register did not read: {error}");
-            }
-            crate::data::Reply::Specifications(id, Ok(versions)) => {
-                // The newest version is the one in force: the list is newest first.
-                if let Some(size) = versions.first().and_then(size_of) {
-                    state.sizes.insert(*id, size);
-                    changed = true;
-                }
-            }
-            _ => {}
-        }
+        changed |= apply_reply(state, reply);
     }
     let replies: Vec<crate::data::Reply> = replies
         .into_iter()
@@ -707,6 +684,93 @@ fn drain_card_reads(state: &mut State) -> bool {
             }
             _ => {}
         }
+    }
+    changed
+}
+
+/// Apply one reply from the reads thread. Split out of the drain loop so a test can hand the state a reply
+/// without a backend: what a failure does to the *next* request is the behaviour `#53` is about, and it is
+/// not observable through a socket.
+fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool {
+    let mut changed = false;
+    match reply {
+        crate::data::Reply::Units(Ok(register)) => {
+            state.image_urls.clear();
+            state.registered = register.units.len();
+            tracing::info!(
+                rows = register.units.len(),
+                pages = register.pages,
+                total = register.total_records,
+                truncated = register.truncated,
+                "the fleet register was read"
+            );
+            for row in &register.units {
+                if let Some(url) = &row.image_url {
+                    state.image_urls.insert(row.id, url.clone());
+                }
+            }
+            // The register is fresh, so every picture that gave up may try again: its URL may have
+            // been the expired thing, and only a re-read can hand it a new one.
+            state.image_retries.clear();
+            state.register_retry_at = None;
+            state.register_attempts = 0;
+            changed = true;
+        }
+        crate::data::Reply::Image(id_unit, Ok(bytes)) => {
+            state.offer_picture(*id_unit, std::sync::Arc::from(bytes.as_slice()));
+            changed = true;
+        }
+        crate::data::Reply::Image(id_unit, Err(error)) => {
+            // A picture that cannot be fetched draws the symbol, says why **in the log**, and is asked
+            // for again after a growing wait. The old code printed to stderr — which a wall with
+            // `--log-file` and no console never keeps — and never retried (#53).
+            let attempts = state
+                .image_retries
+                .get(id_unit)
+                .map(|retry| retry.attempts)
+                .unwrap_or(0)
+                .saturating_add(1);
+            let wait = retry_after(attempts);
+            state.image_retries.insert(
+                *id_unit,
+                Retry {
+                    attempts,
+                    at: state.now() + wait,
+                },
+            );
+            state.asked_images.remove(id_unit);
+            tracing::warn!(
+                hull = id_unit,
+                attempt = attempts,
+                retry_in_s = wait.as_secs(),
+                error = %error,
+                "the picture did not arrive: the symbol is drawn until it does"
+            );
+            // A presigned URL expires; the only way to see a fresh one is to re-read the register.
+            state.asked_register = false;
+        }
+        crate::data::Reply::Units(Err(error)) => {
+            state.register_attempts = state.register_attempts.saturating_add(1);
+            let attempts = state.register_attempts;
+            let wait = REGISTER_RETRY;
+            state.asked_register = false;
+            state.register_retry_at = Some(state.now() + wait);
+            tracing::warn!(
+                attempts,
+                retry_in_s = wait.as_secs(),
+                endpoint = "GET /units",
+                error = %error,
+                "the fleet register did not read: no hull can draw its picture until it does"
+            );
+        }
+        crate::data::Reply::Specifications(id, Ok(versions)) => {
+            // The newest version is the one in force: the list is newest first.
+            if let Some(size) = versions.first().and_then(size_of) {
+                state.sizes.insert(*id, size);
+                changed = true;
+            }
+        }
+        _ => {}
     }
     changed
 }
@@ -927,7 +991,7 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     if state.range == crate::units::mark::Range::Picture
         && let Some(backend) = &state.backend
     {
-        if !state.asked_register {
+        if !state.asked_register && due(state.now(), state.register_retry_at) {
             state.asked_register = true;
             backend.request(crate::data::Command::Units);
         }
@@ -940,6 +1004,10 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
             if unit.position.is_some()
                 && !state.pictures.contains_key(&id)
                 && !state.asked_images.contains(&id)
+                && due(
+                    state.now(),
+                    state.image_retries.get(&id).map(|retry| retry.at),
+                )
                 && let Some(url) = state.image_urls.get(&id).cloned()
             {
                 state.asked_images.insert(id);
@@ -1004,6 +1072,39 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     changed
 }
 
+/// A picture that failed, and when it may be asked for again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Retry {
+    /// How many times **this** picture has failed. The first failure is 1, not 0, so the log reads the way
+    /// an operator counts.
+    pub attempts: u32,
+    /// When to ask again, on the wall's own clock (`State::now`), never the wall clock (`INV-11`).
+    pub at: std::time::Instant,
+}
+
+/// How long to wait before asking for a failed picture again: 5 s, doubling, capped at five minutes.
+///
+/// A doubling wait is the difference between a backend that is down for a minute and a wall that hammers it
+/// sixty times a second; the cap is the difference between "retrying" and "given up" — this wall does not
+/// give up, because a picture that failed once is usually a URL that expired, and the register re-read a
+/// moment later hands out a fresh one (`#53`).
+pub fn retry_after(attempts: u32) -> std::time::Duration {
+    const FIRST: u64 = 5;
+    const CAP: u64 = 300;
+    let doublings = attempts.saturating_sub(1).min(16);
+    std::time::Duration::from_secs((FIRST << doublings).min(CAP))
+}
+
+/// The register is one read for the whole fleet, so its retry is a flat minute rather than a curve: it is
+/// never asked per hull, and a wall whose account cannot read `/units` should say so once a minute rather
+/// than every frame.
+pub const REGISTER_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Whether a wait has expired. `None` is "never waited", which is always due.
+fn due(now: std::time::Instant, at: Option<std::time::Instant>) -> bool {
+    at.is_none_or(|at| now >= at)
+}
+
 /// Whether this frame must be drawn because of a picture: while a decode is pending, **and** on the frame
 /// it lands.
 ///
@@ -1062,8 +1163,12 @@ pub fn run(window: config::Window, passthrough: Vec<String>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
-            eprintln!("arcons-cc: cannot open a window: {message}");
-            eprintln!("  hint: the display needs a compositor; `cargo run -- --version` does not.");
+            // `tracing`, not `eprintln!`: with `--log-file` the log is the only artefact a wall leaves
+            // behind, and the two writers agree on where a line belongs (#53).
+            tracing::error!("cannot open a window: {message}");
+            tracing::error!(
+                "hint: the display needs a compositor; `cargo run -- --version` does not"
+            );
             ExitCode::FAILURE
         }
     }

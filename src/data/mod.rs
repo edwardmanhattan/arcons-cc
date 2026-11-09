@@ -120,6 +120,27 @@ impl Session {
         self.http.token_remaining()
     }
 
+    /// The **fleet register** as the server has it: how many hulls, and how many of them have a picture.
+    ///
+    /// `GET /units` needs `read` on a different subject (`/system/units`) than the live feed, so a wall
+    /// account can pass every other check and still be unable to draw a single photograph. That is the
+    /// case this line exists to name (`#53`), and it is why the count is printed rather than a boolean.
+    pub fn register(&mut self) -> Result<(usize, usize), Error> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| Error::Transport(format!("could not start a runtime: {error}")))?;
+        runtime.block_on(async {
+            let register = self.http.units().await?;
+            let with_picture = register
+                .units
+                .iter()
+                .filter(|unit| unit.image_url.is_some())
+                .count();
+            Ok::<_, Error>((register.units.len(), with_picture))
+        })
+    }
+
     /// The picture as the server has it. A read, not a shape check: a `200` with an empty list would
     /// prove the credential works and nothing else.
     pub fn read(&mut self) -> Result<LiveCheck, Error> {

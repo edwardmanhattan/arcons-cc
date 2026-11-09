@@ -137,3 +137,40 @@ fn the_view_reads_no_clock_but_the_frame_clock() {
         }
     }
 }
+
+/// **A wall's failures go to the log, because the log is the only thing a wall keeps.**
+///
+/// `--log-file` is how a machine in a cupboard is debugged, and `eprintln!` bypasses it: the line lands on a
+/// stderr nobody is reading. `#53` was exactly that — a picture and a register that failed said so to a
+/// console that did not exist, and the wall drew symbols with nothing recorded anywhere.
+///
+/// The display and the reads thread must therefore log through `tracing`. Startup paths that run before the
+/// log exists (`platform::init_logging` itself, `main`) are out of scope by construction, not by permission.
+#[test]
+fn the_walls_failures_are_logged_and_not_printed_to_a_console_nobody_reads() {
+    for file in [
+        "src/ui/mod.rs",
+        "src/ui/markers.rs",
+        "src/ui/unitcard.rs",
+        "src/data/http.rs",
+        "src/data/thread.rs",
+        "src/data/mod.rs",
+    ] {
+        let source = read(file);
+        let code = match source.find("#[cfg(test)]") {
+            Some(at) => &source[..at],
+            None => &source[..],
+        };
+        for (number, line) in code.lines().enumerate() {
+            if line.trim_start().starts_with("//") || line.trim_start().starts_with("///") {
+                continue;
+            }
+            assert!(
+                !line.contains("eprintln!"),
+                "{file}:{} prints to a console a wall does not have:\n  {line}\n  \
+                 Log it with `tracing` — `--log-file` is the only record a deployment keeps (#53).",
+                number + 1
+            );
+        }
+    }
+}
