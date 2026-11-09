@@ -203,6 +203,36 @@ fn panes(state: &mut State) {
 /// Where the `panes` scene drags its first border to: the share of the panel the first pane keeps.
 pub const PANES_DRAGGED: f32 = 0.58;
 
+/// The `panes-drag` scene (#70): a pane lifted, and the gap it will land in.
+///
+/// The lift is built the way the gesture builds it — `drop_for` on the point the handle has been dragged
+/// to — so the capture is of the same state a hand would produce, not of a hand-written `Drop`. The point
+/// is the middle of the first pane, which is a **swap** (the middle of a pane swaps; its edges re-tile),
+/// and the gap is drawn from the preview layout, so what the picture shows is where the pane lands.
+fn panes_drag(state: &mut State) {
+    panes(state);
+    let viewport = state.pane_viewport();
+    let Some((dragged, _)) = state.pane_rects().into_iter().last() else {
+        return;
+    };
+    let Some((target, rect)) = state.pane_rects().into_iter().next() else {
+        return;
+    };
+    if dragged == target {
+        return;
+    }
+    let middle = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+    let drop = state.layout.drop_for(viewport, dragged, middle);
+    state.dragging = Some(crate::ui::PaneDrag {
+        pane: dragged,
+        drop,
+    });
+    // The pane being lifted is the one the operator picked up, so it is the focused one.
+    if drop.is_some() {
+        state.layout.focus(dragged);
+    }
+}
+
 /// One scene: a name and the function that builds its state.
 pub type Scene = (&'static str, fn(&mut State));
 
@@ -214,6 +244,7 @@ pub const SCENES: &[Scene] = &[
     ("card-open", card_open),
     ("photo", photo),
     ("panes", panes),
+    ("panes-drag", panes_drag),
 ];
 
 /// Look a scene up by the name `scripts/capture.sh` was given.
@@ -283,7 +314,15 @@ mod tests {
         // 2 a.m. with a backtrace instead of a picture.
         assert_eq!(
             names(),
-            vec!["empty", "picture", "stale", "card-open", "photo", "panes"]
+            vec![
+                "empty",
+                "picture",
+                "stale",
+                "card-open",
+                "photo",
+                "panes",
+                "panes-drag"
+            ]
         );
         for name in names() {
             let state = state_for(name);

@@ -118,13 +118,17 @@ into the cache: a capture then covers bytes → cache → marker, which is the r
 **The gate renders every scene the binary lists**, and the list comes from the binary:
 
 ```sh
-cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes
+cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-drag
 scripts/verify.sh                # renders and asserts each one
 ```
 
 `panes` is the Multi View witness (#68): three panes at three cameras, each pane's frame its own
 rectangle, and the focused pane marked by its edge. Its assertion projects each hull against the pane
 it is drawn in, using the same `Layout::rects` the view lays the panes out with.
+
+`panes-drag` is the same wall with a pane **lifted** (#70): one pane dimmed, and the gap it will land in
+drawn from `Layout::preview`. The assertion checks the gap's rectangle against that preview — the same
+function the release calls — so a preview that opened somewhere the pane does not land fails here.
 
 That is not a convenience. Until #54 the list was written by hand in `scripts/verify.sh`, and it
 omitted `photo` — so a scene added in #41 was never captured, its golden was regenerated blind in #42

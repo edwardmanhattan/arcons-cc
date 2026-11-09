@@ -592,6 +592,130 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 ));
             }
         }
+        "panes-drag" => {
+            // **The gap is where the pane lands** (#70): it is drawn from `Layout::preview`, so this
+            // checks the drawn rectangle against the preview — the same function the release calls.
+            let Some((origin_x, origin_y, panel_w, panel_h)) =
+                image.find_panel_rect(ink(tokens::panel()))
+            else {
+                failures.push("panes-drag: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let state = scene::state_for("panes-drag");
+            let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
+            let rects = state.layout.rects(viewport);
+            let Some(drag) = state.dragging else {
+                failures.push("panes-drag: no pane is lifted in the scene".to_string());
+                return Err(failures);
+            };
+            let Some(drop) = drag.drop else {
+                failures.push("panes-drag: the lifted pane has no drop under it".to_string());
+                return Err(failures);
+            };
+            let Some(preview) = state.layout.preview(drop) else {
+                failures.push(format!("panes-drag: {drop:?} has no preview"));
+                return Err(failures);
+            };
+            let Some(gap) = preview.rect_of(viewport, drag.pane) else {
+                failures
+                    .push("panes-drag: the preview does not place the dragged pane".to_string());
+                return Err(failures);
+            };
+            // The gap is inset by a gap on each side (the slot, not the whole pane).
+            let inset = f64::from(tokens::GAP);
+            let (gx, gy) = (
+                origin_x + f64::from(gap.x) + inset,
+                origin_y + f64::from(gap.y) + inset,
+            );
+            let (gw, gh) = (
+                f64::from(gap.w) - inset * 2.0,
+                f64::from(gap.h) - inset * 2.0,
+            );
+            let fill = ink(tokens::gap_fill());
+            let mut inside = 0;
+            let mut fill_hits = 0;
+            for dy in (6..(gh as i32 - 6)).step_by(4) {
+                for dx in (6..(gw as i32 - 6)).step_by(4) {
+                    inside += 1;
+                    if near(
+                        image.at((gx + f64::from(dx)) as u32, (gy + f64::from(dy)) as u32),
+                        fill,
+                        6,
+                    ) {
+                        fill_hits += 1;
+                    }
+                }
+            }
+            if inside > 0 && fill_hits * 10 < inside * 9 {
+                failures.push(format!(
+                    "panes-drag: the gap at ({gx:.0}, {gy:.0}) {gw:.0}×{gh:.0} is filled on \
+                     {fill_hits}/{inside} samples — the slot a pane lands in is drawn where the \
+                     preview puts it"
+                ));
+            } else {
+                lines.push(format!(
+                    "panes-drag: gap at ({gx:.0}, {gy:.0}) {gw:.0}×{gh:.0} for the pane that lands \
+                     there"
+                ));
+            }
+            // Every pane whose hulls are not covered by the gap still projects its own hulls.
+            for (index, (id_unit, _zoom)) in scene::PANES.iter().enumerate() {
+                let Some((id, rect)) = rects.get(index).copied() else {
+                    continue;
+                };
+                if id == drag.pane {
+                    continue;
+                }
+                // A pane the gap covers is expected to be hidden: the slot is drawn over it.
+                let overlap_w = (rect.right().min(gap.right()) - rect.x.max(gap.x)).max(0.0);
+                let overlap_h = (rect.bottom().min(gap.bottom()) - rect.y.max(gap.y)).max(0.0);
+                if overlap_w * overlap_h > 1.0 {
+                    continue;
+                }
+                let Some(pane) = state.pane(id) else { continue };
+                let frame = crate::ui::view::synthetic_frame(pane.camera, rect, 1.0);
+                let Some(fix) = scene::fixture().ok().and_then(|entries| {
+                    entries
+                        .into_iter()
+                        .find(|entry| entry.id_unit == *id_unit)
+                        .and_then(|entry| entry.position)
+                }) else {
+                    continue;
+                };
+                let (px, py) = frame.project(fix.latitude, fix.longitude);
+                let at = (
+                    origin_x + f64::from(rect.x) + px,
+                    origin_y + f64::from(rect.y) + py,
+                );
+                let ink_here = if image.blob_centre(at.0, at.1, accent, 8).is_some() {
+                    accent
+                } else {
+                    dim
+                };
+                match image.blob_centre(at.0, at.1, ink_here, 8) {
+                    Some((centre, count)) if count >= 8 => {
+                        let distance = ((centre.0 - at.0).powi(2) + (centre.1 - at.1).powi(2)).sqrt();
+                        if distance > TOLERANCE_PX {
+                            failures.push(format!(
+                                "panes-drag: pane {index}'s hull {id_unit} is {distance:.1} px from \
+                                 its own pane's projection ({at:.0}) — INV-04 holds while a pane is \
+                                 being dragged too",
+                                at = format!("({:.0}, {:.0})", at.0, at.1)
+                            ));
+                        } else {
+                            lines.push(format!(
+                                "panes-drag: pane {index} ({id_unit}) still projects its hull"
+                            ));
+                        }
+                    }
+                    _ => failures.push(format!(
+                        "panes-drag: no marker ink at ({:.0}, {:.0}) — pane {index}'s hull {id_unit} \
+                         vanished while another pane was lifted",
+                        at.0, at.1
+                    )),
+                }
+            }
+        }
         "stale" => {
             // The dim marker must be dimmer than a live one, by a margin a reader would notice. A
             // threshold of 20 luma steps is roughly "one shade" — bigger than antialiasing noise,
@@ -701,7 +825,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     );
 
     match scene {
-        "panes" => {
+        "panes" | "panes-drag" => {
             // One marker per hull with a fix **in every pane**: a pane that drew nothing, or drew the
             // same set twice, is not a view.
             let expected = state
