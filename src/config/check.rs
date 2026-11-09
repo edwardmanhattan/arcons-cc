@@ -69,6 +69,9 @@ pub trait World {
     fn sign_in(&self, config: &Config) -> Result<String, String>;
     /// Read the picture: the thing the wall actually draws.
     fn read(&self, config: &Config) -> Result<String, String>;
+    /// Read the fleet register: the hulls and their picture URLs. A different subject from the feed, so a
+    /// wall account can pass everything above and still draw no pictures (#53).
+    fn register(&self, config: &Config) -> Result<String, String>;
     /// Subscribe to the live feed, with the connect frame's `data` token.
     fn subscribe(&self, config: &Config) -> Result<String, String>;
     /// The offline map seed, without which the first frame waits on a network that may not be there.
@@ -158,12 +161,25 @@ pub fn run(args: &Args, env: &Env, world: &dyn World, out: &mut dyn std::fmt::Wr
                     fail(Outcome::ReadFailed, &mut verdict);
                 }
             }
+            // A separate line with the same exit code (4, "a read failed"): the code says a read failed,
+            // the line says which one. The register is its own read with its own permission, and a wall
+            // that cannot read it spends its life drawing symbols for hulls that have photographs.
+            match world.register(&config) {
+                Ok(detail) => {
+                    let _ = writeln!(out, "  {:<11} ok  {detail}", "register");
+                }
+                Err(error) => {
+                    let _ = writeln!(out, "  {:<11} FAILED  {error}", "register");
+                    fail(Outcome::ReadFailed, &mut verdict);
+                }
+            }
         }
         Err(error) => {
             // The read cannot be honest without a session, so it is skipped rather than reported as
             // a second failure: one cause, one line.
             let _ = writeln!(out, "  {:<11} FAILED  {error}", "login");
             let _ = writeln!(out, "  {:<11} skipped  (no session)", "picture");
+            let _ = writeln!(out, "  {:<11} skipped  (no session)", "register");
             fail(Outcome::LoginFailed, &mut verdict);
         }
     }
@@ -277,6 +293,25 @@ impl World for Live {
         ))
     }
 
+    fn register(&self, config: &Config) -> Result<String, String> {
+        let mut held = self
+            .session
+            .lock()
+            .map_err(|_| "the session lock was poisoned".to_string())?;
+        let session = match held.as_mut() {
+            Some(session) => session,
+            None => {
+                let mut session = crate::data::Session::start(&config.minos)
+                    .map_err(|error| error.to_string())?;
+                let check = session.register().map_err(|error| error.to_string())?;
+                *held = Some(session);
+                return Ok(format!("{} hulls, {} with a picture", check.0, check.1));
+            }
+        };
+        let check = session.register().map_err(|error| error.to_string())?;
+        Ok(format!("{} hulls, {} with a picture", check.0, check.1))
+    }
+
     fn subscribe(&self, config: &Config) -> Result<String, String> {
         let probe = crate::live::actor::probe_url(&config.minos, &config.socket_url)?;
         if probe.connected && probe.subscribed {
@@ -304,6 +339,9 @@ pub fn offline(args: &Args, env: &Env, out: &mut dyn std::fmt::Write) -> Outcome
             Err("not attempted (--offline)".to_string())
         }
         fn read(&self, _: &Config) -> Result<String, String> {
+            Err("not attempted (--offline)".to_string())
+        }
+        fn register(&self, _: &Config) -> Result<String, String> {
             Err("not attempted (--offline)".to_string())
         }
         fn subscribe(&self, _: &Config) -> Result<String, String> {
@@ -340,6 +378,7 @@ mod tests {
     struct Scripted {
         login: Result<String, String>,
         read: Result<String, String>,
+        register: Result<String, String>,
         socket: Result<String, String>,
         seed: bool,
     }
@@ -349,6 +388,7 @@ mod tests {
             Self {
                 login: Ok("refresh token accepted, access token valid for 900 s".into()),
                 read: Ok("127 hulls, 126 never reported".into()),
+                register: Ok("127 hulls, 62 with a picture".into()),
                 socket: Ok("subscribed to live-feed".into()),
                 seed: true,
             }
@@ -361,6 +401,9 @@ mod tests {
         }
         fn read(&self, _: &Config) -> Result<String, String> {
             self.read.clone()
+        }
+        fn register(&self, _: &Config) -> Result<String, String> {
+            self.register.clone()
         }
         fn subscribe(&self, _: &Config) -> Result<String, String> {
             self.socket.clone()
