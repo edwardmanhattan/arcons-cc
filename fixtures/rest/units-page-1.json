@@ -1,0 +1,228 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": [
+    {
+      "id": 262,
+      "name": "Anka-S (MALE)",
+      "hull_number": "D-0000",
+      "unit_class": {
+        "id": 88,
+        "name": "Anka-S",
+        "id_name": "Anka-S",
+        "unit_type": {
+          "id": 23,
+          "name": "Pesawat Tanpa Awak",
+          "id_name": "Pesawat Tanpa Awak",
+          "description_en": "Pesawat Tanpa Awak",
+          "is_system": false,
+          "is_judge_side": false
+        },
+        "category": {
+          "id": 15,
+          "name": "Drone",
+          "id_name": "Drone",
+          "description_en": "...",
+          "is_system": false,
+          "is_judge_side": false
+        },
+        "default_turn_rate_max_deg_s": 1,
+        "hull_count": 1
+      },
+      "unit_status": {
+        "id": 1,
+        "name": "Active",
+        "id_name": "Aktif",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "service_branch": {
+        "id": 2,
+        "name": "Army",
+        "id_name": "TNI Angkatan Darat",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "movement_domain": {
+        "id": 3,
+        "name": "Air",
+        "id_name": "Udara",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "current_specification_version": 1,
+      "image_url": "https://objects.example.test/units/262.png?X-Amz-Expires=REDACTED",
+      "image_content_type": "image/png",
+      "image_size_bytes": 415436,
+      "image_width_px": 641,
+      "image_height_px": 1315
+    },
+    {
+      "id": 8,
+      "name": "KRI Abdul Halim Perdanakusuma",
+      "hull_number": "KRI-355",
+      "unit_class": {
+        "id": 1,
+        "name": "Ahmad Yani / Van Speijk",
+        "id_name": "Ahmad Yani / Van Speijk",
+        "unit_type": {
+          "id": 2,
+          "name": "FF",
+          "id_name": "Frigat",
+          "description_en": "Frigate",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "category": {
+          "id": 2,
+          "name": "Frigate",
+          "id_name": "Frigat",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "hull_count": 5
+      },
+      "unit_status": {
+        "id": 1,
+        "name": "Active",
+        "id_name": "Aktif",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "service_branch": {
+        "id": 1,
+        "name": "Navy",
+        "id_name": "TNI Angkatan Laut",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "movement_domain": {
+        "id": 1,
+        "name": "Surface",
+        "id_name": "Permukaan",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "current_specification_version": 3,
+      "image_url": "https://objects.example.test/units/8.png?X-Amz-Expires=REDACTED",
+      "image_content_type": "image/png",
+      "image_size_bytes": 1266258,
+      "image_width_px": 2167,
+      "image_height_px": 280
+    },
+    {
+      "id": 5,
+      "name": "KRI Ahmad Yani",
+      "hull_number": "KRI-351",
+      "unit_class": {
+        "id": 1,
+        "name": "Ahmad Yani / Van Speijk",
+        "id_name": "Ahmad Yani / Van Speijk",
+        "unit_type": {
+          "id": 2,
+          "name": "FF",
+          "id_name": "Frigat",
+          "description_en": "Frigate",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "category": {
+          "id": 2,
+          "name": "Frigate",
+          "id_name": "Frigat",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "hull_count": 5
+      },
+      "unit_status": {
+        "id": 1,
+        "name": "Active",
+        "id_name": "Aktif",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "service_branch": {
+        "id": 1,
+        "name": "Navy",
+        "id_name": "TNI Angkatan Laut",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "movement_domain": {
+        "id": 1,
+        "name": "Surface",
+        "id_name": "Permukaan",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "current_specification_version": 10,
+      "image_url": "https://objects.example.test/units/5.png?X-Amz-Expires=REDACTED",
+      "image_content_type": "image/png",
+      "image_size_bytes": 1266258,
+      "image_width_px": 2167,
+      "image_height_px": 280
+    },
+    {
+      "id": 55,
+      "name": "KRI Ajak",
+      "hull_number": "653",
+      "unit_class": {
+        "id": 21,
+        "name": "Mandau / PSM Mk-III",
+        "id_name": "Mandau / PSM Mk-III",
+        "unit_type": {
+          "id": 6,
+          "name": "FAC(M)",
+          "id_name": "Kapal Cepat Rudal",
+          "description_en": "Fast attack craft (missile)",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "category": {
+          "id": 4,
+          "name": "Fast Attack Craft",
+          "id_name": "Kapal Cepat Rudal",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "hull_count": 4
+      },
+      "unit_status": {
+        "id": 1,
+        "name": "Active",
+        "id_name": "Aktif",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "service_branch": {
+        "id": 1,
+        "name": "Navy",
+        "id_name": "TNI Angkatan Laut",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "movement_domain": {
+        "id": 1,
+        "name": "Surface",
+        "id_name": "Permukaan",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "current_specification_version": 2,
+      "image_url": "https://objects.example.test/units/55.png?X-Amz-Expires=REDACTED",
+      "image_content_type": "image/png",
+      "image_size_bytes": 1117956,
+      "image_width_px": 2114,
+      "image_height_px": 269
+    }
+  ],
+  "metadata": {
+    "total_records": 127,
+    "total_pages": 3,
+    "page_size": 50,
+    "current_page": 1,
+    "has_next_page": true,
+    "has_previous_page": false
+  }
+}

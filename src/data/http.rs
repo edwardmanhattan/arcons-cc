@@ -15,7 +15,8 @@ use crate::config::Minos;
 use crate::data::Error;
 use crate::data::auth::{Auth, Refresher};
 use crate::data::types::{
-    Envelope, ErrorResponse, FeedPosition, TokenPair, UnitCommander, UnitDetail, UnitSummary,
+    Envelope, ErrorResponse, FeedPosition, Register, TokenPair, UnitCommander, UnitDetail,
+    UnitSummary,
 };
 
 /// A request timeout. The wall is on a LAN or a VPN; a read that takes longer than this is a stall to
@@ -151,10 +152,40 @@ impl Http {
 
     /// `GET /units/{id}/commander` — newest first; the current one is the entry with no `to_at`.
     /// An empty list is a valid answer: nobody has ever commanded this hull.
-    /// `GET /units` — the fleet register, for the picture URLs and (later) the taxonomy the symbol
-    /// needs. One call: the wall must not read one hull at a time to draw a harbour.
-    pub async fn units(&self) -> Result<Vec<UnitSummary>, Error> {
-        self.get("/units").await
+    /// `GET /units` — the fleet register, **paged to the end**: picture URLs for every hull.
+    ///
+    /// One read per page, not one read per hull: the wall must not ask about a harbour one ship at a time.
+    /// But one *page* is not the register. On the dev deployment `GET /units` answers 25 of 127 hulls unless
+    /// asked otherwise, and the wall believed the 25 (`#52`): 14 picture URLs where the fleet has 62. So this
+    /// asks for the server's maximum page size and follows `has_next_page` until the server says the list
+    /// has ended, or until [`PAGE_CAP`] pages — because a backend that always says "more" must not spin the
+    /// reads thread forever.
+    pub async fn units(&self) -> Result<Register, Error> {
+        let mut register = Register::default();
+        loop {
+            let page = register.pages + 1;
+            let path = format!("/units?page_size={PAGE_SIZE}&page_number={page}");
+            let envelope: Envelope<Vec<UnitSummary>> = self.get_envelope(&path).await?;
+            register.pages = page;
+            register.total_records = envelope.metadata.map(|metadata| metadata.total_records);
+            let more = envelope
+                .metadata
+                .is_some_and(|metadata| metadata.has_next_page);
+            register.units.extend(envelope.data);
+            if !more {
+                return Ok(register);
+            }
+            if page >= PAGE_CAP {
+                register.truncated = true;
+                tracing::warn!(
+                    pages = register.pages,
+                    rows = register.units.len(),
+                    total = register.total_records,
+                    "the fleet register is longer than the page cap: the wall is drawing part of the fleet"
+                );
+                return Ok(register);
+            }
+        }
     }
 
     /// The bytes at a **presigned** URL: a hull's photograph.
@@ -180,14 +211,19 @@ impl Http {
 
     /// `GET path`, with one refresh-and-retry on a `401`.
     async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, Error> {
+        Ok(self.get_envelope(path).await?.data)
+    }
+
+    /// The whole envelope, for the routes whose `metadata` is part of the answer.
+    async fn get_envelope<T: DeserializeOwned>(&self, path: &str) -> Result<Envelope<T>, Error> {
         let token = self.auth.access_token().await?;
         match self.get_with(path, &token).await? {
-            Attempt::Ok(value) => Ok(value),
+            Attempt::Ok(envelope) => Ok(envelope),
             Attempt::Unauthorized => {
                 // One refresh, one retry. A second 401 is the answer, not a reason to try again.
                 let fresh = self.auth.replace_rejected(&token).await?;
                 match self.get_with(path, &fresh).await? {
-                    Attempt::Ok(value) => Ok(value),
+                    Attempt::Ok(envelope) => Ok(envelope),
                     Attempt::Unauthorized => Err(Error::Unauthorized),
                 }
             }
@@ -198,7 +234,7 @@ impl Http {
         &self,
         path: &str,
         token: &str,
-    ) -> Result<Attempt<T>, Error> {
+    ) -> Result<Attempt<Envelope<T>>, Error> {
         let response = self
             .client
             .get(format!("{}{path}", self.base))
@@ -215,7 +251,7 @@ impl Http {
             return Err(failure(status.as_u16(), &body));
         }
         let envelope: Envelope<T> = serde_json::from_str(&body).map_err(decode)?;
-        Ok(Attempt::Ok(envelope.data))
+        Ok(Attempt::Ok(envelope))
     }
 }
 
@@ -223,6 +259,15 @@ enum Attempt<T> {
     Ok(T),
     Unauthorized,
 }
+
+/// The page size the register is read at: the largest the API documents, so a fleet of a few hundred hulls
+/// is one or two reads rather than a dozen.
+const PAGE_SIZE: u32 = 200;
+
+/// The most pages one register read will follow. Sixteen pages of [`PAGE_SIZE`] is 3 200 hulls; beyond that
+/// the wall is being asked to hold a fleet it cannot draw, and a read that stops is better than one that
+/// never ends.
+const PAGE_CAP: u32 = 16;
 
 /// The client every call is made with.
 ///
@@ -369,6 +414,95 @@ mod tests {
 
     const ONE_HULL: &str = r#"{"status_code":200,"message":"Successfull","data":[{"id_unit":8,"name":"KRI Abdul Halim Perdanakusuma","hull_number":"KRI-355"}]}"#;
     const NOT_AUTHORISED: &str = r#"{"status_code":401,"message":"Unauthorized","data":null}"#;
+
+    fn fixture(relative: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()))
+    }
+
+    /// **The register is every hull, not the first page.**
+    ///
+    /// `#52`: `GET /units` answers 25 of the dev fleet's 127 unless asked otherwise, and the wall asked once
+    /// and believed it — 14 picture URLs where the fleet has 62. The three fixtures are recorded pages
+    /// (`fixtures/rest/units-page-*.json`, trimmed to four rows each with the metadata as recorded), and the
+    /// stub serves them in order.
+    #[tokio::test]
+    async fn the_register_is_read_to_its_last_page() {
+        let stub = stub(vec![
+            (200, fixture("fixtures/rest/units-page-1.json")),
+            (200, fixture("fixtures/rest/units-page-2.json")),
+            (200, fixture("fixtures/rest/units-page-3.json")),
+        ]);
+        let http = signed_in(&stub).await;
+        let register = http.units().await.expect("the register reads");
+        assert_eq!(register.pages, 3, "three recorded pages, three reads");
+        assert_eq!(
+            register.units.len(),
+            12,
+            "every row of every page, or the wall is drawing part of a fleet"
+        );
+        assert_eq!(
+            register.total_records,
+            Some(127),
+            "the server's own count, so an operator can compare it with what the wall holds"
+        );
+        assert!(!register.truncated, "the last page says there is no more");
+        assert_eq!(
+            stub.gets.load(Ordering::SeqCst),
+            3,
+            "one read per page and no speculative fourth"
+        );
+        // The hulls are the recorded ones, in order: page 3's rows must be there, not just page 1's.
+        let ids: Vec<i64> = register.units.iter().map(|unit| unit.id).collect();
+        assert_eq!(ids.first(), Some(&262), "the first recorded hull");
+        assert_eq!(
+            ids.last(),
+            Some(&88),
+            "the last recorded hull, from the last page"
+        );
+    }
+
+    /// A register that fits in one page stops after one read — no second request, no guessing.
+    #[tokio::test]
+    async fn a_register_that_ends_on_its_first_page_is_one_read() {
+        let single = r#"{"status_code":200,"message":"Successfull","data":[{"id":8,"name":"KRI Abdul Halim Perdanakusuma","hull_number":"355"}],"metadata":{"total_records":1,"total_pages":1,"page_size":200,"current_page":1,"has_next_page":false,"has_previous_page":false}}"#;
+        let stub = stub(vec![(200, single.to_string())]);
+        let http = signed_in(&stub).await;
+        let register = http.units().await.expect("the register reads");
+        assert_eq!(register.pages, 1);
+        assert_eq!(register.units.len(), 1);
+        assert!(
+            register.total_records.is_some(),
+            "one page still reports its count"
+        );
+        assert_eq!(stub.gets.load(Ordering::SeqCst), 1);
+    }
+
+    /// **A backend that always says "more" is cut at the cap, and says so.**
+    ///
+    /// The cap exists so one broken server cannot spin the reads thread forever; `truncated` exists so the
+    /// result is not a silent lie about the fleet (#52).
+    #[tokio::test]
+    async fn a_register_that_never_ends_is_cut_at_the_cap_and_says_so() {
+        let endless = r#"{"status_code":200,"message":"Successfull","data":[{"id":1,"name":"KRI Cakra"}],"metadata":{"total_records":999999,"total_pages":999999,"page_size":1,"current_page":1,"has_next_page":true,"has_previous_page":false}}"#;
+        let answers: Vec<(u16, String)> = (0..PAGE_CAP as usize + 5)
+            .map(|_| (200u16, endless.to_string()))
+            .collect();
+        let stub = stub(answers);
+        let http = signed_in(&stub).await;
+        let register = http.units().await.expect("the register reads");
+        assert_eq!(
+            register.pages, PAGE_CAP,
+            "the cap is the loop's guard, not a suggestion"
+        );
+        assert!(register.truncated, "a capped read must say it was capped");
+        assert_eq!(
+            stub.gets.load(Ordering::SeqCst) as u32,
+            PAGE_CAP,
+            "no request past the cap"
+        );
+    }
 
     #[tokio::test]
     async fn a_401_is_refreshed_once_and_the_read_is_retried() {
