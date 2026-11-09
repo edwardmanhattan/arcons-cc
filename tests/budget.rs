@@ -108,8 +108,8 @@ fn machine_factor() -> f64 {
 fn budget_200_markers_pan_zoom_frame_cpu() {
     let camera = Camera::new((-6.108, 106.910), 11.0);
     let mut state = State::new(picture_with(200));
-    state.camera = camera;
-    state.frame = Some(Rendered {
+    state.set_camera(camera);
+    state.set_frame(Rendered {
         camera,
         width: 1920,
         height: 1080,
@@ -151,8 +151,8 @@ fn budget_200_markers_pan_zoom_frame_cpu() {
         let moved = Camera::new((-6.108, 106.910 + step), 11.0);
         // A pan publishes a NEW frame — that is what makes every marker reproject. Changing only the
         // live camera would leave the picture where it was and measure nothing.
-        runtime.state.camera = moved;
-        runtime.state.frame = Some(Rendered {
+        runtime.state.set_camera(moved);
+        runtime.state.set_frame(Rendered {
             camera: moved,
             width: 1920,
             height: 1080,
