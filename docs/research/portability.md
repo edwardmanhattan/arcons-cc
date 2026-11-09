@@ -221,6 +221,21 @@ renders pixels, and it stays one Linux job so that CI and a human cannot diverge
 map on Windows is a fact recorded here, not a reason nobody can land a card fix. When it passes twice
 in a row, delete `continue-on-error` and make it real.
 
+**On macOS the core comes from the workflow's own cache, not from inside `cargo`.** GitHub's release CDN
+answered **504 three times in a row** for the Metal amalgam on 2026-11-09 — 65 751 912 bytes; the Linux Vulkan
+core is the big one at 396 193 686 — which made this report flicker for a reason that has nothing to do with
+the crate (#60). The asset is now fetched once per pinned revision by a `curl` with retries, cached under
+`~/.cache/arcons-cc/mln` keyed by the revision, and handed to the build script through the local-path route it
+already supports:
+
+```yaml
+MLN_CORE_LIBRARY_PATH=~/.cache/arcons-cc/mln/core.a
+MLN_CORE_LIBRARY_HEADERS_PATH=~/.cache/arcons-cc/mln/headers.tar.gz
+```
+
+A warm run downloads nothing; a cold one downloads once per revision. Those are the same two variables a Nix
+derivation would set (see the Nix section), so CI and a packaged build now take the same route.
+
 ## Consequences, in the order they would bite
 
 1. **macOS arm64 is one asset away from shipping.** What is missing is not code: nobody has run it, and
