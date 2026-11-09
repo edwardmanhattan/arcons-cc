@@ -97,9 +97,16 @@ pub struct State {
     pub asked_register: bool,
     /// Hulls whose dimensions have been asked for, so the wall does not ask on every frame.
     pub asked_sizes: std::collections::HashSet<i64>,
-    /// Picture bytes by hull, as fetched. The view hands them to Rune's cache, which decodes them off the
-    /// UI thread and shares them by content — so a hull's photograph is decoded once, not per frame.
-    pub image_bytes: std::collections::HashMap<i64, std::sync::Arc<[u8]>>,
+    /// Each hull's picture, **decoded**, as a cache handle this state owns.
+    ///
+    /// The handle is the picture for as long as the state holds it: Rune's cache keeps a weak entry per
+    /// content hash, so a handle dropped between frames lets the entry expire and the next `load` starts
+    /// the decode again. Asking once, when the bytes arrive, is both cheaper and — more importantly — the
+    /// only way `poll` can see a decode *finish* (`#51`).
+    pub pictures: std::collections::HashMap<i64, rune::Image>,
+    /// Hulls whose picture was handed to the cache and has not been drawn yet. The frame a decode lands
+    /// on is the frame that must be redrawn, and nothing else in the loop can notice that (`#51`).
+    pub pictures_pending: std::collections::HashSet<i64>,
     /// Hulls whose picture has been asked for, so a missing one is not re-asked every frame.
     pub asked_images: std::collections::HashSet<i64>,
 }
@@ -143,7 +150,8 @@ impl Default for State {
             images: None,
             asked_register: false,
             asked_sizes: std::collections::HashSet::new(),
-            image_bytes: std::collections::HashMap::new(),
+            pictures: std::collections::HashMap::new(),
+            pictures_pending: std::collections::HashSet::new(),
             asked_images: std::collections::HashSet::new(),
         }
     }
@@ -153,14 +161,29 @@ impl State {
     /// The clock every age in the view is measured against. The *only* source of "now" in the view,
     /// which is what makes a capture reproducible: `--scene` drives `logical` from Rune's virtual
     /// clock, and a windowed run from the real one.
-    /// The decode cache, created on first use.
+    /// The decode cache, created on first use with **the app's waker**, so a decode that finishes wakes
+    /// the wall instead of waiting for something else to redraw it.
     ///
-    /// Its waker is a no-op: this wall redraws while a picture is *pending* (`poll`), so it never needs to
-    /// be woken. That keeps the cache usable from a scene, where the app's waker does not exist yet — and
-    /// one cache for the process, so a decoded picture is decoded once.
+    /// This used to be a no-op waker on the argument that "the wall redraws while a picture is pending, so
+    /// it never needs to be woken". That argument was wrong in one place and it cost the picture: the
+    /// pending redraws stop on the very frame the decode completes, so nothing drew it (`#51`).
+    pub fn image_cache_with(&mut self, waker: rune::Waker) -> &rune::ImageCache {
+        self.images
+            .get_or_insert_with(move || rune::ImageCache::new(waker))
+    }
+
+    /// The cache for a caller with no waker to give — a headless scene, whose bytes are decoded before the
+    /// first frame and whose clock is virtual (`INV-11`). A windowed wall must use [`Self::image_cache_with`].
     pub fn image_cache(&mut self) -> &rune::ImageCache {
         self.images
-            .get_or_insert_with(|| rune::ImageCache::new(std::sync::Arc::new(|| {})))
+            .get_or_insert_with(|| rune::ImageCache::new(std::sync::Arc::new(|| {}) as rune::Waker))
+    }
+
+    /// Hand a hull's bytes to the cache, once, and remember that the frame it lands on needs drawing.
+    pub fn offer_picture(&mut self, id_unit: i64, bytes: std::sync::Arc<[u8]>) {
+        let image = self.image_cache().load(bytes);
+        self.pictures.insert(id_unit, image);
+        self.pictures_pending.insert(id_unit);
     }
 
     pub fn now(&self) -> std::time::Instant {
@@ -386,8 +409,7 @@ fn picture(state: &State, scale: f32) -> El {
         &sizes,
     );
     let pictures = markers::Pictures {
-        cache: state.images.as_ref(),
-        bytes: &state.image_bytes,
+        images: &state.pictures,
     };
     let mut layer = content.child(markers::layer(&placed, &frame, scale, &pictures));
 
@@ -614,9 +636,7 @@ fn drain_card_reads(state: &mut State) -> bool {
                 changed = true;
             }
             crate::data::Reply::Image(id_unit, Ok(bytes)) => {
-                state
-                    .image_bytes
-                    .insert(*id_unit, std::sync::Arc::from(bytes.as_slice()));
+                state.offer_picture(*id_unit, std::sync::Arc::from(bytes.as_slice()));
                 changed = true;
             }
             crate::data::Reply::Image(id_unit, Err(error)) => {
@@ -802,7 +822,8 @@ fn setup(state: &mut State, waker: rune::Waker) {
     // A scene is offline by construction: `--snap` renders a fixture, and a capture that opened a
     // socket would be a capture that depends on a server being awake.
     // The image cache decodes; it does not fetch, so a headless scene can use the same path a wall uses.
-    state.image_cache();
+    // It gets the app's waker, because a decode finishing is exactly the event that must draw a frame.
+    state.image_cache_with(waker.clone());
     if rune::is_headless() {
         state.headless = true;
         // A scene declares its own viewport: there is no map thread to hand one over, and markers
@@ -905,7 +926,7 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
             }
             let id = unit.unit.id_unit;
             if unit.position.is_some()
-                && !state.image_bytes.contains_key(&id)
+                && !state.pictures.contains_key(&id)
                 && !state.asked_images.contains(&id)
                 && let Some(url) = state.image_urls.get(&id).cloned()
             {
@@ -930,19 +951,12 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
         }
     }
 
-    // A picture still decoding is a reason to draw the next frame: the cache decodes on its own thread
-    // and wakes the app, but a headless render is not waiting on a waker — and a marker that would
-    // become a picture one frame later must not be frozen as a symbol for the whole capture.
-    if state.range == crate::units::mark::Range::Picture
-        && let Some(cache) = &state.images
-    {
-        for (id, bytes) in &state.image_bytes {
-            let _ = id;
-            if !cache.load(bytes.clone()).is_ready() {
-                changed = true;
-            }
-        }
-    }
+    // A picture still decoding is a reason to draw the next frame, and the frame a decode *lands* on is a
+    // reason to draw one more. Both matter, and the second is the one that was missing (`#51`): a decode
+    // that completes between two polls changes nothing the loop would otherwise notice, so a wall that
+    // only redrew "while pending" kept the last tree — the symbol — forever. The waker now wakes the app
+    // too, but a headless render is not waiting on one, and this costs two comparisons per frame.
+    changed |= pictures_need_a_frame(&mut state.pictures_pending, &state.pictures);
     // A marker still travelling between two fixes needs the next frame drawn, and stops asking on its
     // own when the travel window ends: a wall at rest rebuilds nothing.
     if state.picture.travelling(state.now()) {
@@ -972,6 +986,31 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     // The next frame starts a new gesture: a marker's press has done its job either way.
     state.marker_press = false;
     changed
+}
+
+/// Whether this frame must be drawn because of a picture: while a decode is pending, **and** on the frame
+/// it lands.
+///
+/// The second half is the whole of `#51`. A decode that completes between two polls changes nothing the
+/// loop can otherwise see — the marker layer is not rebuilt, so the last tree (the symbol) stays on screen
+/// until some unrelated event draws again. So a hull whose picture has just become drawable is taken off
+/// the pending set *and* the frame that took it off is drawn; everything after it is quiet.
+fn pictures_need_a_frame(
+    pending: &mut std::collections::HashSet<i64>,
+    pictures: &std::collections::HashMap<i64, rune::Image>,
+) -> bool {
+    if pending.is_empty() {
+        return false;
+    }
+    let landed: Vec<i64> = pending
+        .iter()
+        .filter(|id| pictures.get(id).is_some_and(|picture| picture.is_ready()))
+        .copied()
+        .collect();
+    for id in landed {
+        pending.remove(&id);
+    }
+    true
 }
 
 /// How often the wall says what it has received. Long enough to be a heartbeat, short enough that a
@@ -1195,6 +1234,83 @@ mod tests {
     /// answered "changed" at a moment that depended on how fast the machine was — and since `poll`'s
     /// answer is what makes Rune rebuild the element tree, *which* age was drawn into a capture was a
     /// race. On a fast machine a two-second scene drew `4 s old`; on a slow one, `5 s old`.
+    /// **The frame a picture's decode lands on is a frame that must be drawn.**
+    ///
+    /// This is `#51` as a test. The wall used to redraw only *while* a picture was pending
+    /// (`if !is_ready() { changed = true }`), so the moment the decode finished the loop went quiet — and
+    /// the symbol the last tree held stayed on screen forever, with the picture fetched, decoded and
+    /// never drawn. Every call here for a pending or just-landed hull must say "draw"; the first call
+    /// after it has landed must say "nothing to do".
+    #[test]
+    fn the_frame_a_picture_lands_on_is_drawn() {
+        let bytes: std::sync::Arc<[u8]> = std::sync::Arc::from(crate::scene::PHOTO_FIXTURE);
+        let mut state = State::default();
+        state.offer_picture(8, bytes);
+        let mut pending = state.pictures_pending.clone();
+        assert_eq!(pending.len(), 1, "offering a picture schedules its frame");
+
+        let mut landed_at = None;
+        for frame in 0..600 {
+            let changed = pictures_need_a_frame(&mut pending, &state.pictures);
+            assert!(
+                changed,
+                "frame {frame}: a picture that has not landed yet, or has just landed, must be drawn"
+            );
+            if pending.is_empty() {
+                landed_at = Some(frame);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let landed_at = landed_at.expect(
+            "the fixture picture never decoded: the wall would draw a symbol forever (#51)",
+        );
+        assert!(
+            state.pictures[&8].is_ready(),
+            "the state owns the handle, so the decode's result survives the frame that asked for it"
+        );
+        assert!(
+            landed_at > 0,
+            "the decode cannot land on the frame it was requested on: this test would prove nothing"
+        );
+        assert!(
+            !pictures_need_a_frame(&mut pending, &state.pictures),
+            "once the picture has landed, the wall goes quiet again — a wall that redraws forever is #51's              other half"
+        );
+    }
+
+    /// The other half of `#51`: the state, not the view, owns the decode handle.
+    ///
+    /// Asking the cache from the view (`cache.load(bytes)` per marker per frame) re-ran the decode — the
+    /// cache keeps a *weak* entry per content hash, so a dropped handle expires it — and left nothing for
+    /// `poll` to watch. A handle the state keeps is a handle that stays ready.
+    #[test]
+    fn a_picture_asked_for_once_stays_decoded() {
+        let bytes: std::sync::Arc<[u8]> = std::sync::Arc::from(crate::scene::PHOTO_FIXTURE);
+        let mut state = State::default();
+        state.offer_picture(8, bytes);
+        for _ in 0..600 {
+            if state.pictures[&8].is_ready() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(state.pictures[&8].is_ready(), "the fixture never decoded");
+        // Several frames later, with nothing asking the cache again, it is still ready and still the same
+        // decoded size: the entry did not expire underneath the wall.
+        for _ in 0..3 {
+            let _ = pictures_need_a_frame(&mut state.pictures_pending, &state.pictures);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(state.pictures[&8].is_ready());
+        assert_eq!(
+            state.pictures[&8].size(),
+            Some([400, 120]),
+            "the fixture is the hull silhouette, 400x120 — the decoded size is the proof the handle is \
+             still the decoded picture and not a fresh request"
+        );
+    }
+
     #[test]
     fn the_card_redraws_on_the_frame_clock_and_not_the_wall_clock() {
         let mut state = state_with_two_hulls();
