@@ -45,8 +45,8 @@ pub enum Reply {
     Picture(Result<Vec<FeedPosition>, Error>),
     Unit(i64, Result<Box<UnitDetail>, Error>),
     Commander(i64, Result<Vec<UnitCommander>, Error>),
-    /// The fleet register: picture URLs for every hull, in one read.
-    Units(Result<Vec<crate::data::types::UnitSummary>, Error>),
+    /// The fleet register: picture URLs for every hull, read across as many pages as the server reports.
+    Units(Result<crate::data::types::Register, Error>),
     /// One hull's picture bytes, fetched off the UI thread and decoded by the view's cache.
     Image(i64, Result<Vec<u8>, Error>),
     Specifications(

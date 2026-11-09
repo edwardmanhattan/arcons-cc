@@ -17,12 +17,45 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-/// `{status_code, message, data}` — the envelope every Minos route returns, success or failure.
+/// `{status_code, message, data, metadata}` — the envelope every Minos route returns, success or failure.
+///
+/// `metadata` is **present only on paginated list endpoints**, and it is the difference between a client
+/// that reads a register and one that reads its first page and believes it has the fleet (`#52`).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Envelope<T> {
     pub status_code: i32,
     pub message: String,
     pub data: T,
+    #[serde(default)]
+    pub metadata: Option<Pagination>,
+}
+
+/// The pagination block of a list response.
+///
+/// `has_next_page` is the field a client follows; `total_records` is the field an operator reads when the
+/// wall says it knows 50 hulls and the deployment has 127. Both are kept: one is the loop's condition and
+/// the other is the check that the loop did its job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct Pagination {
+    pub total_records: u64,
+    pub total_pages: u32,
+    pub page_size: u32,
+    pub current_page: u32,
+    pub has_next_page: bool,
+    #[serde(default)]
+    pub has_previous_page: bool,
+}
+
+/// The fleet register, as read: every hull the server has, and what the read cost.
+///
+/// `truncated` is not decoration. A page cap that quietly returned the first N pages is exactly the class
+/// of bug this ticket is about, so the caller is told when the cap was reached and can say so.
+#[derive(Debug, Clone, Default)]
+pub struct Register {
+    pub units: Vec<UnitSummary>,
+    pub pages: u32,
+    pub total_records: Option<u64>,
+    pub truncated: bool,
 }
 
 /// One hull in the standing picture, with its last known fix if it has ever reported.

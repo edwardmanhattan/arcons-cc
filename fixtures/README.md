@@ -18,6 +18,7 @@ server said `127` hulls and `126` of them had never reported, which is the case 
 | `unit.json` | `GET /units/1` |
 | `specifications.json` | `GET /units/1/specifications` — one append-only version, every measurement nullable |
 | `commander-empty.json` | `GET /units/1/commander` — an empty list, which is a valid answer: nobody has ever commanded this hull |
+| `units-page-1.json`, `units-page-2.json`, `units-page-3.json` | `GET /units?page_size=50&page_number=1..3`, recorded 2026-11-09: 127 hulls over three pages, `has_next_page` true, true, false. **Trimmed to the first four rows of each page and the presigned `image_url` replaced with a stable example host** — a presigned URL is a time-limited credential (`INV-08`), and the envelope and `metadata` are exactly as recorded, which is what the paging test reads (#52) |
 | `error-401.json` | `POST /auth/login` with an account that does not exist. Junk credentials, so the recording itself holds no secret |
 | `error-404.json` | `GET /units/99999999` |
 

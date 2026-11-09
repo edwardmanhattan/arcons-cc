@@ -109,6 +109,9 @@ pub struct State {
     pub pictures_pending: std::collections::HashSet<i64>,
     /// Hulls whose picture has been asked for, so a missing one is not re-asked every frame.
     pub asked_images: std::collections::HashSet<i64>,
+    /// How many hulls the fleet register returned, across every page it took. The heartbeat repeats it so a
+    /// truncated register is visible on a wall (`#52`) — `registered=25` next to `units=127` is the alarm.
+    pub registered: usize,
 }
 
 impl Default for State {
@@ -153,6 +156,7 @@ impl Default for State {
             pictures: std::collections::HashMap::new(),
             pictures_pending: std::collections::HashSet::new(),
             asked_images: std::collections::HashSet::new(),
+            registered: 0,
         }
     }
 }
@@ -626,9 +630,17 @@ fn drain_card_reads(state: &mut State) -> bool {
     let mut changed = false;
     for reply in &replies {
         match reply {
-            crate::data::Reply::Units(Ok(rows)) => {
+            crate::data::Reply::Units(Ok(register)) => {
                 state.image_urls.clear();
-                for row in rows {
+                state.registered = register.units.len();
+                tracing::info!(
+                    rows = register.units.len(),
+                    pages = register.pages,
+                    total = register.total_records,
+                    truncated = register.truncated,
+                    "the fleet register was read"
+                );
+                for row in &register.units {
                     if let Some(url) = &row.image_url {
                         state.image_urls.insert(row.id, url.clone());
                     }
@@ -976,6 +988,10 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
         tracing::info!(
             fixes = state.fixes,
             units = state.picture.units().len(),
+            // Two numbers, because their disagreement is the bug (#52): a wall that knows 25 hulls while
+            // the feed carries 127 is reading one page of the register.
+            registered = state.registered,
+            pictures = state.image_urls.len(),
             link = ?state.link,
             // A number or -1: a wall whose platform cannot say must say so, not invent a figure.
             rss_mb = crate::platform::rss_mb().map(|mb| mb.round() as i64).unwrap_or(-1),

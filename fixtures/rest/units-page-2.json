@@ -1,0 +1,221 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": [
+    {
+      "id": 68,
+      "name": "KRI Lumba-Lumba",
+      "hull_number": "858",
+      "unit_class": {
+        "id": 26,
+        "name": "Pari / PC-40",
+        "id_name": "Pari / PC-40",
+        "unit_type": {
+          "id": 7,
+          "name": "PC",
+          "id_name": "Kapal Patroli",
+          "description_en": "Patrol craft",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "category": {
+          "id": 5,
+          "name": "Patrol Craft",
+          "id_name": "Kapal Patroli",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "hull_count": 9
+      },
+      "unit_status": {
+        "id": 1,
+        "name": "Active",
+        "id_name": "Aktif",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "service_branch": {
+        "id": 1,
+        "name": "Navy",
+        "id_name": "TNI Angkatan Laut",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "movement_domain": {
+        "id": 1,
+        "name": "Surface",
+        "id_name": "Permukaan",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "current_specification_version": 2,
+      "image_url": "https://objects.example.test/units/68.png?X-Amz-Expires=REDACTED",
+      "image_content_type": "image/png",
+      "image_size_bytes": 716955,
+      "image_width_px": 1438,
+      "image_height_px": 283
+    },
+    {
+      "id": 81,
+      "name": "KRI Makassar",
+      "hull_number": "590",
+      "unit_class": {
+        "id": 18,
+        "name": "Makassar / LPD",
+        "id_name": "Makassar / LPD",
+        "unit_type": {
+          "id": 11,
+          "name": "LPD",
+          "id_name": "Kapal Pendarat Dok",
+          "description_en": "Landing platform dock",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "category": {
+          "id": 7,
+          "name": "Amphibious",
+          "id_name": "Amfibi",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "hull_count": 4
+      },
+      "unit_status": {
+        "id": 1,
+        "name": "Active",
+        "id_name": "Aktif",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "service_branch": {
+        "id": 1,
+        "name": "Navy",
+        "id_name": "TNI Angkatan Laut",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "movement_domain": {
+        "id": 1,
+        "name": "Surface",
+        "id_name": "Permukaan",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "current_specification_version": 2,
+      "image_url": "https://objects.example.test/units/81.png?X-Amz-Expires=REDACTED",
+      "image_content_type": "image/png",
+      "image_size_bytes": 646715,
+      "image_width_px": 1346,
+      "image_height_px": 227
+    },
+    {
+      "id": 16,
+      "name": "KRI Malahayati",
+      "hull_number": "362",
+      "unit_class": {
+        "id": 15,
+        "name": "Fatahillah",
+        "id_name": "Fatahillah",
+        "unit_type": {
+          "id": 3,
+          "name": "FFG",
+          "id_name": "Frigat Rudal Berpemandu",
+          "description_en": "Guided missile frigate",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "category": {
+          "id": 2,
+          "name": "Frigate",
+          "id_name": "Frigat",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "hull_count": 3
+      },
+      "unit_status": {
+        "id": 1,
+        "name": "Active",
+        "id_name": "Aktif",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "service_branch": {
+        "id": 1,
+        "name": "Navy",
+        "id_name": "TNI Angkatan Laut",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "movement_domain": {
+        "id": 1,
+        "name": "Surface",
+        "id_name": "Permukaan",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "current_specification_version": 1
+    },
+    {
+      "id": 52,
+      "name": "KRI Mandau",
+      "hull_number": "621",
+      "unit_class": {
+        "id": 21,
+        "name": "Mandau / PSM Mk-III",
+        "id_name": "Mandau / PSM Mk-III",
+        "unit_type": {
+          "id": 6,
+          "name": "FAC(M)",
+          "id_name": "Kapal Cepat Rudal",
+          "description_en": "Fast attack craft (missile)",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "category": {
+          "id": 4,
+          "name": "Fast Attack Craft",
+          "id_name": "Kapal Cepat Rudal",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "hull_count": 4
+      },
+      "unit_status": {
+        "id": 1,
+        "name": "Active",
+        "id_name": "Aktif",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "service_branch": {
+        "id": 1,
+        "name": "Navy",
+        "id_name": "TNI Angkatan Laut",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "movement_domain": {
+        "id": 1,
+        "name": "Surface",
+        "id_name": "Permukaan",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "current_specification_version": 2,
+      "image_url": "https://objects.example.test/units/52.png?X-Amz-Expires=REDACTED",
+      "image_content_type": "image/png",
+      "image_size_bytes": 1117956,
+      "image_width_px": 2114,
+      "image_height_px": 269
+    }
+  ],
+  "metadata": {
+    "total_records": 127,
+    "total_pages": 3,
+    "page_size": 50,
+    "current_page": 2,
+    "has_next_page": true,
+    "has_previous_page": true
+  }
+}

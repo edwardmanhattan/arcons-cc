@@ -1,0 +1,206 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": [
+    {
+      "id": 97,
+      "name": "KRI Teluk Cendrawasih",
+      "hull_number": "533",
+      "unit_class": {
+        "id": 16,
+        "name": "Frosch / Hoyerswerda",
+        "id_name": "Frosch / Hoyerswerda",
+        "unit_type": {
+          "id": 12,
+          "name": "LST",
+          "id_name": "Kapal Pendarat Tank",
+          "description_en": "Landing ship tank",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "category": {
+          "id": 7,
+          "name": "Amphibious",
+          "id_name": "Amfibi",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "hull_count": 9
+      },
+      "unit_status": {
+        "id": 1,
+        "name": "Active",
+        "id_name": "Aktif",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "service_branch": {
+        "id": 1,
+        "name": "Navy",
+        "id_name": "TNI Angkatan Laut",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "movement_domain": {
+        "id": 1,
+        "name": "Surface",
+        "id_name": "Permukaan",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "current_specification_version": 1
+    },
+    {
+      "id": 95,
+      "name": "KRI Teluk Gilimanuk",
+      "hull_number": "531",
+      "unit_class": {
+        "id": 16,
+        "name": "Frosch / Hoyerswerda",
+        "id_name": "Frosch / Hoyerswerda",
+        "unit_type": {
+          "id": 12,
+          "name": "LST",
+          "id_name": "Kapal Pendarat Tank",
+          "description_en": "Landing ship tank",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "category": {
+          "id": 7,
+          "name": "Amphibious",
+          "id_name": "Amfibi",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "hull_count": 9
+      },
+      "unit_status": {
+        "id": 1,
+        "name": "Active",
+        "id_name": "Aktif",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "service_branch": {
+        "id": 1,
+        "name": "Navy",
+        "id_name": "TNI Angkatan Laut",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "movement_domain": {
+        "id": 1,
+        "name": "Surface",
+        "id_name": "Permukaan",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "current_specification_version": 1
+    },
+    {
+      "id": 102,
+      "name": "KRI Teluk Hading",
+      "hull_number": "538",
+      "unit_class": {
+        "id": 16,
+        "name": "Frosch / Hoyerswerda",
+        "id_name": "Frosch / Hoyerswerda",
+        "unit_type": {
+          "id": 12,
+          "name": "LST",
+          "id_name": "Kapal Pendarat Tank",
+          "description_en": "Landing ship tank",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "category": {
+          "id": 7,
+          "name": "Amphibious",
+          "id_name": "Amfibi",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "hull_count": 9
+      },
+      "unit_status": {
+        "id": 1,
+        "name": "Active",
+        "id_name": "Aktif",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "service_branch": {
+        "id": 1,
+        "name": "Navy",
+        "id_name": "TNI Angkatan Laut",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "movement_domain": {
+        "id": 1,
+        "name": "Surface",
+        "id_name": "Permukaan",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "current_specification_version": 1
+    },
+    {
+      "id": 88,
+      "name": "KRI Teluk Lada",
+      "hull_number": "521",
+      "unit_class": {
+        "id": 39,
+        "name": "Teluk Bintuni / AT-117M",
+        "id_name": "Teluk Bintuni / AT-117M",
+        "unit_type": {
+          "id": 12,
+          "name": "LST",
+          "id_name": "Kapal Pendarat Tank",
+          "description_en": "Landing ship tank",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "category": {
+          "id": 7,
+          "name": "Amphibious",
+          "id_name": "Amfibi",
+          "is_system": true,
+          "is_judge_side": false
+        },
+        "hull_count": 8
+      },
+      "unit_status": {
+        "id": 1,
+        "name": "Active",
+        "id_name": "Aktif",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "service_branch": {
+        "id": 1,
+        "name": "Navy",
+        "id_name": "TNI Angkatan Laut",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "movement_domain": {
+        "id": 1,
+        "name": "Surface",
+        "id_name": "Permukaan",
+        "is_system": true,
+        "is_judge_side": false
+      },
+      "current_specification_version": 1
+    }
+  ],
+  "metadata": {
+    "total_records": 127,
+    "total_pages": 3,
+    "page_size": 50,
+    "current_page": 3,
+    "has_next_page": false,
+    "has_previous_page": true
+  }
+}

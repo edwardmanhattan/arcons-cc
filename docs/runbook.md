@@ -220,6 +220,7 @@ seconds the soak waited, then `SIGKILL`ed). A soak that fails this is a wall sys
 | `socket down: refused 103` | the account may not subscribe to `live-feed`: a permissions change, not a code bug |
 | `refused 109` | the token expired mid-session; the actor refreshes once and comes back by itself |
 | a picture that stops updating, header says `reconnecting` | the socket, not the REST client: the last read is still on screen, and the banner says so |
+| the header says `127 units` but hulls that have a photograph draw the symbol | the register did not reach the last page: the log's `registered=` says how many hulls it covered, and `pictures=` how many of them have one. `registered=25` against a fleet of 127 is one page of the register, not a fleet (`#52`) |
 | a picture that stops updating, header says `live` and the log's `socket fixes=` stops climbing | **the backend is not publishing**, not the wall: `fixes=0` after 30 s is a fact to take to whoever posts fixes. An independent client against the same socket and token sees the same silence (`#28`) |
 | every hull dim | the feed's own timestamps are older than `stale_after_s`; check `age_seconds` on the wire before blaming the wall |
 | the map is blank but markers are placed | the seed: `--self-check` proves it is present, `--probe-map` proves it draws |
