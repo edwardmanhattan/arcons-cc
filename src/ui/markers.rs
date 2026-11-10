@@ -95,7 +95,13 @@ fn place_one(
 /// `scale` converts the frame's device pixels into the points Rune lays out in: the frame is rendered
 /// at device resolution so its labels are sharp, and a marker placed in device pixels on a 2× panel
 /// would sit at twice its coordinate.
-pub fn layer(placed: &[Placed], frame: &Rendered, scale: f32, pictures: &Pictures) -> El {
+pub fn layer(
+    placed: &[Placed],
+    frame: &Rendered,
+    scale: f32,
+    pictures: &Pictures,
+    pane: crate::ui::ViewId,
+) -> El {
     let scale = if scale > 0.0 { f64::from(scale) } else { 1.0 };
     let mut layer = el()
         .key("markers")
@@ -107,7 +113,7 @@ pub fn layer(placed: &[Placed], frame: &Rendered, scale: f32, pictures: &Picture
             frame.height as f32 / scale as f32,
         );
     for marker in placed {
-        layer = layer.child(glyph(marker, scale, pictures));
+        layer = layer.child(glyph(marker, scale, pictures, pane));
     }
     layer
 }
@@ -136,7 +142,7 @@ impl Pictures<'_> {
 }
 
 /// The mark a hull earns: its picture when the range is close enough and one is ready, else its symbol.
-fn glyph(marker: &Placed, scale: f64, pictures: &Pictures) -> El {
+fn glyph(marker: &Placed, scale: f64, pictures: &Pictures, pane: crate::ui::ViewId) -> El {
     let accuracy = accuracy_ring(marker);
     let mark = match marker.mark {
         crate::units::mark::Mark::Picture {
@@ -150,7 +156,7 @@ fn glyph(marker: &Placed, scale: f64, pictures: &Pictures) -> El {
                 // at the wrong size is a wrong measurement, and one turned about its corner drifts off
                 // its own position.
                 let picture = el()
-                    .key(format!("marker-{}", marker.id_unit))
+                    .key(format!("marker-{pane}-{}", marker.id_unit))
                     .size(length_pt, beam_pt)
                     .pixels_fit(image.pixels(), rune::SurfaceFit::Fill)
                     // `rotation` is already `course − IMAGE_BOW_DEGREES`: the picture's stored bow is
@@ -158,14 +164,14 @@ fn glyph(marker: &Placed, scale: f64, pictures: &Pictures) -> El {
                     .rotate(rotation.to_radians());
                 let id_unit = marker.id_unit;
                 let mut target = el()
-                    .key(format!("hit-{}", id_unit))
+                    .key(format!("hit-{pane}-{id_unit}"))
                     .absolute(
                         (marker.x / scale) as f32 - TARGET / 2.0,
                         (marker.y / scale) as f32 - TARGET / 2.0,
                     )
                     .size(TARGET.max(length_pt), TARGET.max(beam_pt))
                     .center()
-                    .on_press(move |state: &mut crate::ui::State| state.press_marker(id_unit))
+                    .on_press(move |state: &mut crate::ui::State| state.press_marker(pane, id_unit))
                     .child(picture);
                 if let Some(ring) = accuracy {
                     target = target.child(ring);
@@ -173,17 +179,17 @@ fn glyph(marker: &Placed, scale: f64, pictures: &Pictures) -> El {
                 // No heading tick: the picture's own rotation is its heading.
                 return target;
             }
-            None => crate::ui::symbol::mark(marker.id_unit, marker.glyph, GLYPH),
+            None => crate::ui::symbol::mark(marker.id_unit, marker.glyph, GLYPH, pane),
         },
         crate::units::mark::Mark::Symbol => {
-            crate::ui::symbol::mark(marker.id_unit, marker.glyph, GLYPH)
+            crate::ui::symbol::mark(marker.id_unit, marker.glyph, GLYPH, pane)
         }
     };
     let symbol = mark;
 
     let id_unit = marker.id_unit;
     let mut target = el()
-        .key(format!("hit-{}", id_unit))
+        .key(format!("hit-{pane}-{id_unit}"))
         .absolute(
             (marker.x / scale) as f32 - TARGET / 2.0,
             (marker.y / scale) as f32 - TARGET / 2.0,
@@ -192,7 +198,7 @@ fn glyph(marker: &Placed, scale: f64, pictures: &Pictures) -> El {
         .center()
         // A press on a marker selects its hull. One card at a time, always (`INV-10`): selecting
         // replaces the selection, it does not add to it.
-        .on_press(move |state: &mut crate::ui::State| state.press_marker(id_unit))
+        .on_press(move |state: &mut crate::ui::State| state.press_marker(pane, id_unit))
         .child(symbol);
     if let Some(ring) = accuracy {
         target = target.child(ring);

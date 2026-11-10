@@ -87,6 +87,10 @@ arrives, so a stale picture is never presented as current.
 Selecting a unit replaces the selection. The card follows its vessel, flips rather than clipping, and
 never leaves the window.
 
+**Per pane** (#99): a pane has at most one card, and a card belongs to the pane it was asked for. Selecting
+in one pane leaves every other pane exactly as it was — a card in all of them is the selection being the
+wall's rather than the pane's, which is what the operator photographed.
+
 ### INV-11 — determinism
 
 Fixtures in, virtual clock, same scene, same bytes. Without this, goldens are noise and CI is a slot machine.

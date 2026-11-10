@@ -17,6 +17,8 @@ up in the wrong ocean. This file defines the vocabulary; the code uses it exactl
 | **Backfilled** | Reconstructed from an offline backlog. Real, the newest thing known, and **it did not just happen**. | "current", "live", "late" |
 | **Measured** | A Fix a beacon reported. `speed_kn` and `course_deg` exist or they do not. | "actual", "true" |
 | **Derived** | A position computed along an order rather than reported by a beacon. Never mixed with Measured silently. | "estimated" as a synonym for both |
+| **Pane** | One rectangle of the wall: its own camera, its own map thread, its own frame. | "window", "viewport", "split" |
+| **Pane view** | What *that* pane is looking at: its selection, its card, and (soon) its filter. `PaneView`. | the wall's selection — there is no such thing |
 
 ## The distinctions that decide code
 
@@ -31,6 +33,9 @@ up in the wrong ocean. This file defines the vocabulary; the code uses it exactl
   (`INV-06`).
 - **No history exists** on `live-feed`. After a reconnect, re-read before trusting a marker
   (`INV-09`).
+- **The data is shared; the question is not.** One Feed, one socket, one Picture — but which hull a
+  pane is asking about is that pane's, so a card in one pane is not a card in another (`INV-10`).
+  A wall-wide selection was the first version and it drew the same card in every pane.
 
 ## Where the contract lives
 

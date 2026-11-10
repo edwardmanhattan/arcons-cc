@@ -129,7 +129,7 @@ fn fitted(points: &[[f32; 2]]) -> Vec<[f32; 2]> {
 /// **Status is ours, not the standard's** (`INV-01`/`INV-03` keep their meaning): a live hull is drawn
 /// in the accent, a stale one in dimmed ink, and a backfilled one is hollow — the frame is stroked and
 /// the icon is not filled, which reads as an outline rather than a hull that is here now.
-pub fn mark(id_unit: i64, glyph: Glyph, size_pt: f32) -> El {
+pub fn mark(id_unit: i64, glyph: Glyph, size_pt: f32, pane: crate::ui::ViewId) -> El {
     // Built **once** per state, not per hull per frame: three shapes are a constant, and 200 hulls
     // rebuilding 43 points each was the difference between 4.7 ms and the 8 ms budget on a slower machine
     // (`INV-12`, measured on CI). Cloning the ops is a memcpy; assembling them is not.
@@ -139,7 +139,7 @@ pub fn mark(id_unit: i64, glyph: Glyph, size_pt: f32) -> El {
         Glyph::Stale => &shapes.stale,
         Glyph::History => &shapes.history,
     };
-    el().key(format!("marker-{id_unit}"))
+    el().key(format!("marker-{pane}-{id_unit}"))
         .size(size_pt, size_pt)
         .shape(shape.clone())
 }
@@ -205,7 +205,7 @@ mod tests {
         assert_eq!(tokens::SYMBOL, 24.0);
         // And the mark builds for every state, hollow included.
         for glyph in [Glyph::Live, Glyph::Stale, Glyph::History] {
-            let _ = super::mark(12, glyph, tokens::SYMBOL);
+            let _ = super::mark(12, glyph, tokens::SYMBOL, 1);
         }
     }
 
