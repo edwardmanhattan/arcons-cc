@@ -83,8 +83,33 @@ fn stale(state: &mut State) {
 
 fn card_open(state: &mut State) {
     load(state);
-    state.select(CARD_UNIT);
+    let focused = state.layout.focused();
+    state.select_in(focused, CARD_UNIT);
 }
+
+/// The `panes-cards` scene (#99): **two panes, and a card in one of them**.
+///
+/// The capture the operator asked for: press a hull in this pane and the neighbour must not follow. The
+/// selection belongs to the pane, so the second pane draws no card at all — and `verify` counts the card
+/// titles in the picture: one long run of name-sized ink, inside the pane that was pressed.
+fn panes_cards(state: &mut State) {
+    panes(state);
+    let rects = state.pane_rects();
+    let Some((first, _)) = rects.first().copied() else {
+        return;
+    };
+    // **The same hull in every frame**: the others are pulled back to a wide zoom, so the hull the card is
+    // about is drawn in all three panes. Without that, a wall-wide selection would draw no second card
+    // simply because the hull was off-screen — and the capture would pass while the bug was there.
+    for (id, _) in rects.iter().skip(1) {
+        state.set_camera_of(*id, Camera::new(CAMERA.center, PANES_WIDE));
+    }
+    state.select_in(first, CARD_UNIT);
+}
+
+/// The zoom the unpressed panes of `panes-cards` hold: wide enough that the card's hull is in every frame,
+/// which is what makes "no second card" a claim about the selection rather than about the camera.
+pub const PANES_WIDE: f64 = 8.0;
 
 /// The hull whose picture the `photo` scene draws: it has a fix in the fixture.
 pub const PHOTO_UNIT: i64 = CARD_UNIT;
@@ -363,6 +388,7 @@ pub const SCENES: &[Scene] = &[
     ("panes-gaps", panes_gaps),
     ("panes-named", panes_named),
     ("panes-max", panes_max),
+    ("panes-cards", panes_cards),
     ("settings", settings_sheet),
     ("settings-dismiss", settings_dismiss),
     ("pane-menu", pane_menu),
@@ -451,6 +477,7 @@ mod tests {
                 "panes-gaps",
                 "panes-named",
                 "panes-max",
+                "panes-cards",
                 "settings",
                 // The one scene whose point is that something is **not** there: the sheet, after a press
                 // outside it (#98).
@@ -467,8 +494,13 @@ mod tests {
             }
         }
         let card = state_for("card-open");
-        assert_eq!(card.selected, Some(CARD_UNIT), "the card scene has a card");
-        assert!(card.card.is_some());
+        let focused = card.layout.focused();
+        assert_eq!(
+            card.selected_in(focused),
+            Some(CARD_UNIT),
+            "the card scene has a card"
+        );
+        assert!(card.card_in(focused).is_some());
 
         // Multi View's witness: one pane per entry in `PANES`, at that entry's zoom, and the focus on
         // the one the constant names.

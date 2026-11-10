@@ -60,6 +60,10 @@ pub struct Pane {
     /// The camera at the start of a drag on this pane, so a pan is absolute rather than a sum of deltas.
     #[cfg(feature = "map")]
     drag_origin: Option<Camera>,
+    /// **What this pane is looking at** (#99): the hull it is asking about, that hull's card, and the
+    /// filter it will draw with. The wall's data is shared — one picture, one socket, one fleet — and the
+    /// *question* is not: two panes may ask about two hulls, and a press in one must not answer in the other.
+    pub view: PaneView,
     /// What the operator called this pane (#83). `None` draws nothing: a name nobody typed is not a name.
     ///
     /// It lives on the pane and not in `settings.toml`, because a pane does not survive a restart yet — a
@@ -78,11 +82,44 @@ impl Pane {
             frame: None,
             #[cfg(feature = "map")]
             frame_seen: None,
+            view: PaneView::default(),
             name: None,
             #[cfg(feature = "map")]
             drag_origin: None,
         }
     }
+}
+
+/// One pane's own view state (#99): the part of "what is on screen" that belongs to a window rather
+/// than to the wall.
+///
+/// The camera was already here. The selection was not, and it showed: `State::selected` was wall-wide, so
+/// `projections()` — the one function that draws "markers + card against this frame" — drew the same card
+/// in every pane, and a press in one pane opened a card in all of them.
+///
+/// **`filter` is deliberately here before it is used.** The operator's next ask is per-pane filters
+/// (ships in pane 1, planes in pane 2, altitude in pane 3). A third field added later would be the same
+/// mistake a second time: the pane's state is one thing, so it has one home.
+#[derive(Clone, Debug, Default)]
+pub struct PaneView {
+    /// The hull this pane is asking about. One per pane (`INV-10` per pane, not per wall).
+    pub selected: Option<i64>,
+    /// The card, built when this pane's selection or its fix changes — never per frame.
+    pub card: Option<crate::units::card::Card>,
+    /// The age text this pane's card drew last frame, so a second passing redraws the card and nothing
+    /// else. Per pane for the same reason the card is: two cards age at two moments.
+    last_age: String,
+    /// Which hulls this pane draws (all of them, for now). The operator's next ticket: a pane per
+    /// question — ships, planes, altitide — and the data stays shared.
+    pub filter: Filter,
+}
+
+/// What a pane draws. `All` today; the vocabulary exists so a filter is a value and not a boolean.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Filter {
+    /// Every hull the wall knows about.
+    #[default]
+    All,
 }
 
 /// The socket queue's patience: how long the fixes it delivered waited for a frame (#1).
@@ -276,12 +313,6 @@ pub struct State {
     pub live: Option<LiveThread>,
     /// The reads thread: the card asks it for identity, commander and specification.
     pub backend: Option<crate::data::Backend>,
-    /// The selected hull. One at a time, always (`INV-10`).
-    pub selected: Option<i64>,
-    /// The open card, built when the selection or its fix changes — never per frame.
-    pub card: Option<crate::units::card::Card>,
-    /// The age text shown last frame, so a second passing redraws the card and nothing else.
-    last_age: String,
     /// What the socket last said about itself.
     pub link: Link,
     /// How many fixes the socket has delivered **and the picture applied**, for the header's
@@ -382,9 +413,6 @@ impl Default for State {
             cadenced: None,
             live: None,
             backend: None,
-            selected: None,
-            card: None,
-            last_age: String::new(),
             link: Link::default(),
             fixes: 0,
             fix_latency: FixLatency::default(),
@@ -701,16 +729,40 @@ impl State {
         })
     }
 
-    /// Select a hull: build the card from the picture and ask the reads thread for the rest.
+    /// The hull the **focused pane** is asking about — what Escape closes and the card scenes show.
     ///
-    /// Selecting the same hull twice does not re-ask: a card that re-fetches on every press is a card
-    /// that flickers between answers.
-    pub fn select(&mut self, id_unit: i64) {
-        if self.selected == Some(id_unit) {
+    /// There is no wall-wide selection to read any more (#99): the focus ring says which pane the keys
+    /// are in, and this follows it.
+    pub fn selection(&self) -> Option<i64> {
+        self.selected_in(self.layout.focused())
+    }
+
+    /// The hull **one pane** is asking about.
+    pub fn selected_in(&self, pane: ViewId) -> Option<i64> {
+        self.pane(pane).and_then(|pane| pane.view.selected)
+    }
+
+    /// One pane's card, if it has one.
+    pub fn card_in(&self, pane: ViewId) -> Option<&crate::units::card::Card> {
+        self.pane(pane).and_then(|pane| pane.view.card.as_ref())
+    }
+
+    /// Select a hull **in one pane**: build that pane's card from the picture and ask the reads thread for
+    /// the rest.
+    ///
+    /// Selecting the same hull twice in the same pane does not re-ask: a card that re-fetches on every press
+    /// is a card that flickers between answers. Two panes selecting the same hull ask twice, which is correct
+    /// and cheap — they are two questions, and the reads thread is one thread with a queue.
+    pub fn select_in(&mut self, pane: ViewId, id_unit: i64) {
+        if self.selected_in(pane) == Some(id_unit) {
             return;
         }
-        self.selected = Some(id_unit);
-        self.rebuild_card();
+        if let Some(pane) = self.pane_mut(pane) {
+            pane.view.selected = Some(id_unit);
+        } else {
+            return;
+        }
+        self.rebuild_card(pane);
         if let Some(backend) = &self.backend {
             backend.request(crate::data::Command::Unit(id_unit));
             backend.request(crate::data::Command::Commander(id_unit));
@@ -718,38 +770,43 @@ impl State {
         }
     }
 
-    /// A press on a hull's marker: select it, or close its card if it is already open.
+    /// A press on a hull's marker, **in one pane**: select it there, or close that pane's card if it is
+    /// already open.
     ///
-    /// One click, one meaning — which is why the marker's press and the map's "press the background
-    /// to clear" handler do not both decide: pressing a marker records that this press was a
-    /// marker's, and the map's handler stands down for it.
-    pub fn press_marker(&mut self, id_unit: i64) {
+    /// One click, one meaning — which is why the marker's press and the map's "press the background to
+    /// clear" handler do not both decide: pressing a marker records that this press was a marker's, and
+    /// the map's handler stands down for it.
+    pub fn press_marker(&mut self, pane: ViewId, id_unit: i64) {
         self.marker_press = true;
-        if self.selected == Some(id_unit) {
-            self.clear_selection();
+        if self.selected_in(pane) == Some(id_unit) {
+            self.clear_selection(pane);
         } else {
-            self.select(id_unit);
+            self.select_in(pane, id_unit);
         }
     }
 
-    /// A press on the map itself: clear, unless that press was a marker's.
-    pub fn press_background(&mut self) {
+    /// A press on the map itself: clear that pane, unless the press was a marker's.
+    pub fn press_background(&mut self, pane: ViewId) {
         if !self.marker_press {
-            self.clear_selection();
+            self.clear_selection(pane);
         }
     }
 
-    /// Clear the selection. One card at a time means clearing the only one there is.
-    pub fn clear_selection(&mut self) {
-        self.selected = None;
-        self.card = None;
-        self.last_age.clear();
+    /// Clear one pane's selection. A pane has one card, so clearing it is clearing the only one there is.
+    pub fn clear_selection(&mut self, pane: ViewId) {
+        if let Some(pane) = self.pane_mut(pane) {
+            pane.view.selected = None;
+            pane.view.card = None;
+            pane.view.last_age.clear();
+        }
     }
 
-    /// Rebuild the card from the current picture — on selection, and when its fix changes.
-    fn rebuild_card(&mut self) {
-        let Some(id_unit) = self.selected else {
-            self.card = None;
+    /// Rebuild **one pane's** card from the current picture — on selection, and when its fix changes.
+    fn rebuild_card(&mut self, pane: ViewId) {
+        let Some(id_unit) = self.selected_in(pane) else {
+            if let Some(pane) = self.pane_mut(pane) {
+                pane.view.card = None;
+            }
             return;
         };
         let Some(view) = self
@@ -757,14 +814,21 @@ impl State {
             .units()
             .iter()
             .find(|unit| unit.unit.id_unit == id_unit)
+            .cloned()
         else {
             // A selection for a hull the picture no longer names: the card goes with it.
-            self.card = None;
+            if let Some(pane) = self.pane_mut(pane) {
+                pane.view.card = None;
+            }
             return;
         };
         let now = self.now();
-        let previous = self.card.take();
-        let mut card = crate::units::card::Card::new(view, now, self.stale_after);
+        let stale_after = self.stale_after;
+        let Some(target) = self.pane_mut(pane) else {
+            return;
+        };
+        let previous = target.view.card.take();
+        let mut card = crate::units::card::Card::new(&view, now, stale_after);
         // Keep what the reads already said for THIS hull: re-asking on every fix would make the
         // commander row flicker between answers every few seconds.
         if let Some(previous) = previous
@@ -774,7 +838,7 @@ impl State {
             card.commander = previous.commander;
             card.specification = previous.specification;
         }
-        self.card = Some(card);
+        target.view.card = Some(card);
     }
 }
 
@@ -1171,7 +1235,7 @@ fn maximised(state: &State, scale: f32, body: El) -> El {
                 .pixels(map.pixels()),
         );
     }
-    sheet = sheet.child(projections(state, &frame, scale));
+    sheet = sheet.child(projections(state, id, &frame, scale));
     if let Some(plate) = name_plate(pane) {
         sheet = sheet.child(plate);
     }
@@ -1251,7 +1315,7 @@ fn single_pane(state: &State, id: ViewId, rect: Rect, scale: f32, body: El) -> E
     let Some(frame) = pane.frame else {
         return body;
     };
-    let mut layer = body.child(projections(state, &frame, scale));
+    let mut layer = body.child(projections(state, id, &frame, scale));
     // The name is chrome on the wall as it was, too: a one-pane wall with a name is a pane somebody named.
     if let Some(plate) = state.pane(id).and_then(name_plate) {
         layer = layer.child(plate);
@@ -1319,7 +1383,7 @@ fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
     // pane whose map has not drawn yet draws no markers — and still has its handle.
     let mut layer = body;
     if let Some(frame) = state.pane(id).and_then(|pane| pane.frame) {
-        layer = layer.child(projections(state, &frame, scale));
+        layer = layer.child(projections(state, id, &frame, scale));
     }
     // The plate is chrome over the picture, and the handle goes on top of it: a grab must never be a press
     // on the label either (#83).
@@ -1448,14 +1512,25 @@ fn ghost(state: &State, scale: f32, body: El) -> El {
     let pictures = markers::Pictures {
         images: &state.pictures,
     };
-    body.child(element.child(markers::layer(&placed, &frame, scale, &pictures)))
+    body.child(element.child(markers::layer(
+        &placed,
+        &frame,
+        scale,
+        &pictures,
+        state.dragging.map(|drag| drag.pane).unwrap_or_default(),
+    )))
 }
 
 /// **One pane's picture**: its markers, projected against `frame`, and the card if the selected hull is in
 /// that frame. Used by the single-pane wall, by a tiled pane and by the maximised pane (#85) — three callers
 /// that must agree, because a second copy of this is how a marker is drawn against one camera and asserted
 /// against another.
-fn projections(state: &State, frame: &crate::map::geometry::Rendered, scale: f32) -> El {
+fn projections(
+    state: &State,
+    id: ViewId,
+    frame: &crate::map::geometry::Rendered,
+    scale: f32,
+) -> El {
     let sizes = |id_unit: i64| state.sizes.get(&id_unit).copied();
     let placed = markers::place(
         &state.picture,
@@ -1468,8 +1543,8 @@ fn projections(state: &State, frame: &crate::map::geometry::Rendered, scale: f32
     let pictures = markers::Pictures {
         images: &state.pictures,
     };
-    let mut layer = markers::layer(&placed, frame, scale, &pictures);
-    if let Some(card) = &state.card
+    let mut layer = markers::layer(&placed, frame, scale, &pictures, id);
+    if let Some(card) = state.card_in(id)
         && let Some(marker) = placed
             .iter()
             .find(|marker| marker.id_unit == card.unit.id_unit)
@@ -1910,6 +1985,9 @@ fn open_menu(state: &mut State, id: ViewId, event: &rune::PointerEvent, scale: f
 #[cfg(feature = "map")]
 fn press_in(state: &mut State, id: ViewId) {
     state.layout.focus(id);
+    // **A press on a pane's water clears that pane** (#99): the map underneath is that pane's, and the
+    // press must not walk over to the pane that happens to have the keys.
+    state.press_background(id);
     if state.menu.take().is_some() {
         state.layout_dirty = true;
     }
@@ -2172,33 +2250,42 @@ fn drain_card_reads(state: &mut State) -> bool {
             )
         })
         .collect();
-    let Some(card) = state.card.as_mut() else {
-        return changed;
-    };
-    for reply in replies {
-        match reply {
-            crate::data::Reply::Unit(id, result) if Some(id) == state.selected => {
-                card.identity = match result {
-                    Ok(unit) => crate::units::card::Fetch::Ready(*unit),
-                    Err(error) => crate::units::card::Fetch::Failed(error.to_string()),
-                };
-                changed = true;
+    // **Every pane asking about that hull is answered** (#99): two panes may show the same hull's card,
+    // and one of them silently missing its commander row would be the shared-selection bug in a new
+    // costume. Panes are few, so this is a walk, not an index.
+    for reply in &replies {
+        for pane in state.panes.iter_mut() {
+            if pane.view.selected.is_none() || pane.view.card.is_none() {
+                continue;
             }
-            crate::data::Reply::Commander(id, result) if Some(id) == state.selected => {
-                card.commander = match result {
-                    Ok(entries) => crate::units::card::Fetch::Ready(entries),
-                    Err(error) => crate::units::card::Fetch::Failed(error.to_string()),
-                };
-                changed = true;
+            let wants = pane.view.selected;
+            let Some(card) = pane.view.card.as_mut() else {
+                continue;
+            };
+            match reply {
+                crate::data::Reply::Unit(id, result) if Some(*id) == wants => {
+                    card.identity = match result {
+                        Ok(unit) => crate::units::card::Fetch::Ready((**unit).clone()),
+                        Err(error) => crate::units::card::Fetch::Failed(error.to_string()),
+                    };
+                    changed = true;
+                }
+                crate::data::Reply::Commander(id, result) if Some(*id) == wants => {
+                    card.commander = match result {
+                        Ok(entries) => crate::units::card::Fetch::Ready(entries.clone()),
+                        Err(error) => crate::units::card::Fetch::Failed(error.to_string()),
+                    };
+                    changed = true;
+                }
+                crate::data::Reply::Specifications(id, result) if Some(*id) == wants => {
+                    card.specification = match result {
+                        Ok(versions) => crate::units::card::Fetch::Ready(versions.clone()),
+                        Err(error) => crate::units::card::Fetch::Failed(error.to_string()),
+                    };
+                    changed = true;
+                }
+                _ => {}
             }
-            crate::data::Reply::Specifications(id, result) if Some(id) == state.selected => {
-                card.specification = match result {
-                    Ok(versions) => crate::units::card::Fetch::Ready(versions),
-                    Err(error) => crate::units::card::Fetch::Failed(error.to_string()),
-                };
-                changed = true;
-            }
-            _ => {}
         }
     }
     changed
@@ -2308,19 +2395,26 @@ fn size_of(version: &crate::data::types::UnitSpecification) -> Option<crate::uni
 /// This is the ticket's "the age advances without a re-render of the map": the model is untouched, so
 /// the map element, the marker layer and every other element diff to themselves.
 fn tick_card_age(state: &mut State) -> bool {
-    let Some(card) = &state.card else {
-        return false;
-    };
     // The age advances on the **frame** clock, not the wall clock: `poll`'s answer decides when Rune
     // rebuilds the element tree, so a real-clock comparison here makes *when* the card is redrawn
     // depend on how fast the machine is — which is exactly how a capture stops being reproducible
     // (#35). Same rule as every other `now` in the view: `State::now()` and nothing else.
-    let text = card.age_text(state.now());
-    if text == state.last_age {
-        return false;
+    //
+    // Per pane, because two cards age at two moments (#99): one wall-wide string made a second card's
+    // rebuild depend on the first one's text.
+    let now = state.now();
+    let mut changed = false;
+    for pane in state.panes.iter_mut() {
+        let Some(card) = &pane.view.card else {
+            continue;
+        };
+        let text = card.age_text(now);
+        if text != pane.view.last_age {
+            pane.view.last_age = text;
+            changed = true;
+        }
     }
-    state.last_age = text;
-    true
+    changed
 }
 
 /// Escape closes the card. A key press the focused control did not take comes here.
@@ -2355,10 +2449,11 @@ fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool
         state.layout_dirty = true;
         return true;
     }
-    if !closes_on_escape(event, state.selected) {
+    if !closes_on_escape(event, state.selection()) {
         return false;
     }
-    state.clear_selection();
+    let focused = state.layout.focused();
+    state.clear_selection(focused);
     true
 }
 
@@ -2440,8 +2535,14 @@ fn apply_update(state: &mut State, update: crate::live::Update) {
             state.note_fix_latency(received.elapsed());
             // A card is a view of one unit, so it follows that unit's fix. Rebuilt here rather than
             // every frame: a fix for another hull does not change this card's numbers.
-            if state.selected == Some(fix.id_unit) {
-                state.rebuild_card();
+            let asking: Vec<ViewId> = state
+                .panes
+                .iter()
+                .filter(|pane| pane.view.selected == Some(fix.id_unit))
+                .map(|pane| pane.id)
+                .collect();
+            for pane in asking {
+                state.rebuild_card(pane);
             }
         }
         // Everything else means "not current": a connect is not a picture (`INV-09`), a refresh is
@@ -2987,6 +3088,19 @@ mod tests {
         picture
     }
 
+    /// The focused pane's card, for tests that are about one pane's card (#99).
+    fn card_of(state: &State) -> Option<&crate::units::card::Card> {
+        state.card_in(state.layout.focused())
+    }
+
+    /// The age text the focused pane's card drew last, which is what `tick_card_age` compares.
+    fn card_age(state: &State) -> String {
+        state
+            .pane(state.layout.focused())
+            .map(|pane| pane.view.last_age.clone())
+            .unwrap_or_default()
+    }
+
     fn state_with_two_hulls() -> State {
         let camera = Camera::new((-6.108, 106.910), 11.0);
         let mut state = State::new(picture_with_two_hulls());
@@ -3086,7 +3200,7 @@ mod tests {
     #[test]
     fn the_card_redraws_on_the_frame_clock_and_not_the_wall_clock() {
         let mut state = state_with_two_hulls();
-        state.select(8);
+        state.select_in(state.layout.focused(), 8);
         // Settle: the first tick after a selection records the text it drew.
         tick_card_age(&mut state);
         assert!(
@@ -3100,13 +3214,14 @@ mod tests {
             "one second of the frame clock is a redraw; no wall-clock time passed in this test at all,              which is the whole point"
         );
         assert_eq!(
-            state.last_age, "5 s old",
+            card_age(&state),
+            "5 s old",
             "the fixture's fix is 4 s old at logical 0"
         );
 
         state.logical = 2.0;
         assert!(tick_card_age(&mut state));
-        assert_eq!(state.last_age, "6 s old");
+        assert_eq!(card_age(&state), "6 s old");
     }
 
     /// #1: the socket queue's patience is measured, and a wait past the promise is counted — the number
@@ -3245,15 +3360,69 @@ mod tests {
         );
     }
 
+    /// **A card belongs to the pane that asked for it** (#99). The wall's data is shared; the question is
+    /// not. The neighbour must not gain a card, and a press on the neighbour's water must not take this
+    /// pane's card away — which is what "the selection is the wall's" looked like on the wall.
+    #[test]
+    fn a_card_belongs_to_the_pane_that_asked_for_it() {
+        let mut state = state_with_two_hulls();
+        let first = state.layout.focused();
+        let camera = state.camera_of(first);
+        let second = state.split_pane(first, camera).expect("a second pane");
+        state.select_in(first, 8);
+
+        assert_eq!(state.selected_in(first), Some(8));
+        assert!(
+            state.card_in(first).is_some(),
+            "the pane that asked has its card"
+        );
+        assert_eq!(
+            state.selected_in(second),
+            None,
+            "the neighbour has no selection of its own"
+        );
+        assert!(
+            state.card_in(second).is_none(),
+            "INV-10: a card belongs to one pane, so the neighbour draws none"
+        );
+
+        // A press on the neighbour's water clears *that* pane, not this one.
+        state.press_background(second);
+        assert!(
+            state.card_in(first).is_some(),
+            "a press in another pane must not close this pane's card"
+        );
+
+        // And selecting in the neighbour leaves this pane's card alone.
+        state.select_in(second, 9);
+        assert_eq!(state.card_in(first).map(|card| card.unit.id_unit), Some(8));
+        assert_eq!(state.card_in(second).map(|card| card.unit.id_unit), Some(9));
+    }
+
+    /// A closed pane takes its card with it: the selection is inside the pane, so it cannot outlive it.
+    #[test]
+    fn closing_a_pane_drops_its_card() {
+        let mut state = state_with_two_hulls();
+        let first = state.layout.focused();
+        let camera = state.camera_of(first);
+        let second = state.split_pane(first, camera).expect("a second pane");
+        state.select_in(second, 8);
+        assert!(state.card_in(second).is_some());
+
+        assert!(state.layout.close(second));
+        state.panes.retain(|pane| pane.id != second);
+        assert!(
+            state.panes.iter().all(|pane| pane.view.selected.is_none()),
+            "no pane is left holding the closed pane's selection"
+        );
+    }
+
     /// The card is a view of one hull, so that hull's fix has to reach it.
     #[test]
     fn a_fix_updates_the_open_card() {
         let mut state = state_with_two_hulls();
-        state.select(8);
-        assert_eq!(
-            state.card.as_ref().map(|card| card.speed_kn),
-            Some(Some(0.0))
-        );
+        state.select_in(state.layout.focused(), 8);
+        assert_eq!(card_of(&state).map(|card| card.speed_kn), Some(Some(0.0)));
 
         apply_update(
             &mut state,
@@ -3277,7 +3446,7 @@ mod tests {
         );
 
         assert_eq!(
-            state.card.as_ref().map(|card| card.speed_kn),
+            card_of(&state).map(|card| card.speed_kn),
             Some(Some(21.5)),
             "the open card follows its hull's fix"
         );
@@ -3297,21 +3466,22 @@ mod tests {
     fn one_card_at_a_time_and_clearing_leaves_none() {
         // INV-10: selecting a hull replaces the selection. Two cards is the failure this exists for.
         let mut state = state_with_two_hulls();
-        state.select(8);
-        assert_eq!(state.card.as_ref().map(|card| card.unit.id_unit), Some(8));
-        state.select(9);
+        state.select_in(state.layout.focused(), 8);
+        assert_eq!(card_of(&state).map(|card| card.unit.id_unit), Some(8));
+        state.select_in(state.layout.focused(), 9);
         assert_eq!(
-            state.card.as_ref().map(|card| card.unit.id_unit),
+            card_of(&state).map(|card| card.unit.id_unit),
             Some(9),
             "the second selection replaces the first"
         );
-        assert_eq!(state.selected, Some(9));
-        state.clear_selection();
+        assert_eq!(state.selection(), Some(9));
+        let focused = state.layout.focused();
+        state.clear_selection(focused);
         assert!(
-            state.card.is_none(),
+            card_of(&state).is_none(),
             "INV-10: a cleared selection has no card"
         );
-        assert_eq!(state.selected, None);
+        assert_eq!(state.selection(), None);
     }
 
     #[test]
@@ -3319,27 +3489,27 @@ mod tests {
         // The two handlers fire for one click. Whichever runs first, the marker's press wins and the
         // map's does not undo it — and pressing the same hull again closes the card.
         let mut state = state_with_two_hulls();
-        state.press_marker(8);
-        state.press_background();
+        state.press_marker(state.layout.focused(), 8);
+        state.press_background(state.layout.focused());
         assert_eq!(
-            state.selected,
+            state.selection(),
             Some(8),
             "the map's handler stood down for the marker's press"
         );
-        assert!(state.card.is_some());
+        assert!(card_of(&state).is_some());
 
         let mut state = state_with_two_hulls();
-        state.press_marker(8);
+        state.press_marker(state.layout.focused(), 8);
         state.marker_press = false; // as the end of that frame does
-        state.press_marker(8);
+        state.press_marker(state.layout.focused(), 8);
         assert!(
-            state.card.is_none(),
+            card_of(&state).is_none(),
             "the second press on the same hull closes its card"
         );
 
         state.marker_press = false;
-        state.press_background();
-        assert_eq!(state.selected, None, "a press on the map clears");
+        state.press_background(state.layout.focused());
+        assert_eq!(state.selection(), None, "a press on the map clears");
     }
 
     #[test]
@@ -3348,7 +3518,7 @@ mod tests {
         // was loose text over the map. A drawn height is the proof, and the panel's own colour at its
         // centre is the second half of it.
         let mut state = state_with_two_hulls();
-        state.select(8);
+        state.select_in(state.layout.focused(), 8);
         let rt = frame_once(state);
         let (rect, _) = rt.presented("card").expect("the card is drawn");
         assert!(
@@ -3390,16 +3560,17 @@ mod tests {
             mods: rune::Mods::default(),
         };
         assert!(
-            !closes_on_escape(&escape, state.selected),
+            !closes_on_escape(&escape, state.selection()),
             "Escape with nothing open is not consumed"
         );
-        state.select(8);
+        state.select_in(state.layout.focused(), 8);
         assert!(
-            closes_on_escape(&escape, state.selected),
+            closes_on_escape(&escape, state.selection()),
             "Escape closes the open card"
         );
-        state.clear_selection();
-        assert!(state.card.is_none());
+        let focused = state.layout.focused();
+        state.clear_selection(focused);
+        assert!(card_of(&state).is_none());
         // And a key that is not Escape never closes it, however the state looks.
         let tab = rune::KeyEvent {
             key: rune::Key::Tab,
@@ -3413,7 +3584,7 @@ mod tests {
         // INV-10 at the render level: the card exists, is on screen, and stays inside the window for
         // a marker at the very edge (where a careless card would clip).
         let mut state = state_with_two_hulls();
-        state.select(8);
+        state.select_in(state.layout.focused(), 8);
         let rt = frame_once(state);
         let (rect, opacity) = rt.presented("card").expect("the card is drawn");
         assert!(opacity > 0.9);
@@ -3441,17 +3612,25 @@ mod tests {
         // The ticket's acceptance criterion, driven the way an operator drives it: press the marker's
         // own pixel, then move the camera and check the card followed the marker.
         let mut rt = frame_once(state_with_two_hulls());
-        let (x, y) = rt.find("hit-8").expect("the marker has a hit target");
+        // **The key names its pane** (#99): two panes may draw the same hull, so a hit target keyed by
+        // the hull alone would be the neighbour's. This test asked for `hit-8` until the pane went into
+        // the key, which is how it learned the symbol marker's key had not been updated with the picture's.
+        let pane_key = rt.state.layout.focused();
+        let (x, y) = rt
+            .find(&format!("hit-{pane_key}-8"))
+            .expect("the marker has a hit target");
         rt.pointer_down(x, y);
         rt.pointer_up(x, y);
         rt.invalidate();
         rt.frame(1.0 / 60.0);
         assert!(
-            rt.state.card.is_some(),
+            rt.state.card_in(rt.state.layout.focused()).is_some(),
             "a press on the marker opens its card"
         );
         let before = rt.presented("card").expect("card drawn").0;
-        let marker_before = rt.find("marker-8").expect("marker placed");
+        let marker_before = rt
+            .find(&format!("marker-{pane_key}-8"))
+            .expect("marker placed");
 
         // Pan: the frame the map hands over moves 400 px left, and the markers move with it.
         let camera = Camera::new((-6.108, 106.910 - 0.05), 11.0);
@@ -3470,7 +3649,9 @@ mod tests {
             rt.frame(1.0 / 60.0);
         }
 
-        let marker_after = rt.find("marker-8").expect("marker still placed");
+        let marker_after = rt
+            .find(&format!("marker-{pane_key}-8"))
+            .expect("marker still placed");
         let after = rt.presented("card").expect("card still drawn").0;
         assert!(
             (marker_after.0 - marker_before.0).abs() > 100.0,
@@ -3487,15 +3668,15 @@ mod tests {
                 && after[1] + after[3] <= tokens::WINDOW_SIZE.1,
             "INV-10: the card stayed inside the window after the pan: {after:?}"
         );
-        rt.state.clear_selection();
-        assert!(rt.state.card.is_none());
+        rt.state.clear_selection(rt.state.layout.focused());
+        assert!(rt.state.card_in(rt.state.layout.focused()).is_none());
     }
 
     #[test]
     fn a_card_for_a_hull_without_a_hull_number_has_no_hull_row() {
         // An empty row is worse than a missing one: it claims the field exists and is blank.
         let mut state = state_with_two_hulls();
-        state.select(9);
+        state.select_in(state.layout.focused(), 9);
         let rt = frame_once(state);
         assert!(rt.find("card-name").is_some());
         assert!(
@@ -3853,7 +4034,7 @@ mod tests {
             pane: state.layout.focused(),
             at: (10.0, 10.0),
         });
-        assert!(state.card.is_some(), "the scene has a card open");
+        assert!(card_of(&state).is_some(), "the scene has a card open");
         let rt = frame_once(state);
         assert!(rt.find("pane-menu").is_some());
 
@@ -3880,7 +4061,7 @@ mod tests {
             state.menu = None;
         }
         assert!(state.menu.is_none(), "the menu closed");
-        assert!(state.card.is_some(), "and the card behind it did not");
+        assert!(card_of(&state).is_some(), "and the card behind it did not");
     }
 
     /// The menu opens **at the click and stays inside its pane** (#77): a right-click 20 pt from the

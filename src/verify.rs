@@ -593,6 +593,63 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 ));
             }
         }
+        "panes-cards" => {
+            // **One card, in one pane** (#99) — the operator's screenshot read as a measurement. A card's
+            // text is `tokens::ink()`, which nothing else inside a pane draws: markers are accent-cyan
+            // glyphs, the pane's own chrome is hairlines. So each pane is asked how much name-and-value
+            // ink it holds, and the answer must be "one pane, not the others". Two is the shared-selection
+            // bug; none means the pane that was pressed has no card.
+            let Some((px, py, _, _)) = image.find_panel_rect(ink(tokens::panel())) else {
+                failures.push("panes-cards: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let state = scene::state_for("panes-cards");
+            let ink_colour = ink(tokens::ink());
+            let mut counts: Vec<(crate::ui::ViewId, usize)> = Vec::new();
+            for (id, rect) in state.pane_rects() {
+                let mut count = 0;
+                let x0 = (px + f64::from(rect.x)).max(0.0) as u32 + 4;
+                let y0 = (py + f64::from(rect.y)).max(0.0) as u32 + 4;
+                let x1 = ((px + f64::from(rect.x + rect.w)) as u32).min(image.width) - 4;
+                let y1 = ((py + f64::from(rect.y + rect.h)) as u32).min(image.height) - 4;
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        if near(image.at(x, y), ink_colour, 10) {
+                            count += 1;
+                        }
+                    }
+                }
+                counts.push((id, count));
+            }
+            let pressed = counts.first().map(|(id, _)| *id);
+            let with_card: Vec<_> = counts.iter().filter(|(_, n)| *n > 40).collect();
+            match with_card.len() {
+                1 if Some(with_card[0].0) == pressed => lines.push(format!(
+                    "panes-cards: one card, in pane {} ({} px of card ink; the others {} px)",
+                    with_card[0].0,
+                    with_card[0].1,
+                    counts
+                        .iter()
+                        .filter(|(id, _)| Some(*id) != pressed)
+                        .map(|(_, n)| n.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
+                1 => failures.push(format!(
+                    "panes-cards: the card is in pane {} but the press was on pane {}",
+                    with_card[0].0,
+                    pressed.unwrap_or_default()
+                )),
+                0 => failures.push(
+                    "panes-cards: no card ink in any pane — the pane that was pressed has no card"
+                        .to_string(),
+                ),
+                other => failures.push(format!(
+                    "panes-cards: {other} panes hold a card — a card in every pane is the selection \
+                     being the wall's instead of the pane's (#99)"
+                )),
+            }
+        }
         "panes-max" => {
             // **A maximised pane is a bigger rectangle, not a different pane** (#85). Its hulls project
             // against a frame the size of the panel — its own camera, the window's frame — and the tiling
@@ -1476,24 +1533,59 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
         );
     }
 
-    let cards = usize::from(state.card.is_some());
-    match (scene, cards) {
-        ("card-open", 1) => lines.push("card-open: exactly one card".to_string()),
+    // **One card per pane, and its own** (#99): the selection belongs to a window, so the question is
+    // asked per pane. A wall-wide count would pass with the same card in every pane — which is the bug
+    // the operator photographed.
+    let cards: Vec<(crate::ui::ViewId, i64)> = state
+        .panes
+        .iter()
+        .filter_map(|pane| {
+            pane.view
+                .card
+                .as_ref()
+                .map(|card| (pane.id, card.unit.id_unit))
+        })
+        .collect();
+    match (scene, cards.len()) {
+        ("card-open", 1) => lines.push("card-open: exactly one card, in one pane".to_string()),
         ("card-open", other) => {
-            failures.push(format!("card-open: {other} cards, and INV-10 says one"))
+            failures.push(format!("card-open: {other} cards, and INV-10 says one per pane"))
         }
+        // Two panes, one card: the pane that was pressed on, and not its neighbour.
+        ("panes-cards", 1) => lines.push("panes-cards: one card, in one pane".to_string()),
+        ("panes-cards", other) => failures.push(format!(
+            "panes-cards: {other} cards — a card in every pane means the selection is still the wall's \
+             and not the pane's (#99)"
+        )),
         (_, 0) => {}
         (name, other) => failures.push(format!("{name}: {other} cards with nothing selected")),
     }
     if scene == "card-open"
-        && let Some(card) = &state.card
-        && card.unit.id_unit != scene::CARD_UNIT
+        && let Some((_, hull)) = cards.first()
+        && *hull != scene::CARD_UNIT
     {
         failures.push(format!(
-            "card-open: the card is for hull {}, not {}",
-            card.unit.id_unit,
+            "card-open: the card is for hull {hull}, not {}",
             scene::CARD_UNIT
         ));
+    }
+    // The panes-cards scene draws its card in the first pane, and the second pane must have nothing: the
+    // *absence* is the claim, and it is checked here so the picture and the structure say the same thing.
+    if scene == "panes-cards"
+        && let Some((pane, hull)) = cards.first()
+    {
+        if *pane != state.pane_rects()[0].0 {
+            failures.push(format!(
+                "panes-cards: the card is in pane {pane}, not the pane that was pressed ({})",
+                state.pane_rects()[0].0
+            ));
+        }
+        if *hull != scene::CARD_UNIT {
+            failures.push(format!(
+                "panes-cards: the card is for hull {hull}, not {}",
+                scene::CARD_UNIT
+            ));
+        }
     }
 
     if failures.is_empty() {

@@ -159,8 +159,11 @@ fn budget_four_panes_pan_frame_cpu() {
         },
     );
     runtime.frame(0.0);
+    // **The key names its pane** (#99): the same hull can be drawn in four panes, so a key of the hull
+    // alone would find whichever pane Rune happened to walk first.
+    let first_pane = runtime.state.pane_rects()[0].0;
     assert!(
-        runtime.find("marker-1").is_some(),
+        runtime.find(&format!("marker-{first_pane}-1")).is_some(),
         "the marker layer did not render: the budget below would measure an empty window"
     );
     assert!(runtime.find("pane-4").is_some(), "four panes in the tree");
@@ -229,12 +232,13 @@ fn budget_200_markers_pan_zoom_frame_cpu() {
     // measure startup rather than a steady wall.
     runtime.frame(0.0);
     // If the markers are not in the tree, this measures the empty window and proves nothing.
+    let pane = runtime.state.pane_rects()[0].0;
     assert!(
-        runtime.find("marker-1").is_some(),
+        runtime.find(&format!("marker-{pane}-1")).is_some(),
         "the marker layer did not render: the budget below would measure an empty window"
     );
     assert!(
-        runtime.find("marker-200").is_some(),
+        runtime.find(&format!("marker-{pane}-200")).is_some(),
         "only some markers rendered"
     );
 
