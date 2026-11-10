@@ -119,7 +119,7 @@ into the cache: a capture then covers bytes → cache → marker, which is the r
 
 ```sh
 cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-drag · panes-pan
-                                 # panes-menu · panes-gaps · panes-named · settings · pane-menu
+                                 # panes-menu · panes-gaps · panes-named · panes-max · settings · pane-menu
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -141,6 +141,13 @@ invisible to every other kind of test: a gesture that reaches no handler, a pres
 element, a point measured in the element's coordinates when the layout asks in the viewport's (the bug: a
 press inside pane 2 was read as 2 pt from the *window's* left edge). With the drag dropped, the border
 returns to half and three assertions go red — measured, not assumed.
+
+`panes-max` is the same wall with one pane **full size over it** (#85). The assertion projects that pane's hull
+against a frame the size of the **panel** — not its slot's — which is the whole claim: a full-size pane is the
+same pane with a bigger rectangle. Rendered with the slot's frame instead, it is red: `no marker ink at
+(640, 372)`. The tiling behind is asserted structurally (`rects.len()` is still the number of panes), and the
+engine's half of it — the map thread actually rendering at the window's size and back — is an `#[ignore]`d
+test, `a_pane_resizes_to_full_size_and_back`, run with `cargo test --features map --lib -- --ignored`.
 
 `panes-named` is the same wall with **two panes named and one not** (#83): a short name, a name long enough to
 be cut, and a pane somebody never named. The assertion probes `ui::view::name_probe` — the rectangle the plate

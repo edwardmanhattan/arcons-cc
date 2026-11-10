@@ -223,6 +223,20 @@ pub const PANES_DRAGGED: f32 = 0.58;
 /// Where the `pane-menu` scene right-clicks: the menu's own point, in the pane's points.
 pub const MENU_AT: (f32, f32) = (300.0, 220.0);
 
+/// The `panes-max` scene (#85): one pane **full size over the wall**, the tiling still behind it.
+///
+/// The pane is the middle one — not the first — so the capture says the picture is the pane that was asked
+/// for rather than whichever pane happened to be first, and `verify` projects its hulls against a frame the
+/// size of the *panel*, which is the claim: a maximised pane is a bigger rectangle, not a different pane.
+fn panes_max(state: &mut State) {
+    panes(state);
+    let Some(id) = state.pane_rects().get(1).map(|(id, _)| *id) else {
+        return;
+    };
+    // The gesture, not a shortcut: the same function the menu row and the close plate call.
+    crate::ui::full_size_for_scene(state, id);
+}
+
 /// The `panes-named` scene (#83): three panes, two of them **named** — one short enough to read and one long
 /// enough to be cut — and one unnamed, so the capture says both "a name is drawn" and "no name draws
 /// nothing". The names are set the way the sheet sets them, through `shown_name`, so a name the wall would
@@ -334,6 +348,7 @@ pub const SCENES: &[Scene] = &[
     ("panes-menu", panes_menu),
     ("panes-gaps", panes_gaps),
     ("panes-named", panes_named),
+    ("panes-max", panes_max),
     ("settings", settings_sheet),
     ("pane-menu", pane_menu),
 ];
@@ -420,6 +435,7 @@ mod tests {
                 "panes-menu",
                 "panes-gaps",
                 "panes-named",
+                "panes-max",
                 "settings",
                 "pane-menu"
             ]

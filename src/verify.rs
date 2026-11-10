@@ -538,6 +538,86 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 ));
             }
         }
+        "panes-max" => {
+            // **A maximised pane is a bigger rectangle, not a different pane** (#85). Its hulls project
+            // against a frame the size of the panel — its own camera, the window's frame — and the tiling
+            // behind it is untouched (checked structurally below). The frame here is `synthetic_frame` of
+            // the panel, the rule a headless pane lays its own frame out by.
+            let Some((ox, oy, pw, ph)) = image.find_panel_rect(ink(tokens::panel())) else {
+                failures.push("panes-max: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let state = scene::state_for("panes-max");
+            let Some(id) = state.maximised else {
+                failures.push("panes-max: the scene maximises nothing".to_string());
+                return Err(failures);
+            };
+            let Some(pane) = state.pane(id) else {
+                failures.push(format!("panes-max: pane {id} has no state"));
+                return Err(failures);
+            };
+            let rects = crate::ui::view::panes_on(
+                &state.layout,
+                crate::map::geometry::Viewport::new(pw, ph),
+                state.settings.pane_gap,
+            );
+            assert!(
+                rects.len() > 1,
+                "panes-max: the wall behind a full-size pane is still a wall"
+            );
+            let index = rects.iter().position(|(pane, _)| *pane == id).unwrap_or(0);
+            let Some((id_unit, _zoom)) = scene::PANES.get(index).copied() else {
+                failures.push(format!("panes-max: pane {index} has no hull"));
+                return Err(failures);
+            };
+            let frame = crate::ui::view::synthetic_frame(
+                pane.camera,
+                crate::ui::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: pw as f32,
+                    h: ph as f32,
+                },
+                1.0,
+            );
+            let Some(fix) = scene::fixture().ok().and_then(|entries| {
+                entries
+                    .into_iter()
+                    .find(|entry| entry.id_unit == id_unit)
+                    .and_then(|entry| entry.position)
+            }) else {
+                failures.push(format!("panes-max: hull {id_unit} has no fix"));
+                return Err(failures);
+            };
+            let (px, py) = frame.project(fix.latitude, fix.longitude);
+            let (x, y) = (ox + px, oy + py);
+            let ink_here = if image.blob_centre(x, y, accent, 8).is_some() {
+                accent
+            } else {
+                dim
+            };
+            match image.blob_centre(x, y, ink_here, 8) {
+                Some((centre, count)) if count >= 8 => {
+                    let distance = ((centre.0 - x).powi(2) + (centre.1 - y).powi(2)).sqrt();
+                    if distance > TOLERANCE_PX {
+                        failures.push(format!(
+                            "panes-max: hull {id_unit} is {distance:.1} px from where the panel-sized \
+                             frame puts it ({x:.0}, {y:.0}) — the full-size pane projects against the \
+                             frame it is drawn in"
+                        ));
+                    } else {
+                        lines.push(format!(
+                            "panes-max: pane {id} full size draws hull {id_unit} at ({x:.0}, {y:.0}) \
+                             of a {pw:.0}×{ph:.0} frame"
+                        ));
+                    }
+                }
+                _ => failures.push(format!(
+                    "panes-max: no marker ink at ({x:.0}, {y:.0}) — the full-size pane is not drawn \
+                     against the window's frame"
+                )),
+            }
+        }
         "panes-named" => {
             // **A pane with a name draws its plate; a pane without one draws nothing** (#83). The probe is
             // `view::name_probe` — the same rectangle the plate is placed against — and the test is its
@@ -835,9 +915,9 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 .menu
                 .map(|menu| crate::ui::menu_items(&state, menu.pane).len())
                 .unwrap_or(0);
-            // One pane: the menu grows the wall and names this pane, and cannot close it. A tiled wall adds
-            // `Close pane` (#81, #83).
-            let expected = if scene == "panes-menu" { 3 } else { 2 };
+            // One pane: grow the wall, name this pane, go full size — and no `Close pane`, because the last
+            // pane cannot be closed. A tiled wall adds it (#81, #83, #85).
+            let expected = if scene == "panes-menu" { 4 } else { 3 };
             if rows != expected {
                 failures.push(format!(
                     "{scene}: the menu offers {rows} items, and this wall is the case for {expected}"
@@ -1231,7 +1311,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     );
 
     match scene {
-        "panes" | "panes-drag" | "panes-pan" | "panes-gaps" | "panes-named" => {
+        "panes" | "panes-drag" | "panes-pan" | "panes-gaps" | "panes-named" | "panes-max" => {
             // One marker per hull with a fix **in every pane**: a pane that drew nothing, or drew the
             // same set twice, is not a view.
             let expected = state
