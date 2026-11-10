@@ -117,7 +117,16 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply({"status_code": 200, "message": "Successfull", "data": entry})
             return self.reply(fixture("error-404.json"), 404)
         if path == "/units":
-            return self.reply(fixture("units-page-1.json"))
+            # **The page it asked for**, from the recorded pages: answering every page with page 1 is a wall
+            # that pages until its cap and reports a truncated register (measured: sixteen rounds a second,
+            # `rows=64 total=127 truncated=true`), which is the stub lying about the server rather than the
+            # wall being wrong. Page 3 says `has_next_page: false`, so the read ends where the wire's does.
+            page = parse_qs(parsed.query).get("page", ["1"])[0]
+            name = f"units-page-{page}.json"
+            try:
+                return self.reply(fixture(name))
+            except FileNotFoundError:
+                return self.reply(fixture("units-page-3.json"))
         if path.startswith("/units/"):
             rest = path[len("/units/"):]
             unit, _, what = rest.partition("/")
