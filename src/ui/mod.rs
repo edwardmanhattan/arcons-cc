@@ -174,6 +174,13 @@ pub struct State {
     pub settings: crate::config::settings::Settings,
     /// Whether the settings sheet is open. Chrome, not state: it changes nothing by itself.
     pub settings_open: bool,
+    /// The pane drawn **full size over the wall** for a moment (#85): still in its slot, still rendering,
+    /// with a copy of itself on a layer above everything. `None` is the wall as it is.
+    pub maximised: Option<ViewId>,
+    /// Device pixels per point, as the last layout pass reported it. The one number a *toggle* needs and
+    /// cannot get from a layout callback: restoring a maximised pane resizes its map thread, and resizing
+    /// it to the wrong scale is the blurred pane #85 exists to avoid.
+    pub scale: f32,
     /// The pane being renamed, and the field being typed into (#83). `None` when no rename is in progress —
     /// which is also what makes Escape unambiguous: it abandons *this*, or it does nothing.
     pub rename: Option<Rename>,
@@ -274,6 +281,8 @@ impl Default for State {
             layout: Layout::single(),
             settings: crate::config::settings::Settings::default(),
             settings_open: false,
+            maximised: None,
+            scale: 1.0,
             rename: None,
             panel: None,
             menu: None,
@@ -691,6 +700,11 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
     } else {
         units
     };
+    // A wall left full size is a line in a file, not a mystery in a photograph (#85).
+    let units = match state.maximised {
+        Some(id) => format!("{units} · max={id}"),
+        None => units,
+    };
     let (link, link_colour) = match &state.link {
         Link::Live => (
             format!("live · {units} · {} fixes", state.fixes),
@@ -948,6 +962,98 @@ fn save_settings(state: &State) {
 /// pane has no neighbour to be clipped away from and no second pane to be distinguished from, so the
 /// element tree — and therefore the goldens and `INV-12`'s frame cost — stay exactly what they were.
 /// Multi View adds the wrapper, and `#71`'s golden pass decides whether one pane should clip too.
+fn maximised(state: &State, scale: f32, body: El) -> El {
+    let Some(id) = state.maximised else {
+        return body;
+    };
+    let Some(pane) = state.pane(id) else {
+        return body;
+    };
+    let viewport = state.pane_viewport();
+    let rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: viewport.w as f32,
+        h: viewport.h as f32,
+    };
+    // The frame the pane's markers project against **here**: the window's rectangle, and nothing else. A
+    // projected hull is a function of the camera *and the frame*, so a maximised pane whose markers kept
+    // the slot's frame would draw them at the slot's scale on a picture three times the size.
+    let frame = view::synthetic_frame(pane.camera, rect, scale);
+    let mut sheet = el()
+        .key("max-pane")
+        .absolute(0.0, 0.0)
+        .size(rect.w, rect.h)
+        .radius(tokens::PANEL_RADIUS)
+        .fill(tokens::panel())
+        .clip_rounded(0.0)
+        .border(tokens::HAIRLINE, tokens::focus_edge())
+        // The pane's map renders at **this** size while it is full size, and at its slot's again after
+        // (#85): a pane that keeps rendering at its slot and is drawn at the window's is a blurred picture.
+        .on_layout(move |state: &mut State, [_, _, width, height]| {
+            state.scale = if scale > 0.0 { scale } else { 1.0 };
+            resize_map(state, id, (width, height), scale);
+        });
+    // **A full-size pane is the pane, not a photograph of it**: the wheel, a right-click, a press and a drag
+    // all reach it here. They are the wall's own handlers and not copies, because the frame each of them asks
+    // the map for is the frame the map is rendering — which, while the pane is full size, is the window's.
+    #[cfg(feature = "map")]
+    {
+        sheet = sheet
+            .on_press(move |state: &mut State| press_in(state, id))
+            .on_drag(move |state: &mut State, drag, _tx| drag_map(state, id, drag))
+            .on_wheel(move |state: &mut State, event: rune::WheelEvent, _tx| {
+                wheel(state, id, &event)
+            })
+            .on_secondary_press_local(move |state: &mut State, event: rune::PointerEvent, _tx| {
+                open_menu(state, id, &event, scale)
+            });
+    }
+    // On a wall the sheet shows the pane's own pixels, live: not a snapshot, not a second thread. A scene
+    // has no map and draws the markers on the panel, which is the same picture minus the sea.
+    #[cfg(feature = "map")]
+    if let Some(map) = pane.map.as_ref()
+        && map.error().is_none()
+    {
+        sheet = sheet.child(
+            rune::el()
+                .key("max-map")
+                .w_full()
+                .h_full()
+                .pixels(map.pixels()),
+        );
+    }
+    sheet = sheet.child(projections(state, &frame, scale));
+    if let Some(plate) = name_plate(pane) {
+        sheet = sheet.child(plate);
+    }
+    // The way back, said in words and pressable: a wall has no title bar to close and no icon set to
+    // draw an × with.
+    sheet = sheet.child(
+        text(MAX_CLOSE)
+            .key("max-close")
+            .font(tokens::LABEL)
+            .color(tokens::ink())
+            // **Anchored to the top-right**, so the words fit whatever they say: an absolute x derived from
+            // the label's own width is a plate that clips itself the first time the words change.
+            .pin(None, Some(tokens::GAP / 2.0), Some(tokens::GAP), None)
+            .h(tokens::NAME_H)
+            .px(tokens::GAP)
+            .radius(tokens::NAME_H / 2.0)
+            .fill(tokens::name_plate())
+            .border(tokens::HAIRLINE, tokens::focus_edge())
+            .on_press(|state: &mut State| restore_full_size(state)),
+    );
+    // The wall behind, dimmed but still there: the other panes keep their cameras and their cadence, and
+    // a reader can see what the full-size pane is one of.
+    body.child(
+        el().key("max-scrim")
+            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .fill(tokens::scrim())
+            .child(sheet),
+    )
+}
+
 fn picture(state: &State, scale: f32) -> El {
     // **With a gap the picture area becomes the background**, and each pane a panel on it (#82): a gutter
     // of two panels meeting is a line, not a gutter. At gap 0 nothing changes — the same single panel, the
@@ -983,6 +1089,7 @@ fn picture(state: &State, scale: f32) -> El {
     // to get a second one. Drawing the menu only once there were panes made the first split impossible
     // to ask for.
     body = ghost(state, scale, body);
+    body = maximised(state, scale, body);
     body = menu_view(state, scale, body);
     body
 }
@@ -996,33 +1103,7 @@ fn single_pane(state: &State, id: ViewId, rect: Rect, scale: f32, body: El) -> E
     let Some(frame) = pane.frame else {
         return body;
     };
-    let sizes = |id_unit: i64| state.sizes.get(&id_unit).copied();
-    let placed = markers::place(
-        &state.picture,
-        &frame,
-        state.now(),
-        state.stale_after,
-        state.range,
-        &sizes,
-    );
-    let pictures = markers::Pictures {
-        images: &state.pictures,
-    };
-    let mut layer = body.child(markers::layer(&placed, &frame, scale, &pictures));
-    if let Some(card) = &state.card
-        && let Some(marker) = placed
-            .iter()
-            .find(|marker| marker.id_unit == card.unit.id_unit)
-    {
-        let points = if scale > 0.0 { f64::from(scale) } else { 1.0 };
-        let anchor = (marker.x / points, marker.y / points);
-        let viewport = (
-            f64::from(frame.width) / points,
-            f64::from(frame.height) / points,
-        );
-        let placement = crate::units::card::place(anchor, viewport);
-        layer = layer.child(unitcard::card(card, placement, state.now()));
-    }
+    let mut layer = body.child(projections(state, &frame, scale));
     // The name is chrome on the wall as it was, too: a one-pane wall with a name is a pane somebody named.
     if let Some(plate) = state.pane(id).and_then(name_plate) {
         layer = layer.child(plate);
@@ -1090,33 +1171,7 @@ fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
     // pane whose map has not drawn yet draws no markers — and still has its handle.
     let mut layer = body;
     if let Some(frame) = state.pane(id).and_then(|pane| pane.frame) {
-        let sizes = |id_unit: i64| state.sizes.get(&id_unit).copied();
-        let placed = markers::place(
-            &state.picture,
-            &frame,
-            state.now(),
-            state.stale_after,
-            state.range,
-            &sizes,
-        );
-        let pictures = markers::Pictures {
-            images: &state.pictures,
-        };
-        layer = layer.child(markers::layer(&placed, &frame, scale, &pictures));
-        if let Some(card) = &state.card
-            && let Some(marker) = placed
-                .iter()
-                .find(|marker| marker.id_unit == card.unit.id_unit)
-        {
-            let points = if scale > 0.0 { f64::from(scale) } else { 1.0 };
-            let anchor = (marker.x / points, marker.y / points);
-            let viewport = (
-                f64::from(frame.width) / points,
-                f64::from(frame.height) / points,
-            );
-            let placement = crate::units::card::place(anchor, viewport);
-            layer = layer.child(unitcard::card(card, placement, state.now()));
-        }
+        layer = layer.child(projections(state, &frame, scale));
     }
     // The plate is chrome over the picture, and the handle goes on top of it: a grab must never be a press
     // on the label either (#83).
@@ -1246,6 +1301,41 @@ fn ghost(state: &State, scale: f32, body: El) -> El {
         images: &state.pictures,
     };
     body.child(element.child(markers::layer(&placed, &frame, scale, &pictures)))
+}
+
+/// **One pane's picture**: its markers, projected against `frame`, and the card if the selected hull is in
+/// that frame. Used by the single-pane wall, by a tiled pane and by the maximised pane (#85) — three callers
+/// that must agree, because a second copy of this is how a marker is drawn against one camera and asserted
+/// against another.
+fn projections(state: &State, frame: &crate::map::geometry::Rendered, scale: f32) -> El {
+    let sizes = |id_unit: i64| state.sizes.get(&id_unit).copied();
+    let placed = markers::place(
+        &state.picture,
+        frame,
+        state.now(),
+        state.stale_after,
+        state.range,
+        &sizes,
+    );
+    let pictures = markers::Pictures {
+        images: &state.pictures,
+    };
+    let mut layer = markers::layer(&placed, frame, scale, &pictures);
+    if let Some(card) = &state.card
+        && let Some(marker) = placed
+            .iter()
+            .find(|marker| marker.id_unit == card.unit.id_unit)
+    {
+        let points = if scale > 0.0 { f64::from(scale) } else { 1.0 };
+        let anchor = (marker.x / points, marker.y / points);
+        let viewport = (
+            f64::from(frame.width) / points,
+            f64::from(frame.height) / points,
+        );
+        let placement = crate::units::card::place(anchor, viewport);
+        layer = layer.child(unitcard::card(card, placement, state.now()));
+    }
+    layer
 }
 
 /// A pane's name, on its own border (#83): a plate in the top-left corner, left of the handle.
@@ -1393,6 +1483,7 @@ fn panel_laid_out(state: &mut State, width: f32, height: f32) {
 /// goldens are the wall as it was, and `#71`'s golden pass unifies the two.
 fn pane_laid_out(state: &mut State, id: ViewId, width: f32, height: f32, scale: f32) {
     let scale = if scale > 0.0 { scale } else { 1.0 };
+    state.scale = scale;
     let points = Rect {
         x: 0.0,
         y: 0.0,
@@ -1436,7 +1527,21 @@ fn pane_laid_out(state: &mut State, id: ViewId, width: f32, height: f32, scale: 
 /// would be a control that does nothing. The surface is as tall as it has items.
 fn menu_view(state: &State, scale: f32, body: El) -> El {
     let Some(menu) = state.menu else { return body };
-    let Some(rect) = state.layout.rect_of(state.pane_viewport(), menu.pane) else {
+    let viewport = state.pane_viewport();
+    let Some(rect) = state.layout.rect_of(viewport, menu.pane).map(|rect| {
+        if state.maximised == Some(menu.pane) {
+            // A right-click on the full-size picture is a right-click on the picture the operator is
+            // looking at, so the menu opens on that rectangle and not on the slot behind the scrim.
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: viewport.w as f32,
+                h: viewport.h as f32,
+            }
+        } else {
+            rect
+        }
+    }) else {
         return body;
     };
     let points = if scale > 0.0 { scale } else { 1.0 };
@@ -1474,6 +1579,72 @@ fn begin_rename(state: &mut State, pane: ViewId) {
     let current = state.pane(pane).and_then(|pane| pane.name.clone());
     state.rename = Some(Rename::new(pane, current.as_deref()));
     state.layout_dirty = true;
+}
+
+/// `Full size`: the pane is drawn over the wall and its map renders at the window's size (#85).
+///
+/// **It is still in its slot.** The tiling is untouched, the other panes keep their cameras and their
+/// cadence, and restoring puts the picture back exactly as it was — this is "one pane for a moment", not
+/// "make this the only pane", which is what a tiled wall's operator actually wants when the traffic gets
+/// dense.
+fn full_size_from_menu(state: &mut State, pane: ViewId) {
+    state.menu = None;
+    state.maximised = Some(pane);
+    // The keys and the highest cadence belong to the pane being looked at (`#71`).
+    state.layout.focus(pane);
+    if let Some(panel) = state.panel {
+        resize_map(state, pane, panel, state.scale);
+    }
+    state.layout_dirty = true;
+}
+
+/// The scene's entry to the same move: a scene has no menu row to press, so it calls what the row calls.
+/// Public only for `scene`, so a capture is of the wall's own path and not of a second one written for it.
+pub fn full_size_for_scene(state: &mut State, pane: ViewId) {
+    full_size_from_menu(state, pane);
+}
+
+/// `Back to the wall`: the pane goes back to the size its slot says, and its map thread with it.
+fn restore_from_menu(state: &mut State, _pane: ViewId) {
+    state.menu = None;
+    restore_full_size(state);
+}
+
+fn restore_full_size(state: &mut State) {
+    let Some(pane) = state.maximised.take() else {
+        return;
+    };
+    // The map goes back to the pane's own rectangle, not to whatever it was before: the tiling may have
+    // been dragged while the pane was full size.
+    if let Some(rect) = state
+        .layout
+        .rect_of(state.pane_viewport(), pane)
+        .map(|rect| view::inset_rect(rect, state.settings.pane_gap / 2.0))
+    {
+        let size = (rect.w.max(1.0), rect.h.max(1.0));
+        resize_map(state, pane, size, state.scale);
+    }
+    state.layout_dirty = true;
+}
+
+/// Tell one pane's map thread to render at `points`, in the device pixels it actually draws (#85).
+///
+/// A maximised pane that keeps rendering at its slot's size is an upscaled picture — blurry, and the one
+/// thing this ticket names as its reason to exist. So the thread is resized twice: once large, once back.
+fn resize_map(state: &mut State, pane: ViewId, points: (f32, f32), scale: f32) {
+    #[cfg(feature = "map")]
+    {
+        let scale = if scale > 0.0 { scale } else { 1.0 };
+        let (w, h) = (
+            (points.0 * scale).round().max(1.0) as u32,
+            (points.1 * scale).round().max(1.0) as u32,
+        );
+        if let Some(map) = state.pane(pane).and_then(|pane| pane.map.as_ref()) {
+            map.resize(w, h);
+        }
+    }
+    #[cfg(not(feature = "map"))]
+    let _ = (state, pane, points, scale);
 }
 
 /// Enter in the rename sheet: the name is the field's text, trimmed, and an empty field removes it.
@@ -1517,6 +1688,21 @@ pub fn menu_items(state: &State, pane: ViewId) -> Vec<MenuItem> {
         key: "menu-rename",
         action: begin_rename,
     });
+    // Full size, and the way back: one row that says which it will do, and it is offered on the wall a
+    // maximised pane is over as well as on the pane itself (#85).
+    if state.maximised.is_some() {
+        items.push(MenuItem {
+            label: MENU_RESTORE,
+            key: "menu-restore",
+            action: restore_from_menu,
+        });
+    } else {
+        items.push(MenuItem {
+            label: MENU_FULL_SIZE,
+            key: "menu-full-size",
+            action: full_size_from_menu,
+        });
+    }
     if state.layout.len() > 1 {
         items.push(MenuItem {
             label: MENU_CLOSE,
@@ -1551,7 +1737,11 @@ pub fn menu_origin(rect: Rect, at: (f32, f32), size: (f32, f32)) -> (f32, f32) {
 /// What the pane menu offers.
 pub const MENU_SPLIT: &str = "Focus on new pane";
 pub const MENU_RENAME: &str = "Name this pane…";
+pub const MENU_FULL_SIZE: &str = "Full size";
+pub const MENU_RESTORE: &str = "Back to the wall";
 pub const MENU_CLOSE: &str = "Close pane";
+/// What the maximised pane's own close plate says, and the header's note about it (#85).
+pub const MAX_CLOSE: &str = "back to the wall";
 /// What the rename sheet is called, and what a name longer than `NAME_MAX_CHARS` ends with.
 pub const RENAME_TITLE: &str = "Name this pane";
 pub const ELLIPSIS: char = '…';
@@ -1991,6 +2181,11 @@ fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool
     if event.key == rune::Key::Escape && state.rename.is_some() {
         state.rename = None;
         state.layout_dirty = true;
+        return true;
+    }
+    // A full-size pane next: Escape is the way back the close plate also offers.
+    if event.key == rune::Key::Escape && state.maximised.is_some() {
+        restore_full_size(state);
         return true;
     }
     // A lift in progress next: it is the live gesture, and cancelling it must not also close the menu or
@@ -3458,6 +3653,97 @@ mod tests {
         assert!(x >= 0.0 && y >= 0.0, "({x}, {y})");
     }
 
+    /// #85: a pane that goes full size asks its map thread for the window's frame, and asks for its own
+    /// back on the way out — a maximised pane that keeps rendering at its slot is an upscaled picture.
+    ///
+    /// The engine's side of that is `MapThread::resize` reaching the renderer, which the gate cannot see
+    /// (it builds no MapLibre), so this is `#[ignore]`d and run by hand:
+    ///
+    /// ```sh
+    /// cargo test --features map --lib -- --ignored --nocapture a_pane_resizes
+    /// ```
+    #[cfg(feature = "map")]
+    #[test]
+    #[ignore = "map engine: needs a GPU"]
+    fn a_pane_resizes_to_full_size_and_back() {
+        use crate::map::thread::MapThread;
+        use std::time::{Duration, Instant};
+
+        let pane = MapThread::spawn(crate::map::geometry::Camera::START, (960, 540));
+        let wait = |pane: &MapThread, want: (u32, u32)| {
+            let started = Instant::now();
+            while pane
+                .rendered()
+                .is_none_or(|frame| (frame.width, frame.height) != want)
+            {
+                assert!(
+                    pane.error().is_none(),
+                    "the pane failed: {:?}",
+                    pane.error()
+                );
+                assert!(
+                    started.elapsed() < Duration::from_secs(40),
+                    "the pane never published a {want:?} frame (last: {:?})",
+                    pane.rendered()
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            started.elapsed()
+        };
+
+        let first = wait(&pane, (960, 540));
+        println!("panes: the first {first:?} at 960x540");
+        pane.resize(1920, 1080);
+        let full = wait(&pane, (1920, 1080));
+        println!("panes: full size, 1920x1080, in {full:?} — the frame the maximised pane draws");
+        // A second resize **on the same thread**: this is the restore, and it is the one that leaves a
+        // blurry picture if it never arrives.
+        pane.resize(960, 540);
+        let back = wait(&pane, (960, 540));
+        println!("panes: back to its slot, 960x540, in {back:?}");
+        assert!(
+            full < Duration::from_secs(20) && back < Duration::from_secs(20),
+            "a resize is a frame, not a reload: {full:?} and {back:?}"
+        );
+    }
+
+    /// #85: going full size and back leaves the tiling, the cameras and the wall's own state exactly as it
+    /// was — the claim the capture cannot make on its own, because a capture is one moment.
+    #[test]
+    fn full_size_and_back_changes_nothing_but_the_layer() {
+        let mut state = crate::scene::state_for("panes");
+        state.headless = true;
+        let tiles = state.layout.rects(state.pane_viewport());
+        let cameras: Vec<_> = state.panes.iter().map(|pane| pane.camera).collect();
+        let id = tiles[1].0;
+
+        full_size_for_scene(&mut state, id);
+        assert_eq!(state.maximised, Some(id));
+        assert_eq!(
+            state.layout.focused(),
+            id,
+            "the keys go to the pane being looked at"
+        );
+        assert_eq!(
+            state.layout.rects(state.pane_viewport()),
+            tiles,
+            "the tiling is untouched: a full-size pane is a bigger rectangle, not a new layout"
+        );
+
+        restore_full_size(&mut state);
+        assert_eq!(state.maximised, None);
+        assert_eq!(state.layout.rects(state.pane_viewport()), tiles);
+        assert_eq!(
+            state
+                .panes
+                .iter()
+                .map(|pane| pane.camera)
+                .collect::<Vec<_>>(),
+            cameras,
+            "and every camera is where it was"
+        );
+    }
+
     /// #83: a name is trimmed and cut, and an empty one is no name at all — the three things the plate
     /// draws for and the sheet commits.
     #[test]
@@ -3596,7 +3882,7 @@ mod tests {
                 .iter()
                 .map(|item| item.label)
                 .collect::<Vec<_>>(),
-            vec![MENU_SPLIT, MENU_RENAME],
+            vec![MENU_SPLIT, MENU_RENAME, MENU_FULL_SIZE],
             "the last pane cannot be closed, so the menu does not offer it"
         );
 
@@ -3605,12 +3891,12 @@ mod tests {
         let items = crate::ui::menu_items(&tiled, pane);
         assert_eq!(
             items.iter().map(|item| item.label).collect::<Vec<_>>(),
-            vec![MENU_SPLIT, MENU_RENAME, MENU_CLOSE]
+            vec![MENU_SPLIT, MENU_RENAME, MENU_FULL_SIZE, MENU_CLOSE]
         );
         assert_eq!(
             tokens::menu_size(items.len()),
-            (tokens::MENU_WIDTH, tokens::MENU_ROW * 3.0),
-            "three rows, not one row's box clipped"
+            (tokens::MENU_WIDTH, tokens::MENU_ROW * 4.0),
+            "four rows, not one row's box clipped"
         );
     }
 
