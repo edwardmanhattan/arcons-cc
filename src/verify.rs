@@ -457,6 +457,175 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 )),
             }
         }
+        "settings" => {
+            // **The sheet is drawn, it is the size the token says, and it is on the wall** (#82). The
+            // scrim darkens everything behind it, so the sheet is the only `panel()`-coloured ink left in
+            // the picture — which is what makes its box findable at all.
+            // The sheet's box, measured the plain way: every pixel that is the sheet's fill, bounded.
+            // `find_panel_rect` is not usable here — it wants a *row* that is mostly the panel's colour,
+            // which is true of the wall and not of a 360 pt sheet in the middle of it.
+            let surface = ink(tokens::panel());
+            let (mut sx, mut sy, mut ex, mut ey) = (f64::MAX, f64::MAX, 0.0f64, 0.0f64);
+            let mut found = false;
+            // Eroded by one: a *solid* block of the sheet's fill, so an antialiased edge or a stray
+            // handle pixel a shade off the panel cannot stretch the box across the wall.
+            let solid = |x: u32, y: u32| {
+                x > 0
+                    && y > 0
+                    && x + 1 < image.width
+                    && y + 1 < image.height
+                    && [(0i32, 0i32), (1, 0), (-1, 0), (0, 1), (0, -1)]
+                        .iter()
+                        .all(|(dx, dy)| {
+                            near(
+                                image.at((x as i32 + dx) as u32, (y as i32 + dy) as u32),
+                                surface,
+                                6,
+                            )
+                        })
+            };
+            for y in 0..image.height {
+                for x in 0..image.width {
+                    if solid(x, y) {
+                        found = true;
+                        sx = sx.min(f64::from(x));
+                        sy = sy.min(f64::from(y));
+                        ex = ex.max(f64::from(x));
+                        ey = ey.max(f64::from(y));
+                    }
+                }
+            }
+            if !found {
+                failures.push(
+                    "settings: no sheet on screen — the setting is invisible on the one scene that opens it"
+                        .to_string(),
+                );
+                return Err(failures);
+            }
+            // The erosion took a pixel off each side; put it back.
+            let (sx, sy) = (sx - 1.0, sy - 1.0);
+            let (sw, sh) = (ex - sx + 2.0, ey - sy + 2.0);
+            let (want_w, want_h) = (
+                f64::from(tokens::SHEET_SIZE.0),
+                f64::from(tokens::SHEET_SIZE.1),
+            );
+            if (sw - want_w).abs() > 2.0 || (sh - want_h).abs() > 2.0 {
+                failures.push(format!(
+                    "settings: the sheet is {sw:.0}×{sh:.0} for a {want_w:.0}×{want_h:.0} token"
+                ));
+            } else {
+                lines.push(format!(
+                    "settings: the sheet is {sw:.0}×{sh:.0} at ({sx:.0}, {sy:.0})"
+                ));
+            }
+            // Its rows have ink: a title and the one setting, which is what a reader has to be able to
+            // read to change anything.
+            let mut brightest = 0u8;
+            for y in (sy as u32 + 8)..((sy + sh) as u32 - 8) {
+                for x in (sx as u32 + 8)..((sx + sw) as u32 - 8) {
+                    if x < image.width && y < image.height {
+                        brightest = brightest.max(image.luma(x, y));
+                    }
+                }
+            }
+            if brightest < 120 {
+                failures.push(format!(
+                    "settings: the sheet's rows have no ink (brightest {brightest} luma)"
+                ));
+            } else {
+                lines.push(format!(
+                    "settings: the sheet's rows are drawn ({brightest} luma)"
+                ));
+            }
+        }
+        "panes-gaps" => {
+            // **The gutter is real, and it is the gap the setting says** (#82). The panes are the only
+            // `panel()`-coloured ink, so their union box is the picture inset by half a gap; inside it, a
+            // column (or a row) that is mostly the window's own background is the space between two panes.
+            // The width of that run is measured against `tokens::GAP`, so the assertion is about the look
+            // rather than about a number copied out of it.
+            let Some((ox, oy, pw, ph)) = image.find_panel_rect(ink(tokens::panel())) else {
+                failures.push("panes-gaps: no pane surfaces on screen".to_string());
+                return Err(failures);
+            };
+            let gap = f64::from(tokens::GAP);
+            let background = ink(tokens::bg());
+            let mostly_background = |points: &[(u32, u32)]| {
+                let hits = points
+                    .iter()
+                    .filter(|(x, y)| {
+                        *x < image.width
+                            && *y < image.height
+                            && near(image.at(*x, *y), background, 6)
+                    })
+                    .count();
+                !points.is_empty() && hits * 10 >= points.len() * 8
+            };
+            // `(start, length)` of every run along one axis, in image pixels.
+            let runs_along =
+                |vertical: bool, from: u32, to: u32, other: (u32, u32)| -> Vec<(u32, u32)> {
+                    let mut runs = Vec::new();
+                    let mut run: Option<(u32, u32)> = None;
+                    for at in from..to {
+                        let points: Vec<(u32, u32)> = (other.0..other.1)
+                            .step_by(2)
+                            .map(|v| if vertical { (at, v) } else { (v, at) })
+                            .collect();
+                        if mostly_background(&points) {
+                            run = Some((run.map_or(at, |(start, _)| start), at));
+                        } else if let Some((start, last)) = run.take() {
+                            runs.push((start, last - start + 1));
+                        }
+                    }
+                    if let Some((start, last)) = run.take() {
+                        runs.push((start, last - start + 1));
+                    }
+                    runs
+                };
+            let inset = 4u32;
+            let right = (ox + pw) as u32;
+            let bottom = (oy + ph) as u32;
+            let top = oy as u32;
+            // Columns across the whole picture: the split between the left pane and the right column.
+            let across = runs_along(
+                true,
+                ox as u32 + 1,
+                right - 1,
+                (top + inset, bottom.saturating_sub(inset)),
+            );
+            let Some(&(vx, vlen)) = across
+                .iter()
+                .find(|(_, len)| (*len as f64 - gap).abs() <= 1.0)
+            else {
+                failures.push(format!(
+                    "panes-gaps: no vertical gutter of {gap:.0} pt — measured {across:?}, so the panes \
+                     are drawn without the space the setting says they have"
+                ));
+                return Err(failures);
+            };
+            // Rows **inside the right column**, which is where two panes are stacked: the horizontal
+            // gutter spans only that column, so a row across the whole picture would be mostly panes.
+            let down = runs_along(
+                false,
+                oy as u32 + 1,
+                bottom - 1,
+                (vx + vlen + inset, right.saturating_sub(inset)),
+            );
+            let Some(&(_hy, hlen)) = down
+                .iter()
+                .find(|(_, len)| (*len as f64 - gap).abs() <= 1.0)
+            else {
+                failures.push(format!(
+                    "panes-gaps: no horizontal gutter of {gap:.0} pt in the right column — measured \
+                     {down:?}"
+                ));
+                return Err(failures);
+            };
+            lines.push(format!(
+                "panes-gaps: a {vlen} pt gutter down at x={vx} and a {hlen} pt gutter across — the \
+                 {gap:.0} pt the setting asks for"
+            ));
+        }
         "panes" | "panes-pan" => {
             // **Each pane projects against its own frame** (`INV-04`, per pane). The rectangles come from
             // `Layout::rects` measured against the panel this capture actually has, so this check and the
@@ -471,9 +640,10 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             // split at half and `fixtures/scripts/panes-pan.json` drags it to 58%, so a gesture that
             // reaches nothing (#80) leaves the border at half and every hull lands outside its pane here.
             let state = scene::state_for("panes");
-            let rects = state
-                .layout
-                .rects(crate::map::geometry::Viewport::new(panel_w, panel_h));
+            // The **drawn** rectangles: the cells pulled in by the gap the scene chose (#82), which is the
+            // same function the view lays the panes out with.
+            let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
+            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
             if rects.len() != scene::PANES.len() {
                 failures.push(format!(
                     "panes: {} rectangles for {} panes",
@@ -722,7 +892,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             };
             let state = scene::state_for("panes-drag");
             let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
-            let rects = state.layout.rects(viewport);
+            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
             let Some(drag) = state.dragging else {
                 failures.push("panes-drag: no pane is lifted in the scene".to_string());
                 return Err(failures);
@@ -1004,7 +1174,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     );
 
     match scene {
-        "panes" | "panes-drag" | "panes-pan" => {
+        "panes" | "panes-drag" | "panes-pan" | "panes-gaps" => {
             // One marker per hull with a fix **in every pane**: a pane that drew nothing, or drew the
             // same set twice, is not a view.
             let expected = state
@@ -1013,7 +1183,11 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                 .iter()
                 .filter(|unit| unit.position.is_some())
                 .count();
-            let rects = state.layout.rects(state.pane_viewport());
+            let rects = crate::ui::view::panes_on(
+                &state.layout,
+                state.pane_viewport(),
+                state.settings.pane_gap,
+            );
             for (id, rect) in &rects {
                 let Some(pane) = state.pane(*id) else {
                     continue;

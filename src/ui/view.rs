@@ -113,6 +113,28 @@ pub fn handle_point(rect: Rect, local: (f32, f32)) -> (f32, f32) {
     )
 }
 
+/// The rectangles the panes are **drawn** at: the layout's cells, pulled in by the gap (#82).
+///
+/// The cells are the tiling — `border_at`, `drop_for` and `pane_at` all answer in them, because a point in
+/// the gap still belongs to a pane's cell and a drag across a gap must not lose its target. What the
+/// operator sees is the cell minus half the gap on each side, so two neighbours are a gap apart and the
+/// panel's edge stays where it was. One function, so the drawing, the map's own size (a frame is the drawn
+/// rectangle) and every assertion move together.
+pub fn panes_on(layout: &Layout, viewport: Viewport, gap: f32) -> Vec<(ViewId, Rect)> {
+    let half = (gap / 2.0).max(0.0);
+    layout
+        .rects(viewport)
+        .into_iter()
+        .map(|(id, rect)| {
+            if half == 0.0 {
+                (id, rect)
+            } else {
+                (id, inset_rect(rect, half))
+            }
+        })
+        .collect()
+}
+
 /// Where a lifted pane **will land**: the slot `Layout::preview` puts it in.
 ///
 /// `Layout::preview` is the layout the release will apply, so this is the pane's rectangle after the drop —
@@ -965,6 +987,42 @@ mod tests {
             Dir::Vertical,
             "a tall pane splits up/down"
         );
+    }
+
+    /// #82: a gap pulls every pane **in** by half of it and leaves the cells alone — the cells are what
+    /// the gestures answer in, so a drag across a gutter still has a target, and two neighbours end up
+    /// exactly one gap apart.
+    #[test]
+    fn a_gap_pulls_the_panes_in_and_leaves_the_cells_alone() {
+        let mut layout = Layout::single();
+        let first = layout.ids()[0];
+        let _second = layout.split(first, Dir::Horizontal).unwrap();
+        let cells = layout.rects(viewport());
+
+        // At zero the drawn rectangles are the cells, to the point: the look the wall had before settings.
+        assert_eq!(panes_on(&layout, viewport(), 0.0), cells);
+
+        let gap = tokens::GAP;
+        let drawn = panes_on(&layout, viewport(), gap);
+        assert_eq!(drawn.len(), cells.len());
+        for ((id, cell), (drawn_id, rect)) in cells.iter().zip(drawn.iter()) {
+            assert_eq!(id, drawn_id);
+            assert!(
+                (rect.x - (cell.x + gap / 2.0)).abs() < 0.001,
+                "{rect:?} {cell:?}"
+            );
+            assert!((rect.y - (cell.y + gap / 2.0)).abs() < 0.001);
+            assert!((rect.w - (cell.w - gap)).abs() < 0.001);
+            assert!((rect.h - (cell.h - gap)).abs() < 0.001);
+        }
+        // Two neighbours are a whole gap apart, which is the thing the operator sees.
+        let (a, b) = (drawn[0].1, drawn[1].1);
+        assert!((b.x - (a.x + a.w) - gap).abs() < 0.001, "{a:?} {b:?}");
+
+        // A gap wider than a pane would have to draw a rectangle with no picture in it, so the drawn
+        // rectangle never collapses: the same floor `inset_rect` has.
+        let tiny = panes_on(&layout, viewport(), 10_000.0);
+        assert!(tiny.iter().all(|(_, rect)| rect.w >= 1.0 && rect.h >= 1.0));
     }
 
     /// #80: a gesture's point arrives in the **element's** coordinates, and the layout's questions are

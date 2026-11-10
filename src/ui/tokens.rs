@@ -69,6 +69,8 @@ pub const PANE_HANDLE: (f32, f32) = (28.0, 4.0);
 /// a menu `size()`d to one row clips the second one, which is the kind of wrong no golden notices until
 /// someone opens it on a wall.
 pub const MENU_WIDTH: f32 = 216.0;
+/// The settings sheet: wide enough for a sentence and its switch, and as tall as the settings it has.
+pub const SHEET_SIZE: (f32, f32) = (360.0, 132.0);
 pub const MENU_ROW: f32 = 36.0;
 /// The size of a menu with `rows` items, the only place a menu's height is computed.
 pub fn menu_size(rows: usize) -> (f32, f32) {
@@ -139,6 +141,19 @@ pub fn handle_ink() -> Color {
 /// a slot and not as a hole in the wall (#70).
 pub fn gap_fill() -> Color {
     oklch(0.235, 0.02, 220.0)
+}
+
+/// No paint at all. A token, so that "this surface has no fill of its own" is a decision recorded beside
+/// the colour it would otherwise have had — and so `tests/scaffold.rs` can keep its promise that nothing
+/// outside this file names a colour.
+pub fn clear() -> Color {
+    Color::TRANSPARENT
+}
+
+/// What is behind a modal sheet: the wall, dimmed but still visible, because the operator is choosing a
+/// preference *about* the picture and hiding it would hide what they are choosing for (#82).
+pub fn scrim() -> Color {
+    oklcha(0.05, 0.0, 250.0, 0.72)
 }
 
 /// The focused pane's edge: a **neutral** line, not the accent (#68).

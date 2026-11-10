@@ -123,6 +123,11 @@ pub struct State {
     pub resizing: Option<view::Border>,
     /// The pane a drag has lifted, and the drop it would make (#70). `None` when nothing is lifted.
     pub dragging: Option<PaneDrag>,
+    /// What the display remembers between runs: the settings file (#82). A scene gets the defaults, so a
+    /// capture never depends on the machine it was rendered on.
+    pub settings: crate::config::settings::Settings,
+    /// Whether the settings sheet is open. Chrome, not state: it changes nothing by itself.
+    pub settings_open: bool,
     /// The focused pane the threads were last told about, so a focus change re-cadences them exactly
     /// once (#71): the focused pane at 4 Hz, every other pane at 1 Hz. Only a wall has threads to tell.
     #[cfg(feature = "map")]
@@ -218,6 +223,8 @@ impl Default for State {
             picture: Picture::default(),
             panes: vec![Pane::new(1, camera)],
             layout: Layout::single(),
+            settings: crate::config::settings::Settings::default(),
+            settings_open: false,
             panel: None,
             menu: None,
             layout_dirty: false,
@@ -387,9 +394,32 @@ impl State {
         crate::map::geometry::Viewport::new(f64::from(w), f64::from(h))
     }
 
-    /// Where each pane is drawn, from the same function `verify` checks a capture with.
+    /// Where each pane is drawn, from the same function `verify` checks a capture with — the layout's
+    /// cells, pulled in by the gap the operator chose (#82).
     pub fn pane_rects(&self) -> Vec<(ViewId, Rect)> {
-        self.layout.rects(self.pane_viewport())
+        view::panes_on(&self.layout, self.pane_viewport(), self.settings.pane_gap)
+    }
+
+    /// The preferences the display remembers (#82), read once when the wall opens.
+    ///
+    /// **Never for a scene**: a capture renders on the machine it runs on, and a settings file there would
+    /// make the picture depend on who is logged in — the end of `INV-11`. A scene that wants gaps sets them
+    /// in its own code (`panes-gaps`), which is also how the gate covers both looks.
+    pub fn with_saved_settings(mut self) -> State {
+        if rune::is_headless() {
+            return self;
+        }
+        let path = crate::config::settings_file();
+        let (settings, note) = crate::config::settings::Settings::read(&path);
+        self.settings = settings;
+        tracing::info!("{note} (pane gap {} pt)", settings.pane_gap);
+        self
+    }
+
+    /// How wide a border's grab is, in points: at least the gutter's own grip, and at least the gap — a
+    /// pointer in the middle of an 8 pt gap is 4 pt from the line, and a 6 pt grip would not reach it.
+    pub fn pane_grip(&self) -> f32 {
+        tokens::PANE_GRIP.max(self.settings.pane_gap)
     }
 
     /// Split a pane and give the new one a camera. The wall gets a map thread for it; a scene gets a
@@ -651,6 +681,19 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .key("picture-status")
                 .font(tokens::LABEL)
                 .color(link_colour),
+        )
+        // The one piece of chrome on the wall that is a control: everything else is the picture. It is a
+        // word, not an icon, because there is no icon set on this wall and a glyph nobody can name is a
+        // button nobody presses (#82).
+        .child(
+            text(SETTINGS_LABEL)
+                .key("settings-open")
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim())
+                .on_press(|state: &mut State| {
+                    state.settings_open = true;
+                    state.layout_dirty = true;
+                }),
         );
 
     // The banner is a row of its own, and only when there is something to say: a flexible spacer
@@ -670,7 +713,121 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .color(tokens::ink_dim()),
         );
     }
-    root.child(picture(state, scale))
+    // **Only when open**: an empty child is still a child, and the root's own gap would take 8 pt off the
+    // picture to lay it out — which is what a capture noticed (#82) before a golden was regenerated.
+    let mut root = root.child(picture(state, scale));
+    if state.settings_open {
+        root = root.child(settings_sheet(state, scale));
+    }
+    root
+}
+
+/// What the header's one control says. A word, because a wall has no icon set and an unnameable glyph is
+/// an unpressable button (#82).
+pub const SETTINGS_LABEL: &str = "settings";
+
+/// What the settings sheet calls its one setting, and what the row says when it is on and off.
+pub const SETTING_GAPS: &str = "Gaps between panes";
+pub const SETTING_ON: &str = "on";
+pub const SETTING_OFF: &str = "off";
+
+/// The settings sheet (#82): the wall's own preferences, as a modal over the picture.
+///
+/// **A modal, not a panel in the flow**: the tiling is the thing being chosen for, so it has to stay
+/// visible behind the sheet — and Rune's own modal stack is what makes the wall behind it inert, keeps the
+/// focus in the sheet and closes it on a press outside, rather than a hand-rolled equivalent that would
+/// get one of the three wrong.
+fn settings_sheet(state: &State, scale: f32) -> El {
+    let width = state.panel.map(|(w, _)| w).unwrap_or(tokens::WINDOW_SIZE.0);
+    let height = state.panel.map(|(_, h)| h).unwrap_or(tokens::WINDOW_SIZE.1);
+    let _ = scale;
+    let (w, h) = tokens::SHEET_SIZE;
+    let gaps_on = state.settings.pane_gap > 0.0;
+    // The row is the control: pressing it flips the setting, which is what a switch on a wall with no
+    // pointer-driven chrome has to be. It says its state in words, so a capture can assert the words.
+    let row = row()
+        .key("setting-gaps")
+        .w_full()
+        .gap(tokens::GAP)
+        .items_center()
+        .child(
+            text(SETTING_GAPS)
+                .font(tokens::LABEL)
+                .color(tokens::ink())
+                .grow(1.0),
+        )
+        .child(
+            text(if gaps_on { SETTING_ON } else { SETTING_OFF })
+                .key("setting-gaps-value")
+                .font(tokens::LABEL)
+                .color(if gaps_on {
+                    tokens::accent()
+                } else {
+                    tokens::ink_dim()
+                }),
+        )
+        .on_press(|state: &mut State| toggle_pane_gap(state));
+    let sheet = col()
+        .key("settings-sheet")
+        .absolute((width - w) / 2.0, (height - h) / 2.0)
+        .size(w, h)
+        .padding(tokens::PAD)
+        .gap(tokens::GAP)
+        .radius(tokens::PANEL_RADIUS)
+        .fill(tokens::panel())
+        .border(tokens::HAIRLINE, tokens::card_edge())
+        .child(text("Settings").font(tokens::TITLE).color(tokens::ink()))
+        .child(row)
+        .child(
+            text("saved to settings.toml, beside config.toml")
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim()),
+        );
+    // The scrim: full-window, behind the sheet, and the press that dismisses. `modal` is what tells Rune
+    // the wall behind it is inert — without it a click would reach a pane and start a drag under the sheet.
+    let _ = (width, height);
+    el().key("settings-scrim")
+        // **Pinned, not sized**: a child in the flow takes height away from the picture, so opening the
+        // sheet would reflow the wall it is a preference about. Pinned to all four edges, it covers the
+        // root's box and the picture underneath is untouched.
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .fill(tokens::scrim())
+        .modal(true, |state: &mut State| {
+            state.settings_open = false;
+            state.layout_dirty = true;
+        })
+        .child(sheet)
+}
+
+/// The gap switch: `on` is a real gap, `off` is panes that share a border — the look the wall had before
+/// settings existed, so the default draws what a wall drew yesterday.
+///
+/// The file is written **after** the picture changes, and a failed write is a log line: a read-only
+/// configuration directory must not leave the operator unable to change the gap for this run.
+fn toggle_pane_gap(state: &mut State) {
+    state.settings.pane_gap = if state.settings.pane_gap > 0.0 {
+        0.0
+    } else {
+        tokens::GAP
+    };
+    // The panes' drawn rectangles changed, so the maps have to render at the new size: the layout pass
+    // calls `pane_laid_out`, which resizes each thread (#71, and #82's note about a blurred pane).
+    state.layout_dirty = true;
+    save_settings(state);
+}
+
+/// Write the settings file, and say so in the log — one line, never a fatal error.
+fn save_settings(state: &State) {
+    if state.headless {
+        // A scene has no settings file: a capture must not write to the machine it is rendered on, and
+        // `INV-11` would be a promise about the filesystem.
+        return;
+    }
+    let path = crate::config::settings_file();
+    match state.settings.write(&path) {
+        Ok(()) => tracing::info!("settings: wrote {}", path.display()),
+        Err(error) => tracing::warn!("settings: could not write {error}"),
+    }
 }
 
 /// The map area: one panel, and the panes tiled inside it (#68).
@@ -685,6 +842,10 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
 /// element tree — and therefore the goldens and `INV-12`'s frame cost — stay exactly what they were.
 /// Multi View adds the wrapper, and `#71`'s golden pass decides whether one pane should clip too.
 fn picture(state: &State, scale: f32) -> El {
+    // **With a gap the picture area becomes the background**, and each pane a panel on it (#82): a gutter
+    // of two panels meeting is a line, not a gutter. At gap 0 nothing changes — the same single panel, the
+    // same goldens, byte for byte — which is why the look is a branch here and not a restyle everywhere.
+    let gapped = state.settings.pane_gap > 0.0;
     let mut body = col()
         .key("picture")
         .w_full()
@@ -692,7 +853,11 @@ fn picture(state: &State, scale: f32) -> El {
         .grow(1.0)
         .radius(tokens::PANEL_RADIUS)
         .border(tokens::HAIRLINE, tokens::hairline())
-        .fill(tokens::panel())
+        .fill(if gapped {
+            tokens::bg()
+        } else {
+            tokens::panel()
+        })
         .on_layout(|state: &mut State, [_, _, width, height]| panel_laid_out(state, width, height));
 
     let mut body = if state.layout.is_single() {
@@ -758,6 +923,9 @@ fn single_pane(state: &State, id: ViewId, rect: Rect, scale: f32, body: El) -> E
 /// the keys are here.
 fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
     let focused = state.layout.focused() == id;
+    // A pane with space around it is a surface of its own, so it is rounded; a pane that shares a border
+    // with its neighbour is a piece of one surface, and rounds nothing (#82).
+    let gapped = state.settings.pane_gap > 0.0;
     let dragged = state.dragging.is_some_and(|drag| drag.pane == id);
     let mut body = el()
         .key(format!("pane-{id}"))
@@ -780,6 +948,15 @@ fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
         // **A pane is a window on its own water**: a marker or a picture that overflows must not
         // appear in the pane beside it.
         .clip_rounded(0.0)
+        .radius(if gapped { tokens::PANEL_RADIUS } else { 0.0 })
+        // A pane with a gutter around it is a surface of its own standing on the background; a pane that
+        // shares a border with its neighbour has no fill of its own and the panel behind it is the picture
+        // — which keeps the one-pane wall and the gapless tiling byte for byte what they were.
+        .fill(if gapped {
+            tokens::panel()
+        } else {
+            tokens::clear()
+        })
         .border(
             tokens::HAIRLINE,
             if focused {
@@ -1364,7 +1541,7 @@ fn drag_pane(state: &mut State, id: ViewId, rect: Rect, drag: &mut rune::Drag, s
     match drag.phase {
         rune::Phase::Down => {
             let at = view::viewport_point(rect, (drag.start_x, drag.start_y));
-            state.resizing = state.layout.border_at(viewport, at, tokens::PANE_GRIP);
+            state.resizing = state.layout.border_at(viewport, at, state.pane_grip());
             if state.resizing.is_none() {
                 drag_map(state, id, drag);
             }
@@ -1406,7 +1583,7 @@ fn drag_pane(state: &mut State, _id: ViewId, rect: Rect, drag: &mut rune::Drag, 
     match drag.phase {
         rune::Phase::Down => {
             let at = view::viewport_point(rect, (drag.start_x, drag.start_y));
-            state.resizing = state.layout.border_at(viewport, at, tokens::PANE_GRIP);
+            state.resizing = state.layout.border_at(viewport, at, state.pane_grip());
         }
         rune::Phase::Move => {
             if let Some(border) = state.resizing {
@@ -1645,6 +1822,12 @@ fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool
     // the card behind it.
     if cancels_lift_on_escape(event, state.dragging.is_some()) {
         state.dragging = None;
+        state.layout_dirty = true;
+        return true;
+    }
+    // Then the settings sheet: it is a modal over the wall, so it and nothing else goes away.
+    if event.key == rune::Key::Escape && state.settings_open {
+        state.settings_open = false;
         state.layout_dirty = true;
         return true;
     }
@@ -2066,7 +2249,12 @@ pub fn run(window: config::Window, passthrough: Vec<String>) -> ExitCode {
         poll: Some(poll),
         on_key: Some(on_key),
         scenes: crate::scene::SCENES,
-        ..AppSpec::new(TITLE, window.size, State::default, view)
+        ..AppSpec::new(
+            TITLE,
+            window.size,
+            || State::default().with_saved_settings(),
+            view,
+        )
     };
 
     // Rune's own flags (`--snap`, `--scene`, `--tree`, `--script`) arrive here untouched: #9's
@@ -3093,6 +3281,58 @@ mod tests {
         };
         let (x, y) = menu_origin(tiny, (50.0, 10.0), (w, h));
         assert!(x >= 0.0 && y >= 0.0, "({x}, {y})");
+    }
+
+    /// #82: the gap switch moves every pane, names its own state, and widens the border's grip — a pointer
+    /// in the middle of an 8 pt gutter is 4 pt from the line, which a 6 pt grip does not reach.
+    #[test]
+    fn the_gap_switch_opens_the_gutter_and_widens_the_grip() {
+        let mut state = crate::scene::state_for("panes");
+        // A scene writes nothing: the settings file belongs to a wall, and a test that wrote the machine's
+        // would be a test that changes the person running it.
+        state.headless = true;
+        assert_eq!(state.settings.pane_gap, 0.0, "the wall's own default");
+        let cells = state.layout.rects(state.pane_viewport());
+        let before = state.pane_rects();
+        assert_eq!(before, cells, "at gap 0 the panes are the cells");
+
+        // The middle of the border, where the gutter will be: 4 pt from the line once the gap is on.
+        let mid = (cells[0].1.right(), cells[0].1.y + cells[0].1.h / 2.0);
+        assert!(
+            state
+                .layout
+                .border_at(state.pane_viewport(), mid, state.pane_grip())
+                .is_some(),
+            "the border is grabbable at gap 0"
+        );
+
+        toggle_pane_gap(&mut state);
+        assert_eq!(state.settings.pane_gap, tokens::GAP);
+        assert!(
+            state.layout_dirty,
+            "the picture changed, so it must be redrawn"
+        );
+        let after = state.pane_rects();
+        assert_eq!(after.len(), before.len());
+        for ((_, cell), (_, drawn)) in cells.iter().zip(after.iter()) {
+            assert!((drawn.x - (cell.x + tokens::GAP / 2.0)).abs() < 0.001);
+            assert!((drawn.w - (cell.w - tokens::GAP)).abs() < 0.001);
+        }
+        // The grip now covers the gutter, and the same point is still on the border — measured against
+        // the narrow grip, which would miss it.
+        assert!(state.pane_grip() >= tokens::GAP);
+        assert!(
+            state
+                .layout
+                .border_at(state.pane_viewport(), mid, state.pane_grip())
+                .is_some(),
+            "a pointer in the middle of the gutter still grabs the border"
+        );
+
+        // And back off again, which is what the second press of the row does.
+        toggle_pane_gap(&mut state);
+        assert_eq!(state.settings.pane_gap, 0.0);
+        assert_eq!(state.pane_rects(), cells);
     }
 
     /// #81: a wall with one pane offers one item, a tiled wall offers two, and the menu is as tall as the
