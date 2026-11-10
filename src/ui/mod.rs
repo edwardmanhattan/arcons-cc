@@ -697,7 +697,7 @@ fn picture(state: &State, scale: f32) -> El {
 
     let mut body = if state.layout.is_single() {
         match state.pane_rects().into_iter().next() {
-            Some((id, _)) => single_pane(state, id, scale, body),
+            Some((id, rect)) => single_pane(state, id, rect, scale, body),
             None => return body,
         }
     } else {
@@ -716,8 +716,8 @@ fn picture(state: &State, scale: f32) -> El {
 }
 
 /// One pane filling the panel: the whole wall, exactly as it was before Multi View.
-fn single_pane(state: &State, id: ViewId, scale: f32, body: El) -> El {
-    let body = picture_content(state, id, scale, true, body);
+fn single_pane(state: &State, id: ViewId, rect: Rect, scale: f32, body: El) -> El {
+    let body = picture_content(state, id, rect, scale, true, body);
     let Some(pane) = state.pane(id) else {
         return body;
     };
@@ -772,11 +772,11 @@ fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
         .on_layout(move |state: &mut State, [_, _, width, height]| {
             pane_laid_out(state, id, width, height, scale)
         })
-        // One gesture handler for a tiled pane, because **where the press landed decides what the drag
-        // is**: within a grip of a border it resizes, anywhere else it pans the map. Two handlers
-        // (one on the map, one on the border) would put the decision in Rune's hit order instead of in
-        // the arithmetic the panes are laid out with.
-        .on_drag(move |state: &mut State, drag, _tx| drag_pane(state, id, drag, scale))
+        // **Where the press landed decides what the drag is**: within a grip of a border it resizes,
+        // anywhere else it pans that pane's map. The handler lives on the element a press actually
+        // reaches — the map's element when there is one (`picture_content`), this wrapper when there is
+        // not, because Rune hands a drag to the nearest element under the pointer that has a primary
+        // handler and the map has one (`on_press`), so a handler up here would never be reached (#80).
         // **A pane is a window on its own water**: a marker or a picture that overflows must not
         // appear in the pane beside it.
         .clip_rounded(0.0)
@@ -789,7 +789,14 @@ fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
             },
         );
 
-    body = picture_content(state, id, scale, false, body);
+    body = picture_content(state, id, rect, scale, false, body);
+    // Without the map engine the pane itself is the surface under the pointer, so the pane carries the
+    // gesture. With it, the map does — and a second handler here would be unreachable.
+    #[cfg(not(feature = "map"))]
+    {
+        body = body
+            .on_drag(move |state: &mut State, drag, _tx| drag_pane(state, id, rect, drag, scale));
+    }
 
     // Markers project against THIS pane's frame (`INV-04`): its camera, its size, and nothing else. A
     // pane whose map has not drawn yet draws no markers — and still has its handle.
@@ -917,14 +924,22 @@ fn gap(state: &State, scale: f32, body: El) -> El {
 
 /// One pane's picture: the map's pixels, its failure, or the placeholder.
 #[cfg(feature = "map")]
-fn picture_content(state: &State, id: ViewId, scale: f32, single: bool, body: El) -> El {
+fn picture_content(
+    state: &State,
+    id: ViewId,
+    rect: Rect,
+    scale: f32,
+    single: bool,
+    body: El,
+) -> El {
     if let Some(map) = state.pane(id).and_then(|pane| pane.map.as_ref()) {
         if map.error().is_none() {
-            // Wheel, a right-click and a press belong to the map in both shapes. **Drag and `on_layout`
-            // do not**: with one pane the map element owns them (the wall it has always been), and with
-            // panes the pane's wrapper does — one `on_layout` per frame is a measurable cost with 200
-            // markers inside it (`INV-12`), and a wrapper that decides border-versus-pan has to see the
-            // press itself.
+            // Wheel, a right-click, a press and **the drag** belong to the map in both shapes: Rune hands
+            // a gesture to the nearest element under the pointer that has a primary handler, the map has
+            // one (`on_press`), so a drag on the pane's wrapper is never reached (#80).
+            // `on_layout` is the one that differs: with one pane the map element owns it (the wall it has
+            // always been), and with panes the wrapper does, because one `on_layout` per frame is a
+            // measurable cost with 200 markers inside it (`INV-12`).
             let mut element = rune::el()
                 .key("map")
                 .w_full()
@@ -938,13 +953,16 @@ fn picture_content(state: &State, id: ViewId, scale: f32, single: bool, body: El
                         open_menu(state, id, &event, scale)
                     },
                 )
-                .on_press(move |state: &mut State| press_in(state, id));
+                .on_press(move |state: &mut State| press_in(state, id))
+                // The map fills its pane, so its local point is the pane's local point, and the pane's
+                // origin is the conversion `drag_pane` makes (#80).
+                .on_drag(move |state: &mut State, drag, _tx| {
+                    drag_pane(state, id, rect, drag, scale)
+                });
             if single {
-                element = element
-                    .on_layout(move |state: &mut State, [_, _, width, height]| {
-                        pane_laid_out(state, id, width, height, scale)
-                    })
-                    .on_drag(move |state: &mut State, drag, _tx| drag_map(state, id, drag));
+                element = element.on_layout(move |state: &mut State, [_, _, width, height]| {
+                    pane_laid_out(state, id, width, height, scale)
+                });
             }
             return body.child(element);
         }
@@ -970,7 +988,14 @@ fn picture_content(state: &State, id: ViewId, scale: f32, single: bool, body: El
 }
 
 #[cfg(not(feature = "map"))]
-fn picture_content(state: &State, _id: ViewId, _scale: f32, _single: bool, body: El) -> El {
+fn picture_content(
+    state: &State,
+    _id: ViewId,
+    _rect: Rect,
+    _scale: f32,
+    _single: bool,
+    body: El,
+) -> El {
     // A scene has a picture and no map engine: the ground is the panel, and saying "built without
     // the map" would be a note about our build inside the thing under test.
     if state.headless {
@@ -1236,11 +1261,11 @@ fn drag_map(state: &mut State, id: ViewId, drag: &mut rune::Drag) {
 
 /// A drag on a tiled pane: a border grip resizes the split, anywhere else pans that pane's map (#69).
 #[cfg(feature = "map")]
-fn drag_pane(state: &mut State, id: ViewId, drag: &mut rune::Drag, scale: f32) {
+fn drag_pane(state: &mut State, id: ViewId, rect: Rect, drag: &mut rune::Drag, scale: f32) {
     let viewport = state.pane_viewport();
     match drag.phase {
         rune::Phase::Down => {
-            let at = (drag.start_x, drag.start_y);
+            let at = view::viewport_point(rect, (drag.start_x, drag.start_y));
             state.resizing = state.layout.border_at(viewport, at, tokens::PANE_GRIP);
             if state.resizing.is_none() {
                 drag_map(state, id, drag);
@@ -1251,9 +1276,10 @@ fn drag_pane(state: &mut State, id: ViewId, drag: &mut rune::Drag, scale: f32) {
                 // The pointer's coordinate along the border's own axis, in the viewport's points. A
                 // point, not a delta: the ratio follows the line the operator is holding, and a
                 // gesture that leaves the pane and comes back lands where the pointer is.
+                let pointer = view::viewport_point(rect, (drag.x, drag.y));
                 let pointer = match border.dir {
-                    Dir::Horizontal => drag.x,
-                    Dir::Vertical => drag.y,
+                    Dir::Horizontal => pointer.0,
+                    Dir::Vertical => pointer.1,
                 };
                 if state.layout.set_ratio(&border, border.ratio_for(pointer)) {
                     state.layout_dirty = true;
@@ -1277,20 +1303,19 @@ fn drag_pane(state: &mut State, id: ViewId, drag: &mut rune::Drag, scale: f32) {
 
 /// Without the engine there is still something to drag: the border between two panes (#69).
 #[cfg(not(feature = "map"))]
-fn drag_pane(state: &mut State, _id: ViewId, drag: &mut rune::Drag, _scale: f32) {
+fn drag_pane(state: &mut State, _id: ViewId, rect: Rect, drag: &mut rune::Drag, _scale: f32) {
     let viewport = state.pane_viewport();
     match drag.phase {
         rune::Phase::Down => {
-            state.resizing =
-                state
-                    .layout
-                    .border_at(viewport, (drag.start_x, drag.start_y), tokens::PANE_GRIP);
+            let at = view::viewport_point(rect, (drag.start_x, drag.start_y));
+            state.resizing = state.layout.border_at(viewport, at, tokens::PANE_GRIP);
         }
         rune::Phase::Move => {
             if let Some(border) = state.resizing {
+                let pointer = view::viewport_point(rect, (drag.x, drag.y));
                 let pointer = match border.dir {
-                    Dir::Horizontal => drag.x,
-                    Dir::Vertical => drag.y,
+                    Dir::Horizontal => pointer.0,
+                    Dir::Vertical => pointer.1,
                 };
                 if state.layout.set_ratio(&border, border.ratio_for(pointer)) {
                     state.layout_dirty = true;

@@ -457,7 +457,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 )),
             }
         }
-        "panes" => {
+        "panes" | "panes-pan" => {
             // **Each pane projects against its own frame** (`INV-04`, per pane). The rectangles come from
             // `Layout::rects` measured against the panel this capture actually has, so this check and the
             // view cannot disagree about where a pane is.
@@ -467,6 +467,9 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 failures.push("panes: no picture panel on screen".to_string());
                 return Err(failures);
             };
+            // `panes-pan` is asserted against the layout its **pointer** must produce: the scene leaves the
+            // split at half and `fixtures/scripts/panes-pan.json` drags it to 58%, so a gesture that
+            // reaches nothing (#80) leaves the border at half and every hull lands outside its pane here.
             let state = scene::state_for("panes");
             let rects = state
                 .layout
@@ -887,7 +890,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     );
 
     match scene {
-        "panes" | "panes-drag" => {
+        "panes" | "panes-drag" | "panes-pan" => {
             // One marker per hull with a fix **in every pane**: a pane that drew nothing, or drew the
             // same set twice, is not a view.
             let expected = state
