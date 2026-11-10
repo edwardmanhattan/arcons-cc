@@ -695,8 +695,18 @@ fn replace_leaf_side(
             }
         }
         Node::Leaf(leaf) => Node::Leaf(leaf),
-        Node::Split { dir, ratio, a, b } => Node::Split {
-            dir,
+        // **The tree's own direction belongs to the tree.** This arm used to bind the payload's `dir`
+        // and pass *that* down as the direction of the new split, so every drop below the root silently
+        // took the root's orientation: on a wall whose first split is side by side, dropping a pane on
+        // another pane's top or bottom edge made a left/right split instead (#100). `Drop::Retile` on
+        // `Side::Top` was measured to produce two full-height columns beside each other.
+        Node::Split {
+            dir: existing,
+            ratio,
+            a,
+            b,
+        } => Node::Split {
+            dir: existing,
             ratio,
             a: Box::new(replace_leaf_side(*a, target, dir, id, on_a, split)),
             b: Box::new(replace_leaf_side(*b, target, dir, id, on_a, split)),
@@ -1221,6 +1231,67 @@ mod tests {
         // Over its own slot: no drop, so a release where the drag began changes nothing.
         assert_eq!(layout.drop_for(viewport(), left, (100.0, 300.0)), None);
         assert_eq!(layout.drop_for(viewport(), left, (5000.0, 5000.0)), None);
+    }
+
+    /// **Where the pane lands, not what the drop asked for.** The four-band test above asserts the
+    /// `Drop` — the intent — and passed while every top/bottom drop produced a left/right split, because
+    /// `replace_leaf_side` handed the tree's own direction down instead of the side's (#100). So this one
+    /// asks the layout, on a target that is **not** the root's first leaf: a drop under an existing split
+    /// is the only case where the two directions can disagree.
+    #[test]
+    fn a_drop_on_an_edge_splits_along_that_edge() {
+        let vp = viewport();
+        for (side, expect) in [
+            // A re-tile **collapses the dragged pane out first**, so its neighbour takes the space back
+            // before the target is split: on a 1280-wide wall the target's slot becomes 640..1280, and a
+            // side-by-side drop gives two 320-wide panes while a stacked one gives two 640-wide ones.
+            (Side::Left, (640, 0, 320, 720)),
+            (Side::Right, (960, 0, 320, 720)),
+            (Side::Top, (640, 0, 640, 360)),
+            (Side::Bottom, (640, 360, 640, 360)),
+        ] {
+            let mut layout = Layout::single();
+            let left = layout.ids()[0];
+            let right = layout.split(left, Dir::Horizontal).unwrap();
+            let dragged = layout.split(right, Dir::Horizontal).unwrap();
+            let rect = layout.rect_of(vp, right).expect("the target pane");
+            // A point in the band, and well inside it: 8% from the edge the side names.
+            let at = match side {
+                Side::Left => (rect.x + rect.w * 0.08, rect.y + rect.h / 2.0),
+                Side::Right => (rect.right() - rect.w * 0.08, rect.y + rect.h / 2.0),
+                Side::Top => (rect.x + rect.w / 2.0, rect.y + rect.h * 0.08),
+                Side::Bottom => (rect.x + rect.w / 2.0, rect.bottom() - rect.h * 0.08),
+            };
+            let drop = layout
+                .drop_for(vp, dragged, at)
+                .unwrap_or_else(|| panic!("no drop at {at:?} for {side:?}"));
+            assert_eq!(
+                drop,
+                Drop::Retile {
+                    dragged,
+                    target: right,
+                    side
+                },
+                "the {side:?} band asks for a {side:?} re-tile"
+            );
+            assert!(layout.apply(drop), "the {side:?} drop applies");
+            // The dropped pane's rectangle, which is the only place the answer can be wrong.
+            let landed = layout.rect_of(vp, dragged).expect("the dropped pane");
+            assert_eq!(
+                (
+                    landed.x as i32,
+                    landed.y as i32,
+                    landed.w as i32,
+                    landed.h as i32
+                ),
+                expect,
+                "a pane dropped on the {side:?} edge of a {} x {} pane lands there — a top/bottom \
+                 drop that comes out side by side is the tree's direction leaking into the new split \
+                 (INV: a drop splits along the edge it names)",
+                rect.w as i32,
+                rect.h as i32
+            );
+        }
     }
 
     /// The gap a drag previews is the place the pane lands: the preview and the release are one
