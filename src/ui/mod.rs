@@ -1112,39 +1112,88 @@ fn pane_laid_out(state: &mut State, id: ViewId, width: f32, height: f32, scale: 
     }
 }
 
-/// The context menu, at the point it was asked for: one item, and it says what it does.
+/// The pane menu, at the point it was asked for: what a pane can do, and nothing else.
+///
+/// **`Close pane` appears only when there is more than one pane** (#81) — a wall whose last pane could be
+/// closed is a wall that answers "no panes here", and `Layout::close` refuses it anyway, so offering it
+/// would be a control that does nothing. The surface is as tall as it has items.
 fn menu_view(state: &State, scale: f32, body: El) -> El {
     let Some(menu) = state.menu else { return body };
     let Some(rect) = state.layout.rect_of(state.pane_viewport(), menu.pane) else {
         return body;
     };
     let points = if scale > 0.0 { scale } else { 1.0 };
-    let (x, y) = menu_origin(rect, (menu.at.0 / points, menu.at.1 / points));
-    let (w, h) = tokens::MENU_SIZE;
-    let item = text(MENU_SPLIT)
-        .key("menu-split")
-        .font(tokens::LABEL)
-        .color(tokens::ink());
-    let surface = col()
+    let items = menu_items(state, menu.pane);
+    let (w, h) = tokens::menu_size(items.len());
+    let (x, y) = menu_origin(rect, (menu.at.0 / points, menu.at.1 / points), (w, h));
+    let mut surface = col()
         .key("pane-menu")
         .absolute(x, y)
         .size(w, h)
-        .center()
         .radius(tokens::PANEL_RADIUS)
         .border(tokens::HAIRLINE, tokens::card_edge())
-        .fill(tokens::bg())
-        .child(item)
-        .on_press(move |state: &mut State| split_from_menu(state, menu.pane));
+        .fill(tokens::bg());
+    for item in items {
+        // Each row is its own target, so a press says **which** item it hit. The key is the row's, not the
+        // surface's, which is what lets a capture assert that a second row is drawn at all.
+        surface = surface.child(
+            row()
+                .key(item.key)
+                .h(tokens::MENU_ROW)
+                .w_full()
+                .items_center()
+                // A label touching the menu's own border reads as clipped, whatever the box says.
+                .px(tokens::GAP)
+                .child(text(item.label).font(tokens::LABEL).color(tokens::ink()))
+                .on_press(move |state: &mut State| item.run(state, menu.pane)),
+        );
+    }
     body.child(surface)
+}
+
+/// One row of the pane menu: what it says, what a capture calls it, and what a press does.
+#[derive(Clone, Copy)]
+pub struct MenuItem {
+    pub label: &'static str,
+    pub key: &'static str,
+    pub action: fn(&mut State, ViewId),
+}
+
+impl MenuItem {
+    /// Run the row's action on the pane the menu was asked on. The menu closes in the action, not here:
+    /// what a row does is the row's, and one of them has to close the menu *before* it changes the layout.
+    fn run(self, state: &mut State, pane: ViewId) {
+        (self.action)(state, pane);
+    }
+}
+
+/// The menu a pane offers. Ordered: the thing that grows the wall first, the thing that shrinks it last —
+/// where the destructive action is not the one under the pointer by accident.
+pub fn menu_items(state: &State, pane: ViewId) -> Vec<MenuItem> {
+    let mut items = vec![MenuItem {
+        label: MENU_SPLIT,
+        key: "menu-split",
+        action: split_from_menu,
+    }];
+    if state.layout.len() > 1 {
+        items.push(MenuItem {
+            label: MENU_CLOSE,
+            key: "menu-close",
+            action: close_from_menu,
+        });
+    }
+    let _ = pane;
+    items
 }
 
 /// Where the menu's top-left corner goes for a click at `at` in its pane, in the pane's own points.
 ///
 /// The menu opens **at the click**, and is clamped inside its pane: a right-click 20 pt from the wall's
 /// edge would otherwise draw half a menu over the window bezel, and the item would be off-screen on the
-/// one wall that needs it. Pure, so the clamp is tested without a pointer.
-pub fn menu_origin(rect: Rect, at: (f32, f32)) -> (f32, f32) {
-    let (w, h) = tokens::MENU_SIZE;
+/// one wall that needs it. Pure, so the clamp is tested without a pointer, and it takes its own size
+/// because the menu is as tall as its items (#81).
+pub fn menu_origin(rect: Rect, at: (f32, f32), size: (f32, f32)) -> (f32, f32) {
+    let (w, h) = size;
     let margin = tokens::GAP / 2.0;
     let x = (rect.x + at.0).clamp(
         rect.x + margin,
@@ -1157,9 +1206,9 @@ pub fn menu_origin(rect: Rect, at: (f32, f32)) -> (f32, f32) {
     (x, y)
 }
 
-/// What the pane menu offers. One item for now: #69 and #70 add the border drag and the swap, and a
-/// `Close pane` belongs with them.
+/// What the pane menu offers.
 pub const MENU_SPLIT: &str = "Focus on new pane";
+pub const MENU_CLOSE: &str = "Close pane";
 
 /// A right-click in a pane: focus it, and open the menu where the pointer is.
 #[cfg(feature = "map")]
@@ -1180,6 +1229,22 @@ fn press_in(state: &mut State, id: ViewId) {
     if state.menu.take().is_some() {
         state.layout_dirty = true;
     }
+}
+
+/// #81 `Close pane`: the pane goes, its slot collapses into its sibling, and its map thread is joined
+/// before it is forgotten — a wall that leaks a render thread per closed pane is a wall that dies at the
+/// third split.
+fn close_from_menu(state: &mut State, id: ViewId) {
+    state.menu = None;
+    if !state.layout.close(id) {
+        // The last pane: nothing happened, and the menu said so by not offering it. A redraw keeps the
+        // menu from being left open on a pane that is still there.
+        state.layout_dirty = true;
+        return;
+    }
+    // Dropping the pane's `LiveMap` stops its thread and joins it (the rule `close_maps` relies on).
+    state.panes.retain(|pane| pane.id != id);
+    state.layout_dirty = true;
 }
 
 /// `Focus on new pane`: the clicked ground becomes a pane of its own, same zoom.
@@ -3006,17 +3071,17 @@ mod tests {
             w: 600.0,
             h: 400.0,
         };
-        let (w, h) = tokens::MENU_SIZE;
+        let (w, h) = tokens::menu_size(1);
         // A click in the middle: the menu's corner is the click.
-        assert_eq!(menu_origin(pane, (200.0, 150.0)), (216.0, 190.0));
+        assert_eq!(menu_origin(pane, (200.0, 150.0), (w, h)), (216.0, 190.0));
         // A click at the far corner: pushed back inside, by the margin.
-        let (x, y) = menu_origin(pane, (595.0, 395.0));
+        let (x, y) = menu_origin(pane, (595.0, 395.0), (w, h));
         assert!(
             x + w <= pane.right() && y + h <= pane.bottom(),
             "the menu left its pane: ({x}, {y}) {w}×{h} in {pane:?}"
         );
         // A click outside the pane (a stale menu after a re-tile) is still inside it.
-        let (x, y) = menu_origin(pane, (-500.0, -500.0));
+        let (x, y) = menu_origin(pane, (-500.0, -500.0), (w, h));
         assert!(x >= pane.x && y >= pane.y, "({x}, {y}) is inside {pane:?}");
         // A pane smaller than a menu keeps the menu's corner at the pane's corner rather than inverting
         // the clamp.
@@ -3026,7 +3091,83 @@ mod tests {
             w: 100.0,
             h: 20.0,
         };
-        let (x, y) = menu_origin(tiny, (50.0, 10.0));
+        let (x, y) = menu_origin(tiny, (50.0, 10.0), (w, h));
         assert!(x >= 0.0 && y >= 0.0, "({x}, {y})");
+    }
+
+    /// #81: a wall with one pane offers one item, a tiled wall offers two, and the menu is as tall as the
+    /// items it has — the surface used to be `size()`d for one row, which clips the second.
+    #[test]
+    fn the_menu_offers_close_only_when_there_is_something_to_close() {
+        let one = crate::scene::state_for("pane-menu");
+        let pane = one.layout.focused();
+        assert_eq!(
+            crate::ui::menu_items(&one, pane)
+                .iter()
+                .map(|item| item.label)
+                .collect::<Vec<_>>(),
+            vec![MENU_SPLIT],
+            "the last pane cannot be closed, so the menu does not offer it"
+        );
+
+        let tiled = crate::scene::state_for("panes-menu");
+        let pane = tiled.layout.focused();
+        let items = crate::ui::menu_items(&tiled, pane);
+        assert_eq!(
+            items.iter().map(|item| item.label).collect::<Vec<_>>(),
+            vec![MENU_SPLIT, MENU_CLOSE]
+        );
+        assert_eq!(
+            tokens::menu_size(items.len()),
+            (tokens::MENU_WIDTH, tokens::MENU_ROW * 2.0),
+            "two rows, not one row's box clipped"
+        );
+    }
+
+    /// #81: closing a pane takes its slot out of the layout, keeps the focus on a live pane, and refuses the
+    /// last one — the three things the menu row relies on.
+    #[test]
+    fn closing_a_pane_collapses_its_slot_and_keeps_a_focused_pane() {
+        let mut state = crate::scene::state_for("panes-menu");
+        let closed = state.layout.focused();
+        let before = state.layout.rects(state.pane_viewport()).len();
+        close_from_menu(&mut state, closed);
+        let rects = state.layout.rects(state.pane_viewport());
+        assert_eq!(rects.len(), before - 1, "one pane fewer");
+        assert!(
+            !rects.iter().any(|(id, _)| *id == closed),
+            "the closed pane is gone from the layout"
+        );
+        assert!(
+            !state.panes.iter().any(|pane| pane.id == closed),
+            "and gone from the wall, so its map thread is joined"
+        );
+        assert!(
+            rects.iter().any(|(id, _)| *id == state.layout.focused()),
+            "the focus is on a pane that still exists"
+        );
+        // The layout still covers the panel exactly: a close collapses a slot, it does not leave a hole.
+        let area: f32 = rects.iter().map(|(_, rect)| rect.w * rect.h).sum();
+        let viewport = state.pane_viewport();
+        assert!(
+            (area - viewport.w as f32 * viewport.h as f32).abs() < 1.0,
+            "the panes cover the panel: {area} vs {}",
+            viewport.w as f32 * viewport.h as f32
+        );
+
+        // Down to the last pane, which is then refused and leaves the wall unchanged.
+        while state.layout.len() > 1 {
+            let next = state.layout.focused();
+            close_from_menu(&mut state, next);
+        }
+        assert_eq!(state.panes.len(), 1, "one pane left, and one pane object");
+        let last = state.layout.focused();
+        close_from_menu(&mut state, last);
+        assert_eq!(
+            state.layout.rects(state.pane_viewport()).len(),
+            1,
+            "the last pane is not closeable: a wall with no panes draws nothing"
+        );
+        assert_eq!(state.panes.len(), 1);
     }
 }

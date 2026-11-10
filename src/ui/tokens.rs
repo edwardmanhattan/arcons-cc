@@ -65,7 +65,15 @@ pub const PANE_HANDLE: (f32, f32) = (28.0, 4.0);
 /// A pane menu's own size, in points. A context menu is a **surface with a known box** on this wall, not
 /// an intrinsic one: the drag of a menu's corner is not a gesture the operator has, and a known box is
 /// what lets the menu be clamped inside the pane it was asked on without measuring the text first (#77).
-pub const MENU_SIZE: (f32, f32) = (216.0, 36.0);
+/// The pane menu's width, and the height of **one row**. The surface is as tall as it has items (#81):
+/// a menu `size()`d to one row clips the second one, which is the kind of wrong no golden notices until
+/// someone opens it on a wall.
+pub const MENU_WIDTH: f32 = 216.0;
+pub const MENU_ROW: f32 = 36.0;
+/// The size of a menu with `rows` items, the only place a menu's height is computed.
+pub fn menu_size(rows: usize) -> (f32, f32) {
+    (MENU_WIDTH, MENU_ROW * (rows.max(1) as f32))
+}
 /// How much a lifted pane fades while it is being dragged: enough to read as "in the air", not so
 /// much that the hulls inside it cannot be seen.
 pub const PANE_LIFTED: f32 = 0.55;
