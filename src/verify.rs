@@ -96,6 +96,14 @@ impl Image {
         self.pixels[index..index + 4].copy_from_slice(&pixel);
     }
 
+    /// Luminance of one pixel, `0..255`. A border is judged by how bright it is, not by its exact hue:
+    /// a 1 pt line over a dark panel is antialiased wherever it meets the panel's own corner.
+    pub fn luma(&self, x: u32, y: u32) -> u8 {
+        let pixel = self.at(x, y);
+        ((u32::from(pixel[0]) * 299 + u32::from(pixel[1]) * 587 + u32::from(pixel[2]) * 114) / 1000)
+            as u8
+    }
+
     pub fn at(&self, x: u32, y: u32) -> [u8; 4] {
         let index = ((y as usize * self.width as usize) + x as usize) * 4;
         let pixel = &self.pixels[index..index + 4];
@@ -177,6 +185,43 @@ impl Image {
         Some((f64::from(x), f64::from(y)))
     }
 
+    /// The panel's whole rectangle, in the capture's pixels: the bounding box of its fill.
+    ///
+    /// `find_panel` answers "where does the picture start"; the panes need the size as well, because
+    /// the rectangles they tile are computed from it — by `Layout::rects`, the same function the view
+    /// lays the panes out with.
+    pub fn find_panel_rect(&self, fill: [u8; 3]) -> Option<(f64, f64, f64, f64)> {
+        // A row or a column belongs to the panel when **most of it** is the panel's fill. A bounding
+        // box over every matching pixel would take its top from a stray antialiased glyph in the
+        // header, which is exactly how a panel rect comes out 20 px too tall.
+        let mut rows = Vec::new();
+        for y in 0..self.height {
+            let count = (0..self.width)
+                .filter(|x| near(self.at(*x, y), fill, 6))
+                .count();
+            if count * 2 > self.width as usize {
+                rows.push(y);
+            }
+        }
+        let (top, bottom) = (*rows.first()?, *rows.last()?);
+        let mut cols = Vec::new();
+        for x in 0..self.width {
+            let count = (top..=bottom)
+                .filter(|y| near(self.at(x, *y), fill, 6))
+                .count();
+            if count * 2 > (bottom - top + 1) as usize {
+                cols.push(x);
+            }
+        }
+        let (left, right) = (*cols.first()?, *cols.last()?);
+        Some((
+            f64::from(left),
+            f64::from(top),
+            f64::from(right - left + 1),
+            f64::from(bottom - top + 1),
+        ))
+    }
+
     /// The brightest pixel in a small window, as `0..255` luminance — how "dim" a marker is.
     pub fn brightest_luma(&self, x: f64, y: f64, radius: i32) -> u8 {
         let mut best = 0;
@@ -248,7 +293,7 @@ pub fn scene_frame() -> Rendered {
 
 /// The camera a scene renders at, so the assertions project against the scene they check.
 pub fn scene_camera(scene: &str) -> Camera {
-    crate::scene::state_for(scene).camera
+    crate::scene::state_for(scene).camera()
 }
 
 /// Where a hull's marker should be, in the capture's pixels, for the scene's own camera.
@@ -412,6 +457,136 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 )),
             }
         }
+        "panes" => {
+            // **Each pane projects against its own frame** (`INV-04`, per pane). The rectangles come from
+            // `Layout::rects` measured against the panel this capture actually has, so this check and the
+            // view cannot disagree about where a pane is.
+            let Some((origin_x, origin_y, panel_w, panel_h)) =
+                image.find_panel_rect(ink(tokens::panel()))
+            else {
+                failures.push("panes: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let state = scene::state_for("panes");
+            let rects = state
+                .layout
+                .rects(crate::map::geometry::Viewport::new(panel_w, panel_h));
+            if rects.len() != scene::PANES.len() {
+                failures.push(format!(
+                    "panes: {} rectangles for {} panes",
+                    rects.len(),
+                    scene::PANES.len()
+                ));
+                return Err(failures);
+            }
+            for (index, (id_unit, _zoom)) in scene::PANES.iter().enumerate() {
+                let (id, rect) = rects[index];
+                let Some(pane) = state.pane(id) else {
+                    failures.push(format!("panes: pane {id} has no state"));
+                    continue;
+                };
+                // The frame a headless pane draws with: its own rectangle, the rule `pane_laid_out`
+                // applies on the wall's behalf too.
+                let frame = crate::ui::view::synthetic_frame(pane.camera, rect, 1.0);
+                let Some(fix) = scene::fixture().ok().and_then(|entries| {
+                    entries
+                        .into_iter()
+                        .find(|entry| entry.id_unit == *id_unit)
+                        .and_then(|entry| entry.position)
+                }) else {
+                    failures.push(format!("panes: hull {id_unit} has no fix"));
+                    continue;
+                };
+                let (px, py) = frame.project(fix.latitude, fix.longitude);
+                let (x, y) = (
+                    origin_x + f64::from(rect.x) + px,
+                    origin_y + f64::from(rect.y) + py,
+                );
+                let inside = x >= origin_x + f64::from(rect.x)
+                    && x <= origin_x + f64::from(rect.x) + f64::from(rect.w)
+                    && y >= origin_y + f64::from(rect.y)
+                    && y <= origin_y + f64::from(rect.y) + f64::from(rect.h);
+                if !inside {
+                    failures.push(format!(
+                        "panes: hull {id_unit} projects to ({x:.0}, {y:.0}), outside its pane at \
+                         ({:.0}, {:.0}) {:.0}×{:.0}",
+                        origin_x + f64::from(rect.x),
+                        origin_y + f64::from(rect.y),
+                        rect.w,
+                        rect.h
+                    ));
+                    continue;
+                }
+                // A stale hull draws in the dim ink (`INV-03`/`stale`): the marker is there, it is
+                // just not the "here now" colour, and this scene contains one on purpose.
+                let ink_here = if image.blob_centre(x, y, accent, 8).is_some() {
+                    accent
+                } else {
+                    dim
+                };
+                match image.blob_centre(x, y, ink_here, 8) {
+                    Some((centre, count)) if count >= 8 => {
+                        let distance =
+                            ((centre.0 - x).powi(2) + (centre.1 - y).powi(2)).sqrt();
+                        if distance > TOLERANCE_PX {
+                            failures.push(format!(
+                                "panes: pane {index}'s hull {id_unit} is {distance:.1} px from where \
+                                 its own pane's projection puts it ({x:.0}, {y:.0}) — a marker drawn \
+                                 against another pane's frame lands here (INV-04)"
+                            ));
+                        } else {
+                            lines.push(format!(
+                                "panes: pane {} ({id_unit}) marker {distance:.1} px from ({x:.0}, {y:.0})",
+                                index
+                            ));
+                        }
+                    }
+                    _ => failures.push(format!(
+                        "panes: no marker ink at ({x:.0}, {y:.0}) — pane {index}'s hull {id_unit} is \
+                         not where that pane's projection puts it"
+                    )),
+                }
+            }
+            // **The focused pane is marked by a brighter edge than the others.** Counting "focus-coloured"
+            // pixels does not work: the accent marks a live hull and a neutral ink draws a symbol's
+            // frame, so a ring cannot be separated from the marks inside the panes by colour alone. What
+            // *is* separable is the edge itself — the focused pane draws a bright 1 pt line, an
+            // unfocused one a hairline that is barely above the panel. So: the median luma down each
+            // pane's left edge, and the focused one must stand out by a margin a reader would see.
+            let focused = state.layout.focused();
+            let mut edges = Vec::new();
+            for (id, rect) in &rects {
+                let x = (origin_x + f64::from(rect.x)).max(0.0) as u32;
+                let top = (origin_y + f64::from(rect.y) + 10.0).max(0.0) as u32;
+                let bottom =
+                    ((origin_y + f64::from(rect.y + rect.h) - 10.0) as u32).min(image.height);
+                let mut luma: Vec<u8> = (top..bottom)
+                    .map(|y| image.luma(x.min(image.width - 1), y))
+                    .collect();
+                if luma.is_empty() {
+                    continue;
+                }
+                luma.sort_unstable();
+                edges.push((*id, luma[luma.len() / 2]));
+            }
+            let Some((_, focused_luma)) = edges.iter().find(|(id, _)| *id == focused) else {
+                failures.push(format!("panes: the focused pane {focused} has no edge"));
+                return Err(failures);
+            };
+            let quieter: Vec<_> = edges.iter().filter(|(id, _)| *id != focused).collect();
+            let loudest_other = quieter.iter().map(|(_, luma)| *luma).max().unwrap_or(0);
+            if *focused_luma < loudest_other.saturating_add(40) {
+                failures.push(format!(
+                    "panes: pane {focused} is focused and its edge is {focused_luma} luma; another \
+                     pane's is {loudest_other} — the ring has to be visible against the panes it is \
+                     distinguished from"
+                ));
+            } else {
+                lines.push(format!(
+                    "panes: focus ring on pane {focused} ({focused_luma} luma against {loudest_other})"
+                ));
+            }
+        }
         "stale" => {
             // The dim marker must be dimmer than a live one, by a margin a reader would notice. A
             // threshold of 20 luma steps is roughly "one shade" — bigger than antialiasing noise,
@@ -521,6 +696,43 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     );
 
     match scene {
+        "panes" => {
+            // One marker per hull with a fix **in every pane**: a pane that drew nothing, or drew the
+            // same set twice, is not a view.
+            let expected = state
+                .picture
+                .units()
+                .iter()
+                .filter(|unit| unit.position.is_some())
+                .count();
+            let rects = state.layout.rects(state.pane_viewport());
+            for (id, rect) in &rects {
+                let Some(pane) = state.pane(*id) else {
+                    continue;
+                };
+                let frame = crate::ui::view::synthetic_frame(pane.camera, *rect, 1.0);
+                let placed = crate::ui::markers::place(
+                    &state.picture,
+                    &frame,
+                    state.now(),
+                    state.stale_after,
+                    state.range,
+                    &|_| None,
+                );
+                if placed.len() != expected {
+                    failures.push(format!(
+                        "panes: pane {id} has {} markers for {expected} hulls with a fix",
+                        placed.len()
+                    ));
+                }
+            }
+            if failures.is_empty() {
+                lines.push(format!(
+                    "panes: {} panes, {expected} markers each",
+                    rects.len()
+                ));
+            }
+        }
         "empty" => {
             if !markers.is_empty() {
                 failures.push(format!(

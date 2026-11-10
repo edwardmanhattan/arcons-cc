@@ -58,7 +58,7 @@ fn load(state: &mut State) {
         Ok(entries) => state.load_fixture(&entries),
         Err(error) => eprintln!("arcons-cc: scene: {error}"),
     }
-    state.camera = CAMERA;
+    state.set_camera(CAMERA);
 }
 
 fn empty(_state: &mut State) {}
@@ -77,7 +77,7 @@ fn stale(state: &mut State) {
         .find(|unit| unit.unit.id_unit == STALE_UNIT)
         && let Some(drawn) = view.drawn(state.now())
     {
-        state.camera = Camera::new((drawn.lat, drawn.lon), CAMERA.zoom);
+        state.set_camera(Camera::new((drawn.lat, drawn.lon), CAMERA.zoom));
     }
 }
 
@@ -136,7 +136,53 @@ fn photo(state: &mut State) {
         .find(|unit| unit.unit.id_unit == PHOTO_UNIT)
         && let Some(drawn) = view.drawn(state.now())
     {
-        state.camera = Camera::new((drawn.lat, drawn.lon), crate::units::mark::PHOTO_ZOOM);
+        state.set_camera(Camera::new(
+            (drawn.lat, drawn.lon),
+            crate::units::mark::PHOTO_ZOOM,
+        ));
+    }
+}
+
+/// The hull each pane of the `panes` scene is centred on, and the zooms those panes use. Three
+/// different cameras at three different zooms, because the claim the capture makes is that **each pane
+/// projects against its own frame**: a marker drawn in another pane's camera would be visibly wrong at
+/// these zooms, and a pane that reused one frame for all three would put every hull in the first pane.
+pub const PANES: &[(i64, f64)] = &[(LIVE_UNIT, 12.0), (CARD_UNIT, 13.0), (STALE_UNIT, 11.0)];
+
+/// The pane the `panes` scene has focused: the middle one, so the ring is not on the pane at the corner
+/// where a reader might mistake it for the panel's own border.
+pub const PANES_FOCUSED: usize = 1;
+
+/// The `panes` scene (#64, #68): three panes, three cameras, one window.
+///
+/// This is the scene Multi View exists to make capturable. Each pane's frame comes from its own layout
+/// (`ui::pane_laid_out`), so a marker is projected against the pane it is drawn in — and
+/// `scripts/assert.sh out/panes.png` checks exactly that, by calling the same `Layout::rects` the view
+/// lays the panes out with.
+fn panes(state: &mut State) {
+    load(state);
+    let mut ids = vec![state.layout.focused()];
+    for (index, (id_unit, zoom)) in PANES.iter().enumerate() {
+        let camera = state
+            .picture
+            .units()
+            .iter()
+            .find(|unit| unit.unit.id_unit == *id_unit)
+            .and_then(|unit| unit.drawn(state.now()))
+            .map(|drawn| Camera::new((drawn.lat, drawn.lon), *zoom))
+            .unwrap_or(Camera::new(CAMERA.center, *zoom));
+        if index == 0 {
+            state.set_camera(camera);
+        } else {
+            // Split the pane the operator asked for, along its longer edge, as the menu does.
+            let from = ids[index - 1];
+            if let Some(new) = state.split_pane(from, camera) {
+                ids.push(new);
+            }
+        }
+    }
+    if let Some(id) = ids.get(PANES_FOCUSED) {
+        state.layout.focus(*id);
     }
 }
 
@@ -150,6 +196,7 @@ pub const SCENES: &[Scene] = &[
     ("stale", stale),
     ("card-open", card_open),
     ("photo", photo),
+    ("panes", panes),
 ];
 
 /// Look a scene up by the name `scripts/capture.sh` was given.
@@ -219,7 +266,7 @@ mod tests {
         // 2 a.m. with a backtrace instead of a picture.
         assert_eq!(
             names(),
-            vec!["empty", "picture", "stale", "card-open", "photo"]
+            vec!["empty", "picture", "stale", "card-open", "photo", "panes"]
         );
         for name in names() {
             let state = state_for(name);
@@ -232,6 +279,33 @@ mod tests {
         let card = state_for("card-open");
         assert_eq!(card.selected, Some(CARD_UNIT), "the card scene has a card");
         assert!(card.card.is_some());
+
+        // Multi View's witness: one pane per entry in `PANES`, at that entry's zoom, and the focus on
+        // the one the constant names.
+        let panes = state_for("panes");
+        assert_eq!(panes.panes.len(), PANES.len(), "one pane per camera");
+        for (index, (id_unit, zoom)) in PANES.iter().enumerate() {
+            let id = panes.layout.ids()[index];
+            let pane = panes.pane(id).expect("the scene's pane");
+            assert_eq!(pane.camera.zoom, *zoom, "pane {index} is at its own zoom");
+            let hull = panes
+                .picture
+                .units()
+                .iter()
+                .find(|unit| unit.unit.id_unit == *id_unit)
+                .and_then(|unit| unit.drawn(panes.now()))
+                .expect("the hull the pane is centred on");
+            assert!(
+                (pane.camera.center.0 - hull.lat).abs() < 1e-9
+                    && (pane.camera.center.1 - hull.lon).abs() < 1e-9,
+                "pane {index} is centred on its own hull"
+            );
+        }
+        assert_eq!(
+            panes.layout.focused(),
+            panes.layout.ids()[PANES_FOCUSED],
+            "the focus is on the pane the constant names"
+        );
     }
 
     #[test]

@@ -49,6 +49,13 @@ pub const CARD_GAP: f32 = 4.0;
 /// The little tick that shows a measured heading.
 pub const HEADING_TICK: f32 = 3.0;
 
+/// The smallest a pane may be dragged to, in points. Below this a pane is a sliver with a hull in it,
+/// and a tiling engine that lets one pane eat another is one the operator cannot get back out of.
+pub const MIN_PANE_PT: f32 = 160.0;
+/// The width of the border between two panes: the grip a drag starts on, and the width `rune-kit`'s
+/// own `SplitView` uses, so the wall moves like the rest of Rune's shell.
+pub const PANE_GRIP: f32 = 6.0;
+
 // ---------------------------------------------------------------------------
 // Type.
 // ---------------------------------------------------------------------------
@@ -98,4 +105,17 @@ pub fn ink_dim() -> Color {
 /// decoration — if it is on screen it means "this is happening now".
 pub fn accent() -> Color {
     oklch(0.78, 0.11, 220.0)
+}
+
+/// The focused pane's edge: a **neutral** line, not the accent (#68).
+///
+/// The accent means one thing on this wall — *this is happening now* — and a hull drawn in it must not
+/// compete with a border for the eye. So the focused pane is marked the way a frame is marked in the
+/// rest of the interface: a brighter hairline, no hue.
+///
+/// **Opaque on purpose.** A translucent ring renders as a blend over whatever is behind it, so an
+/// assertion written against the token would compare a colour that is never on screen; this one is
+/// exactly the pixels the wall draws.
+pub fn focus_edge() -> Color {
+    oklch(0.72, 0.008, 250.0)
 }

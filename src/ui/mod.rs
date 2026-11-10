@@ -19,10 +19,13 @@ pub mod markers;
 pub mod symbol;
 pub mod tokens;
 pub mod unitcard;
+pub mod view;
+
+pub use view::{Dir, Layout, Rect, ViewId};
 
 use std::process::ExitCode;
 
-use rune::{AppSpec, Cx, El, col, row, spacer, text};
+use rune::{AppSpec, Cx, El, col, el, row, spacer, text};
 
 use crate::config;
 use crate::live::LiveThread;
@@ -32,27 +35,79 @@ use crate::units::Picture;
 /// The window title, and the wordmark's text.
 pub const TITLE: &str = "Arcons Command Center";
 
-/// What the view loop holds. #3 fills the picture, #4 moves it, #6 draws it, #7 selects from it.
-pub struct State {
-    pub picture: Picture,
-    /// The camera the operator is holding. The map thread renders it; markers project against the
+/// One pane: a camera, the map thread that renders it, and the frame it last drew.
+///
+/// The `Option`s are the two build modes: without `--features map` there is no thread (and no frame
+/// but a scene's synthetic one), and a thread that is starting has not drawn yet.
+pub struct Pane {
+    pub id: ViewId,
+    /// The camera this pane is holding. Its map thread renders that; markers project against the
     /// camera of the frame on screen instead (`INV-04`), which is not the same number mid-gesture.
     pub camera: Camera,
-    /// Whether the first map frame's camera has been reported. One log line per process, so a wall showing
-    /// the wrong sea leaves a trace rather than a screenshot to argue with (`#56`).
-    pub camera_reported: bool,
-    /// The frame the map last handed over: its camera and size are what markers project against.
-    /// `None` until the first frame, and always `None` without `--features map`.
-    pub frame: Option<crate::map::geometry::Rendered>,
-    /// The frame the view was last drawn for, so a new one — from the map thread, or from a test —
-    /// redraws the markers exactly once.
-    frame_seen: Option<crate::map::geometry::Rendered>,
-    /// The camera at the start of a drag, so a pan is absolute rather than a sum of deltas.
-    #[cfg(feature = "map")]
-    drag_origin: Option<Camera>,
     /// The map thread and the pixels it paints. `None` without `--features map`.
     #[cfg(feature = "map")]
     pub map: Option<crate::map::thread::MapThread>,
+    /// The frame the map last handed over: its camera and size are what this pane's markers project
+    /// against.
+    pub frame: Option<crate::map::geometry::Rendered>,
+    /// The frame the view was last drawn for, so a new one redraws this pane's markers exactly once.
+    /// Bookkeeping for the map handover, so a build without the engine has no use for it.
+    #[cfg(feature = "map")]
+    frame_seen: Option<crate::map::geometry::Rendered>,
+    /// The camera at the start of a drag on this pane, so a pan is absolute rather than a sum of deltas.
+    #[cfg(feature = "map")]
+    drag_origin: Option<Camera>,
+}
+
+impl Pane {
+    pub fn new(id: ViewId, camera: Camera) -> Self {
+        Self {
+            id,
+            camera,
+            #[cfg(feature = "map")]
+            map: None,
+            frame: None,
+            #[cfg(feature = "map")]
+            frame_seen: None,
+            #[cfg(feature = "map")]
+            drag_origin: None,
+        }
+    }
+}
+
+/// The drawn context menu: the pane it was asked on, and the point in that pane.
+///
+/// The point is in **device pixels**, because that is what it is used for twice: the menu is drawn at
+/// it (divided by the scale) and the new pane's camera is unprojected at it (against the pane's frame,
+/// which is device pixels too). Storing points would put the menu in the right place and the camera in
+/// the wrong one on a 2× panel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Menu {
+    pub pane: ViewId,
+    pub at: (f32, f32),
+}
+
+/// What the view loop holds. #3 fills the picture, #4 moves it, #6 draws it, #7 selects from it.
+pub struct State {
+    pub picture: Picture,
+    /// The panes, in the order they were created (#68). One pane is the wall as it always was.
+    ///
+    /// Each pane owns its camera, its map thread and the frame that thread last drew — which is what
+    /// makes `INV-04` a per-pane claim: a marker projects against **its pane's** frame, never another's.
+    pub panes: Vec<Pane>,
+    /// How the panes tile, and which one the operator is working in.
+    pub layout: Layout,
+    /// The picture panel's size in points, from its own layout. `None` until the first layout pass, when
+    /// the panes are drawn into a provisional viewport the size of the window.
+    pub panel: Option<(f32, f32)>,
+    /// The open context menu, if any: where it was asked for, and on which pane.
+    pub menu: Option<Menu>,
+    /// Set when a layout pass changed something the drawing depends on (the panel's size, a pane's
+    /// frame), so `poll` redraws once instead of every frame.
+    pub layout_dirty: bool,
+    /// Whether the first map frame's camera has been reported. One log line per process, so a wall showing
+    /// the wrong sea leaves a trace rather than a screenshot to argue with (`#56`).
+    pub camera_reported: bool,
     /// The socket actor, when a credential was configured. `None` means the wall is read-only.
     pub live: Option<LiveThread>,
     /// The reads thread: the card asks it for identity, commander and specification.
@@ -139,13 +194,11 @@ impl Default for State {
         };
         Self {
             picture: Picture::default(),
-            camera,
-            frame: None,
-            frame_seen: None,
-            #[cfg(feature = "map")]
-            drag_origin: None,
-            #[cfg(feature = "map")]
-            map: None,
+            panes: vec![Pane::new(1, camera)],
+            layout: Layout::single(),
+            panel: None,
+            menu: None,
+            layout_dirty: false,
             live: None,
             backend: None,
             selected: None,
@@ -227,6 +280,148 @@ impl State {
             picture,
             ..Self::default()
         }
+    }
+
+    /// The pane the operator is working in. There is always one: closing the last pane is refused.
+    pub fn focused_pane(&self) -> &Pane {
+        let id = self.layout.focused();
+        self.pane(id).unwrap_or_else(|| {
+            // A layout naming a pane that is gone is a bug in the tree, not in the drawing; fall back
+            // rather than panic in a view function, which would take the wall down at 2 a.m.
+            let first = self.layout.ids().first().copied().unwrap_or(1);
+            self.pane(first).unwrap_or_else(|| {
+                static FALLBACK: std::sync::OnceLock<Pane> = std::sync::OnceLock::new();
+                FALLBACK.get_or_init(|| Pane::new(1, Camera::START))
+            })
+        })
+    }
+
+    pub fn focused_pane_mut(&mut self) -> &mut Pane {
+        let id = self.layout.focused();
+        if !self.panes.iter().any(|pane| pane.id == id)
+            && let Some(first) = self.layout.ids().first().copied()
+        {
+            self.layout.focus(first);
+        }
+        let id = self.layout.focused();
+        if let Some(index) = self.panes.iter().position(|pane| pane.id == id) {
+            &mut self.panes[index]
+        } else {
+            self.panes.push(Pane::new(id, Camera::START));
+            let index = self.panes.len() - 1;
+            &mut self.panes[index]
+        }
+    }
+
+    pub fn pane(&self, id: ViewId) -> Option<&Pane> {
+        self.panes.iter().find(|pane| pane.id == id)
+    }
+
+    pub fn pane_mut(&mut self, id: ViewId) -> Option<&mut Pane> {
+        self.panes.iter_mut().find(|pane| pane.id == id)
+    }
+
+    /// The focused pane's camera: what a gesture on the wall moves.
+    pub fn camera(&self) -> Camera {
+        self.focused_pane().camera
+    }
+
+    pub fn camera_of(&self, id: ViewId) -> Camera {
+        self.pane(id)
+            .map(|pane| pane.camera)
+            .unwrap_or_else(|| self.camera())
+    }
+
+    pub fn set_camera(&mut self, camera: Camera) {
+        self.focused_pane_mut().camera = camera;
+    }
+
+    pub fn set_camera_of(&mut self, id: ViewId, camera: Camera) {
+        if let Some(pane) = self.pane_mut(id) {
+            pane.camera = camera;
+        }
+    }
+
+    /// The focused pane's frame: the one markers project against when there is one pane.
+    pub fn frame(&self) -> Option<crate::map::geometry::Rendered> {
+        self.focused_pane().frame
+    }
+
+    /// A frame for a scene or a test, on the focused pane. A wall's frames come from the map thread.
+    pub fn set_frame(&mut self, frame: crate::map::geometry::Rendered) {
+        self.focused_pane_mut().frame = Some(frame);
+        self.layout_dirty = true;
+    }
+
+    /// The viewport the panes tile: the picture panel's own points, or the window's until it is known.
+    pub fn pane_viewport(&self) -> crate::map::geometry::Viewport {
+        let (w, h) = self
+            .panel
+            .unwrap_or((tokens::WINDOW_SIZE.0, tokens::WINDOW_SIZE.1));
+        crate::map::geometry::Viewport::new(f64::from(w), f64::from(h))
+    }
+
+    /// Where each pane is drawn, from the same function `verify` checks a capture with.
+    pub fn pane_rects(&self) -> Vec<(ViewId, Rect)> {
+        self.layout.rects(self.pane_viewport())
+    }
+
+    /// Split a pane and give the new one a camera. The wall gets a map thread for it; a scene gets a
+    /// frame from its own layout (`view::pane_laid_out`), because a capture has no engine.
+    pub fn split_pane(&mut self, target: ViewId, camera: Camera) -> Option<ViewId> {
+        let rect = self
+            .layout
+            .rect_of(self.pane_viewport(), target)
+            .unwrap_or(Rect {
+                x: 0.0,
+                y: 0.0,
+                w: self.pane_viewport().w as f32,
+                h: self.pane_viewport().h as f32,
+            });
+        let id = self.layout.split(target, rect.longer_edge())?;
+        self.panes.push(Pane::new(id, camera));
+        #[cfg(feature = "map")]
+        if !self.headless {
+            // The new pane's own thread, at its share of the panel: the same path the first pane takes,
+            // so a pane is not a special case of a pane (`#68`).
+            let viewport = self.pane_viewport();
+            let half = self
+                .layout
+                .rect_of(viewport, id)
+                .map(|rect| (rect.w, rect.h))
+                .unwrap_or((viewport.w as f32, viewport.h as f32));
+            if let Some(pane) = self.pane_mut(id) {
+                pane.map = Some(crate::map::thread::MapThread::spawn(
+                    camera,
+                    (
+                        half.0.round().max(1.0) as u32,
+                        half.1.round().max(1.0) as u32,
+                    ),
+                ));
+            }
+        }
+        self.layout_dirty = true;
+        Some(id)
+    }
+
+    /// The pane a marker's press belongs to, for the card: the one whose frame projects the hull.
+    pub fn pane_showing(&self, id_unit: i64) -> Option<ViewId> {
+        self.pane_rects().into_iter().find_map(|(id, _)| {
+            let pane = self.pane(id)?;
+            let frame = pane.frame?;
+            let marker = crate::ui::markers::place(
+                &self.picture,
+                &frame,
+                self.now(),
+                self.stale_after,
+                self.range,
+                &|unit| self.sizes.get(&unit).copied(),
+            )
+            .into_iter()
+            .find(|marker| marker.id_unit == id_unit)?;
+            let _ = marker;
+            Some(id)
+        })
     }
 
     /// Select a hull: build the card from the picture and ask the reads thread for the rest.
@@ -396,12 +591,18 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
     root.child(picture(state, scale))
 }
 
-/// The map area: the frame when there is one, and the placeholder when there is not.
+/// The map area: one panel, and the panes tiled inside it (#68).
+///
+/// The rectangles come from [`Layout::rects`] — the same function `verify` calls on a capture — and the
+/// panel's own size from its `on_layout`, so the panes cover the panel exactly and a pane cannot be
+/// drawn in one place and asserted in another. Until the first layout pass the viewport is the window's,
+/// which is the size a capture's frames have always been.
+///
+/// **One pane is the wall as it was, byte for byte.** No wrapper, no clip, no ring: a wall with one
+/// pane has no neighbour to be clipped away from and no second pane to be distinguished from, so the
+/// element tree — and therefore the goldens and `INV-12`'s frame cost — stay exactly what they were.
+/// Multi View adds the wrapper, and `#71`'s golden pass decides whether one pane should clip too.
 fn picture(state: &State, scale: f32) -> El {
-    // Without the map engine the frame is never set, so the markers below are simply absent.
-    #[cfg(not(feature = "map"))]
-    let _ = scale;
-
     let body = col()
         .key("picture")
         .w_full()
@@ -409,35 +610,48 @@ fn picture(state: &State, scale: f32) -> El {
         .grow(1.0)
         .radius(tokens::PANEL_RADIUS)
         .border(tokens::HAIRLINE, tokens::hairline())
-        .fill(tokens::panel());
+        .fill(tokens::panel())
+        .on_layout(|state: &mut State, [_, _, width, height]| panel_laid_out(state, width, height));
 
-    let content = picture_content(state, scale, body);
+    if state.layout.is_single() {
+        let Some((id, _)) = state.pane_rects().into_iter().next() else {
+            return body;
+        };
+        return single_pane(state, id, scale, body);
+    }
 
-    // The marker layer goes on top of whatever the picture is — the map, its error, or the
-    // placeholder. It is drawn from the frame the map last rendered, so it is absent until there is
-    // one, and absent without the map engine (there is no camera to project against).
-    let Some(frame) = state.frame else {
-        return content;
+    let mut body = body;
+    for (id, rect) in state.pane_rects() {
+        body = body.child(pane(state, id, rect, scale));
+    }
+    // The context menu is drawn last, over every pane, at the point it was asked for: a menu under the
+    // pane it belongs to would be clipped by the next split.
+    body = menu_view(state, scale, body);
+    body
+}
+
+/// One pane filling the panel: the whole wall, exactly as it was before Multi View.
+fn single_pane(state: &State, id: ViewId, scale: f32, body: El) -> El {
+    let body = picture_content(state, id, scale, true, body);
+    let Some(pane) = state.pane(id) else {
+        return body;
     };
-    let now = state.now();
-    let range = state.range;
+    let Some(frame) = pane.frame else {
+        return body;
+    };
     let sizes = |id_unit: i64| state.sizes.get(&id_unit).copied();
     let placed = markers::place(
         &state.picture,
         &frame,
-        now,
+        state.now(),
         state.stale_after,
-        range,
+        state.range,
         &sizes,
     );
     let pictures = markers::Pictures {
         images: &state.pictures,
     };
-    let mut layer = content.child(markers::layer(&placed, &frame, scale, &pictures));
-
-    // The card points at its marker's DRAWN position — not the fix — so it follows a hull that is
-    // travelling and a map that has been panned. Placement is arithmetic in `units::card::place`,
-    // where it is property-tested against the window.
+    let mut layer = body.child(markers::layer(&placed, &frame, scale, &pictures));
     if let Some(card) = &state.card
         && let Some(marker) = placed
             .iter()
@@ -450,15 +664,88 @@ fn picture(state: &State, scale: f32) -> El {
             f64::from(frame.height) / points,
         );
         let placement = crate::units::card::place(anchor, viewport);
-        layer = layer.child(unitcard::card(card, placement, now));
+        layer = layer.child(unitcard::card(card, placement, state.now()));
     }
     layer
 }
 
-/// The picture itself: the map's pixels, its failure, or the placeholder.
+/// One pane: its picture, its markers, its own frame, and the ring that says the keys are here.
+fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
+    let focused = state.layout.focused() == id;
+    let single = state.layout.is_single();
+    let mut body = el()
+        .key(format!("pane-{id}"))
+        .absolute(rect.x, rect.y)
+        .size(rect.w.max(1.0), rect.h.max(1.0))
+        .on_layout(move |state: &mut State, [_, _, width, height]| {
+            pane_laid_out(state, id, width, height, scale)
+        });
+    // The ring means "the keys are here rather than there", so a wall with one pane has none: the
+    // panel's own hairline is that pane's frame, and a second edge drawn on it is a line that says
+    // nothing.
+    if !single {
+        // **A pane is a window on its own water**: a marker or a picture that overflows must not appear
+        // in the pane beside it. Only when there *is* a pane beside it — a clip costs the marker layer
+        // about a third of its frame CPU (`INV-12`: 5.07 → 3.78 ms reference for 200 markers), and a
+        // wall with one pane has nothing to clip against. `#71` measures the multi-pane case, where the
+        // clip is doing work.
+        body = body.clip_rounded(0.0).border(
+            tokens::HAIRLINE,
+            if focused {
+                tokens::focus_edge()
+            } else {
+                tokens::hairline()
+            },
+        );
+    }
+
+    body = picture_content(state, id, scale, false, body);
+
+    let Some(pane) = state.pane(id) else {
+        return body;
+    };
+    // Markers project against THIS pane's frame (`INV-04`): its camera, its size, and nothing else.
+    let Some(frame) = pane.frame else {
+        return body;
+    };
+    let sizes = |id_unit: i64| state.sizes.get(&id_unit).copied();
+    let placed = markers::place(
+        &state.picture,
+        &frame,
+        state.now(),
+        state.stale_after,
+        state.range,
+        &sizes,
+    );
+    let pictures = markers::Pictures {
+        images: &state.pictures,
+    };
+    let mut layer = body.child(markers::layer(&placed, &frame, scale, &pictures));
+
+    // The card points at its marker's DRAWN position inside its own pane, so it follows a hull that is
+    // travelling and a map that has been panned. Placement is arithmetic in `units::card::place`, where
+    // it is property-tested against the window.
+    if let Some(card) = &state.card
+        && let Some(marker) = placed
+            .iter()
+            .find(|marker| marker.id_unit == card.unit.id_unit)
+    {
+        let points = if scale > 0.0 { f64::from(scale) } else { 1.0 };
+        let anchor = (marker.x / points, marker.y / points);
+        let viewport = (
+            f64::from(frame.width) / points,
+            f64::from(frame.height) / points,
+        );
+        let placement = crate::units::card::place(anchor, viewport);
+        layer = layer.child(unitcard::card(card, placement, state.now()));
+    }
+    layer
+}
+
+/// One pane's picture: the map's pixels, its failure, or the placeholder.
 #[cfg(feature = "map")]
-fn picture_content(state: &State, scale: f32, body: El) -> El {
-    if let Some(map) = &state.map {
+fn picture_content(state: &State, id: ViewId, scale: f32, single: bool, body: El) -> El {
+    if let Some(map) = state.pane(id).and_then(|pane| pane.map.as_ref()) {
         if map.error().is_none() {
             return body.child(
                 rune::el()
@@ -466,13 +753,41 @@ fn picture_content(state: &State, scale: f32, body: El) -> El {
                     .w_full()
                     .h_full()
                     .pixels(map.pixels())
-                    .on_wheel(|state: &mut State, event: rune::WheelEvent, _tx| {
-                        wheel(state, &event)
+                    .on_wheel(move |state: &mut State, event: rune::WheelEvent, _tx| {
+                        wheel(state, id, &event)
                     })
-                    .on_drag(|state: &mut State, drag, _tx| drag_map(state, drag))
+                    .on_drag(move |state: &mut State, drag, _tx| drag_map(state, id, drag))
+                    .on_secondary_press_local(
+                        move |state: &mut State, event: rune::PointerEvent, _tx| {
+                            open_menu(state, id, &event, scale)
+                        },
+                    )
+                    .on_press(move |state: &mut State| press_in(state, id)),
+            );
+        }
+        if single {
+            // One pane: the map element reports its own size, as it always has, so a wall with no
+            // panes is the wall it was. With panes, the pane's wrapper does it — one `on_layout` per
+            // frame is a measurable cost when 200 markers are inside it (`INV-12`).
+            return body.child(
+                rune::el()
+                    .key("map")
+                    .w_full()
+                    .h_full()
+                    .pixels(map.pixels())
                     .on_layout(move |state: &mut State, [_, _, width, height]| {
-                        laid_out(state, width, height, scale)
-                    }),
+                        pane_laid_out(state, id, width, height, scale)
+                    })
+                    .on_wheel(move |state: &mut State, event: rune::WheelEvent, _tx| {
+                        wheel(state, id, &event)
+                    })
+                    .on_drag(move |state: &mut State, drag, _tx| drag_map(state, id, drag))
+                    .on_secondary_press_local(
+                        move |state: &mut State, event: rune::PointerEvent, _tx| {
+                            open_menu(state, id, &event, scale)
+                        },
+                    )
+                    .on_press(move |state: &mut State| press_in(state, id)),
             );
         }
         if let Some(error) = map.error() {
@@ -497,7 +812,7 @@ fn picture_content(state: &State, scale: f32, body: El) -> El {
 }
 
 #[cfg(not(feature = "map"))]
-fn picture_content(state: &State, _scale: f32, body: El) -> El {
+fn picture_content(state: &State, _id: ViewId, _scale: f32, _single: bool, body: El) -> El {
     // A scene has a picture and no map engine: the ground is the panel, and saying "built without
     // the map" would be a note about our build inside the thing under test.
     if state.headless {
@@ -524,11 +839,149 @@ fn placeholder(body: El, hint: &'static str) -> El {
         )
 }
 
+/// The picture panel was laid out: remember its points, so the panes tile into it on the next frame.
+///
+/// `poll` redraws once when this changes — a capture's golden is taken after many frames, so the first
+/// frame's provisional viewport can never be what a golden holds.
+fn panel_laid_out(state: &mut State, width: f32, height: f32) {
+    let size = (width.max(1.0), height.max(1.0));
+    if state.panel != Some(size) {
+        state.panel = Some(size);
+        state.layout_dirty = true;
+    }
+}
+
+/// A pane was laid out at `width` × `height` points.
+///
+/// A wall tells its map thread to render that many **device** pixels (the element is points, `Pixels`
+/// is pixels). A headless scene has no thread, so the frame is synthesised at the pane's own size —
+/// which is what makes a `panes` capture a picture of three pans at three cameras rather than one
+/// frame stretched three ways. The one-pane case keeps the window-sized frame it has always had: those
+/// goldens are the wall as it was, and `#71`'s golden pass unifies the two.
+fn pane_laid_out(state: &mut State, id: ViewId, width: f32, height: f32, scale: f32) {
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    let points = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: width.max(1.0),
+        h: height.max(1.0),
+    };
+    #[cfg(feature = "map")]
+    {
+        let (w, h) = (
+            (width * scale).round().max(1.0) as u32,
+            (height * scale).round().max(1.0) as u32,
+        );
+        if let Some(map) = state.pane(id).and_then(|pane| pane.map.as_ref()) {
+            if map
+                .rendered()
+                .is_some_and(|frame| (frame.width, frame.height) == (w, h))
+            {
+                return;
+            }
+            map.resize(w, h);
+            return;
+        }
+    }
+    if state.layout.is_single() {
+        return;
+    }
+    let Some(pane) = state.pane_mut(id) else {
+        return;
+    };
+    let frame = view::synthetic_frame(pane.camera, points, scale);
+    if pane.frame != Some(frame) {
+        pane.frame = Some(frame);
+        state.layout_dirty = true;
+    }
+}
+
+/// The context menu, at the point it was asked for: one item, and it says what it does.
+fn menu_view(state: &State, scale: f32, body: El) -> El {
+    let Some(menu) = state.menu else { return body };
+    let Some(rect) = state.layout.rect_of(state.pane_viewport(), menu.pane) else {
+        return body;
+    };
+    let points = if scale > 0.0 { scale } else { 1.0 };
+    let item = text(MENU_SPLIT)
+        .key("menu-split")
+        .font(tokens::LABEL)
+        .color(tokens::ink());
+    let surface = col()
+        .key("pane-menu")
+        .absolute(rect.x + menu.at.0 / points, rect.y + menu.at.1 / points)
+        .padding(tokens::GAP)
+        .gap(tokens::GAP)
+        .radius(tokens::PANEL_RADIUS)
+        .border(tokens::HAIRLINE, tokens::card_edge())
+        .fill(tokens::bg())
+        .child(item)
+        .on_press(move |state: &mut State| split_from_menu(state, menu.pane));
+    body.child(surface)
+}
+
+/// What the pane menu offers. One item for now: #69 and #70 add the border drag and the swap, and a
+/// `Close pane` belongs with them.
+pub const MENU_SPLIT: &str = "Focus on new pane";
+
+/// A right-click in a pane: focus it, and open the menu where the pointer is.
+#[cfg(feature = "map")]
+fn open_menu(state: &mut State, id: ViewId, event: &rune::PointerEvent, scale: f32) {
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    state.layout.focus(id);
+    state.menu = Some(Menu {
+        pane: id,
+        at: (event.x * scale, event.y * scale),
+    });
+    state.layout_dirty = true;
+}
+
+/// A primary press in a pane: close the menu (the click was not for it) and focus the pane.
+#[cfg(feature = "map")]
+fn press_in(state: &mut State, id: ViewId) {
+    state.layout.focus(id);
+    if state.menu.take().is_some() {
+        state.layout_dirty = true;
+    }
+}
+
+/// `Focus on new pane`: the clicked ground becomes a pane of its own, same zoom.
+///
+/// The geographic point is the pane's **own** camera and frame, unprojected at the click — the inverse
+/// of the projection every marker is drawn with, which is why it lives in `map::geometry` beside it.
+fn split_from_menu(state: &mut State, id: ViewId) {
+    let Some(menu) = state.menu.take() else {
+        return;
+    };
+    let Some(pane) = state.pane(id) else { return };
+    let Some(frame) = pane.frame else {
+        // No frame yet means no camera to unproject against: a pane opened at a guessed point would
+        // be a pane showing the wrong water, which is the failure `INV-04` exists to prevent.
+        state.layout_dirty = true;
+        return;
+    };
+    // `menu.at` is already in the frame's own pixels: element points × the display scale, taken when
+    // the menu opened.
+    let camera = crate::map::geometry::Camera::new(
+        crate::map::geometry::unproject(
+            frame.camera,
+            frame.viewport(),
+            f64::from(menu.at.0),
+            f64::from(menu.at.1),
+        ),
+        frame.camera.zoom,
+    );
+    state.split_pane(id, camera);
+}
+
 /// A wheel step: zoom about the pointer, so the ground under the cursor stays under it.
 #[cfg(feature = "map")]
-fn wheel(state: &mut State, event: &rune::WheelEvent) -> bool {
-    let Some(map) = &state.map else { return false };
-    let Some(frame) = map.rendered() else {
+fn wheel(state: &mut State, id: ViewId, event: &rune::WheelEvent) -> bool {
+    let Some(frame) = state
+        .pane(id)
+        .and_then(|pane| pane.map.as_ref())
+        .and_then(|map| map.rendered())
+    else {
         // Before the first frame the viewport is unknown; drop the gesture rather than apply it
         // through a guess, which would jump the camera on the very first wheel event.
         return false;
@@ -540,13 +993,16 @@ fn wheel(state: &mut State, event: &rune::WheelEvent) -> bool {
         return false;
     }
     let delta = f64::from(event.dy) * crate::map::geometry::WHEEL_ZOOM_PER_PX;
-    state.camera = crate::map::geometry::zoom_about(
-        state.camera,
+    let moved = crate::map::geometry::zoom_about(
+        state.camera_of(id),
         viewpoint,
         (f64::from(event.x), f64::from(event.y)),
         delta,
     );
-    map.set_camera(state.camera);
+    state.set_camera_of(id, moved);
+    if let Some(map) = state.pane(id).and_then(|pane| pane.map.as_ref()) {
+        map.set_camera(moved);
+    }
     true
 }
 
@@ -555,49 +1011,48 @@ fn wheel(state: &mut State, event: &rune::WheelEvent) -> bool {
 /// Absolute rather than incremental on purpose: [`rune::Drag`] reports travel since the press, so
 /// summing per-event deltas would compound and the map would run away from the pointer.
 #[cfg(feature = "map")]
-fn drag_map(state: &mut State, drag: &mut rune::Drag) {
-    let Some(map) = &state.map else { return };
-    let Some(frame) = map.rendered() else { return };
+fn drag_map(state: &mut State, id: ViewId, drag: &mut rune::Drag) {
+    let Some(frame) = state
+        .pane(id)
+        .and_then(|pane| pane.map.as_ref())
+        .and_then(|map| map.rendered())
+    else {
+        return;
+    };
+    let camera = state.camera_of(id);
     match drag.phase {
-        rune::Phase::Down => state.drag_origin = Some(state.camera),
+        rune::Phase::Down => {
+            if let Some(pane) = state.pane_mut(id) {
+                pane.drag_origin = Some(camera);
+            }
+        }
         rune::Phase::Move => {
-            let origin = state.drag_origin.unwrap_or(state.camera);
-            state.camera = crate::map::geometry::pan(
+            let origin = state
+                .pane(id)
+                .and_then(|pane| pane.drag_origin)
+                .unwrap_or(camera);
+            let moved = crate::map::geometry::pan(
                 origin,
                 frame.viewport(),
                 f64::from(drag.dx),
                 f64::from(drag.dy),
             );
-            map.set_camera(state.camera);
+            state.set_camera_of(id, moved);
+            if let Some(map) = state.pane(id).and_then(|pane| pane.map.as_ref()) {
+                map.set_camera(moved);
+            }
         }
         rune::Phase::Up => {
-            state.drag_origin = None;
+            if let Some(pane) = state.pane_mut(id) {
+                pane.drag_origin = None;
+            }
             // One render now rather than at the next idle tick: the gesture just ended, and the
             // operator is looking at where it ended.
-            map.render_now();
+            if let Some(map) = state.pane(id).and_then(|pane| pane.map.as_ref()) {
+                map.render_now();
+            }
         }
     }
-}
-
-/// The map area was laid out: tell the map how many DEVICE pixels to render.
-///
-/// The frame is device pixels because `Pixels` is; the element is points. Rendering at points on a
-/// 2x panel would draw a map at half resolution and every label with it.
-#[cfg(feature = "map")]
-fn laid_out(state: &mut State, width: f32, height: f32, scale: f32) {
-    let Some(map) = &state.map else { return };
-    let scale = if scale > 0.0 { scale } else { 1.0 };
-    let (w, h) = (
-        (width * scale).round().max(1.0) as u32,
-        (height * scale).round().max(1.0) as u32,
-    );
-    if map
-        .rendered()
-        .is_some_and(|frame| (frame.width, frame.height) == (w, h))
-    {
-        return;
-    }
-    map.resize(w, h);
 }
 
 /// How the window opens: sized from the command line, or covering the primary output.
@@ -909,11 +1364,18 @@ fn setup(state: &mut State, waker: rune::Waker) {
         state.headless = true;
         // A scene declares its own viewport: there is no map thread to hand one over, and markers
         // still have to project against something real. The size is the one `capture.sh` pins.
-        state.frame = Some(crate::map::geometry::Rendered {
-            camera: state.camera,
-            width: tokens::WINDOW_SIZE.0 as u32,
-            height: tokens::WINDOW_SIZE.1 as u32,
-        });
+        // **One pane keeps the frame it has always had.** A capture with one pane is the wall as it was
+        // before Multi View, and its goldens are byte-identical because of this line; a scene with more
+        // panes gets each frame from that pane's own layout (`pane_laid_out`), which is where a wall
+        // gets its frames too. `#71`'s golden pass unifies the two.
+        if state.layout.is_single() {
+            let camera = state.camera();
+            state.set_frame(crate::map::geometry::Rendered {
+                camera,
+                width: tokens::WINDOW_SIZE.0 as u32,
+                height: tokens::WINDOW_SIZE.1 as u32,
+            });
+        }
         return;
     }
     // A stop has to reach the loop even when nothing is drawing (`#43`): the flag alone is unread while
@@ -932,11 +1394,15 @@ fn setup(state: &mut State, waker: rune::Waker) {
     #[cfg(feature = "map")]
     {
         // The first frame's layout corrects this size; 1280x720 is the window it opens at, so the map
-        // is already rendering the right ground while the layout is being computed.
-        state.map = Some(crate::map::thread::MapThread::spawn(
-            state.camera,
-            (tokens::WINDOW_SIZE.0 as u32, tokens::WINDOW_SIZE.1 as u32),
-        ));
+        // is already rendering the right ground while the layout is being computed. Every pane gets its
+        // own thread through the same door (`State::split_pane`).
+        let camera = state.camera();
+        if let Some(pane) = state.pane_mut(state.layout.focused()) {
+            pane.map = Some(crate::map::thread::MapThread::spawn(
+                camera,
+                (tokens::WINDOW_SIZE.0 as u32, tokens::WINDOW_SIZE.1 as u32),
+            ));
+        }
     }
 }
 
@@ -962,11 +1428,12 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
 
     // "Start to first map frame" is a number in the log rather than a claim in a ticket. Without the
     // engine there is no map frame, so the first view pass is what gets timed.
-    if let Some(frame) = state.frame {
+    if let Some(frame) = state.frame() {
         // **The camera the map actually rendered, once.** `frame.camera` is what the map thread drew and
-        // what markers project against (`INV-04`); `state.camera` is what the configuration asked for. They
+        // what markers project against (`INV-04`); the pane's own camera is what was asked for. They
         // disagreeing is a wall showing the wrong sea — which is what #56 was filed for and could not be
         // reproduced, so the next report gets a line to look at instead of a screenshot to argue with.
+        let asked = state.camera();
         if !state.headless && !state.camera_reported {
             state.camera_reported = true;
             tracing::info!(
@@ -975,12 +1442,13 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
                 zoom = frame.camera.zoom,
                 width = frame.width,
                 height = frame.height,
-                asked_lat = state.camera.center.0,
-                asked_lon = state.camera.center.1,
-                asked_zoom = state.camera.zoom,
+                asked_lat = asked.center.0,
+                asked_lon = asked.center.1,
+                asked_zoom = asked.zoom,
+                panes = state.panes.len(),
                 "the map's first frame"
             );
-            if frame.camera != state.camera {
+            if frame.camera != asked {
                 tracing::warn!(
                     "the map drew a different camera than the one asked for: markers project against the \
                      drawn frame, so this is the picture the wall shows (#56)"
@@ -994,19 +1462,33 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     changed |= drain_card_reads(state);
     changed |= tick_card_age(state);
 
-    // The frame the map last handed over is what markers project against (`INV-04`). Reading it here,
-    // rather than in the view, keeps the view a function of the state.
+    // The frame each pane's map last handed over is what that pane's markers project against
+    // (`INV-04`). Reading it here, rather than in the view, keeps the view a function of the state.
     #[cfg(feature = "map")]
-    if let Some(map) = &state.map {
-        state.frame = map.rendered();
+    {
+        for index in 0..state.panes.len() {
+            let rendered = state.panes[index]
+                .map
+                .as_ref()
+                .and_then(|map| map.rendered());
+            if let Some(frame) = rendered
+                && state.panes[index].frame != Some(frame)
+            {
+                state.panes[index].frame = Some(frame);
+            }
+            if state.panes[index].frame != state.panes[index].frame_seen {
+                state.panes[index].frame_seen = state.panes[index].frame;
+                changed = true;
+            }
+        }
     }
-    if state.frame != state.frame_seen {
-        state.frame_seen = state.frame;
+    if state.layout_dirty {
+        state.layout_dirty = false;
         changed = true;
     }
     // The range follows the frame's zoom, not the camera's: mid-gesture they disagree, and a hull must
     // not switch representation while it is still projected against the previous frame.
-    if let Some(frame) = state.frame {
+    if let Some(frame) = state.frame() {
         let latched = state.range.update(frame.camera.zoom);
         if latched != state.range {
             state.range = latched;
@@ -1371,8 +1853,8 @@ mod tests {
     fn state_with_two_hulls() -> State {
         let camera = Camera::new((-6.108, 106.910), 11.0);
         let mut state = State::new(picture_with_two_hulls());
-        state.camera = camera;
-        state.frame = Some(crate::map::geometry::Rendered {
+        state.set_camera(camera);
+        state.set_frame(crate::map::geometry::Rendered {
             camera,
             width: 1280,
             height: 720,
@@ -1715,8 +2197,8 @@ mod tests {
 
         // Pan: the frame the map hands over moves 400 px left, and the markers move with it.
         let camera = Camera::new((-6.108, 106.910 - 0.05), 11.0);
-        rt.state.camera = camera;
-        rt.state.frame = Some(crate::map::geometry::Rendered {
+        rt.state.set_camera(camera);
+        rt.state.set_frame(crate::map::geometry::Rendered {
             camera,
             width: 1280,
             height: 720,
@@ -1779,5 +2261,89 @@ mod tests {
             rt.find("picture-title").is_some(),
             "the panel must have its heading"
         );
+    }
+
+    /// **A pane starting does not stall a pane that is already up** (#68).
+    ///
+    /// This is the acceptance item that needs the engine, so it is `#[ignore]`d and run by hand — the
+    /// gate builds no MapLibre and needs no GPU:
+    ///
+    /// ```sh
+    /// cargo test --features map --lib -- --ignored --nocapture a_second_pane
+    /// ```
+    ///
+    /// Two threads, two `LiveMap`s. The second loads a style from the shared cache (about a second on
+    /// this laptop, `docs/research/multi-view.md`) while the first is mid-pan; the first must keep
+    /// publishing frames at its own cadence throughout. A shared render loop — the design spike B
+    /// measured and rejected — is exactly what would make this fail.
+    #[cfg(feature = "map")]
+    #[test]
+    #[ignore = "map engine: needs a GPU and, when the cache is cold, a style load"]
+    fn a_second_pane_starts_without_stalling_the_first() {
+        use crate::map::geometry::{Camera, Rendered};
+        use crate::map::thread::MapThread;
+        use std::time::{Duration, Instant};
+
+        let first = MapThread::spawn(Camera::START, (960, 540));
+        let started = Instant::now();
+        while first.rendered().is_none() {
+            assert!(
+                first.error().is_none(),
+                "the first pane failed to start: {:?}",
+                first.error()
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(40),
+                "the first pane never published a frame"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        // Start the second pane while the first is panning, and time how long the first takes to
+        // publish a new frame — i.e. how long it is blocked by somebody else's style load.
+        let pan = Camera::new((-6.2, 106.8), 11.5);
+        first.set_camera(pan);
+        let second = MapThread::spawn(Camera::new((-7.9, 112.5), 9.0), (960, 540));
+
+        let pan_started = Instant::now();
+        let mut published = None;
+        while pan_started.elapsed() < Duration::from_secs(20) {
+            if let Some(frame) = first.rendered()
+                && (frame.camera.center.0 - pan.center.0).abs() < 1e-9
+            {
+                published = Some(pan_started.elapsed());
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let after_pan = published.expect("the first pane never rendered the pan");
+
+        // And the second pane does come up, or this test would be about a pane that never appeared.
+        let second_started = Instant::now();
+        while second.rendered().is_none() {
+            assert!(
+                second.error().is_none(),
+                "the second pane failed to start: {:?}",
+                second.error()
+            );
+            assert!(
+                second_started.elapsed() < Duration::from_secs(40),
+                "the second pane never published a frame"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        println!(
+            "panes: the first pane published the pan {after_pan:?} after it was asked, while the \
+             second pane was loading"
+        );
+
+        // A blocked pane would take the time a style load takes; a free one is a frame's work. Five
+        // seconds is far above a frame and far below a stalled wall, which is what this is about.
+        assert!(
+            after_pan < Duration::from_secs(5),
+            "the first pane took {after_pan:?} to publish a pan while a second pane started: panes \
+             are sharing a render loop, which is the design #64 rejected"
+        );
+        let _: Option<Rendered> = first.rendered();
     }
 }

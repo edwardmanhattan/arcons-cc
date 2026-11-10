@@ -15,7 +15,14 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-SCENES_ALL=(empty picture stale card-open photo)
+# **The scene list comes from the binary**, not from a list written here: the gate renders what
+# `arcons-cc --scenes` prints (#54), and a golden pass with its own list silently skips a new scene —
+# which is what happened to `panes` the first time, in #68. The binary has to exist to answer, so it is
+# built here rather than after the flags are parsed.
+[ -x ./target/debug/arcons-cc ] || cargo build -q || exit 1
+mapfile -t SCENES_ALL < <(./target/debug/arcons-cc --scenes)
+[ ${#SCENES_ALL[@]} -gt 0 ] || { echo "capture: the binary listed no scenes" >&2; exit 1; }
+
 UPDATE=0
 SCENES=()
 
@@ -30,10 +37,6 @@ done
 [ ${#SCENES[@]} -eq 0 ] && SCENES=("${SCENES_ALL[@]}")
 
 mkdir -p out fixtures/golden
-
-# The binary the captures run. `cargo build -q` when it is absent, so a fresh checkout works and a
-# stale binary is never what a golden was made from without someone noticing the build line.
-[ -x ./target/debug/arcons-cc ] || cargo build -q || exit 1
 
 status=0
 for scene in "${SCENES[@]}"; do

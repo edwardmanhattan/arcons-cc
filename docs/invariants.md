@@ -11,7 +11,7 @@ tickets and commits quote these. Retiring one keeps its number and says `retired
 | **INV-01** | An absent or `null` optional feed field is never rendered as a number. | #3, #6, #7 | types are `Option`; fixture with all three absent → view model `None`, tree has no digits |
 | **INV-02** | Nothing is projected without a fix; no marker is drawn at (0,0) unless a fix says so. | #6 | property test over the picture + fixture with a never-reported vessel |
 | **INV-03** | A `backfilled` fix never sets the "here now" glyph. | #6 | table test over both flag values |
-| **INV-04** | A marker's pixel agrees with the map's projection of the same lat/lon under the rendered camera, within 1 px. | #5, #6 | property test over random lat/lon and camera |
+| **INV-04** | A marker's pixel agrees with the map's projection of the same lat/lon under **its own pane's** rendered camera, within 1 px. | #5, #6, #68 | property test over random lat/lon and camera; `panes` capture per pane |
 | **INV-05** | Display interpolation never creates or mutates a Fix. | #6 | test asserts track length and fix identity across frames |
 | **INV-06** | Displayed age never decreases except when a new fix arrives. | #3, #6, #7 | property test over event sequences |
 | **INV-07** | Every refusal code maps to exactly one action, and there is no catch-all. | #4 | exhaustive test over the code enum |
@@ -45,10 +45,17 @@ not an empty one.
 A batch flushed after a dead zone is real and may be days old. Drawing it as "here now" teleports a vessel
 across the map — the single most likely way to get this wrong.
 
-### INV-04 — markers and tiles agree
+### INV-04 — markers and tiles agree, per pane
 
 Both sides must call the same `project_mercator` with the camera the map last rendered. Parity is a
 property of construction; the test exists to notice when someone re-derives it "just here".
+
+**Since Multi View (#68) the claim is per pane.** Each pane owns a camera and the frame its own map
+thread drew, and a marker projects against the frame of the pane it is drawn in — never another pane's.
+One `Rendered` per pane, and the test that would have caught a shared one is the `panes` capture: three
+panes at three cameras and three zooms, each hull checked against the projection of *its* pane. A
+marker drawn against a neighbour's camera lands tens of pixels away above zoom 12, which is why the
+scene uses three different zooms rather than three centres at one.
 
 ### INV-05 — interpolation is display only
 
