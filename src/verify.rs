@@ -677,25 +677,22 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 failures.push("panes-drag: the lifted pane has no drop under it".to_string());
                 return Err(failures);
             };
-            let Some(preview) = state.layout.preview(drop) else {
+            if state.layout.preview(drop).is_none() {
                 failures.push(format!("panes-drag: {drop:?} has no preview"));
                 return Err(failures);
-            };
-            let Some(gap) = preview.rect_of(viewport, drag.pane) else {
+            }
+            // The slot is inset by a gap on each side (the slot, not the whole pane) — one function, the
+            // same one the picture draws and the ghost stands on.
+            let Some(landing) =
+                crate::ui::view::landing_rect(&state.layout, drop, viewport, drag.pane)
+            else {
                 failures
                     .push("panes-drag: the preview does not place the dragged pane".to_string());
                 return Err(failures);
             };
-            // The gap is inset by a gap on each side (the slot, not the whole pane).
-            let inset = f64::from(tokens::GAP);
-            let (gx, gy) = (
-                origin_x + f64::from(gap.x) + inset,
-                origin_y + f64::from(gap.y) + inset,
-            );
-            let (gw, gh) = (
-                f64::from(gap.w) - inset * 2.0,
-                f64::from(gap.h) - inset * 2.0,
-            );
+            let gap = crate::ui::view::inset_rect(landing, tokens::GAP);
+            let (gx, gy) = (origin_x + f64::from(gap.x), origin_y + f64::from(gap.y));
+            let (gw, gh) = (f64::from(gap.w), f64::from(gap.h));
             let fill = ink(tokens::gap_fill());
             let mut inside = 0;
             let mut fill_hits = 0;
@@ -723,6 +720,69 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                      there"
                 ));
             }
+            // **The pane in the air is drawn as itself, on the slot it will land in** (#84). The slot is
+            // drawn in `gap_fill` and the ghost is the pane standing on it — its own frame, its own camera — so its hulls
+            // are the slot's rectangle plus the pane's own projection. A ghost that is missing, or drawn on
+            // any other rectangle, leaves no hull ink where this looks.
+            let landed = crate::ui::view::landing_rect(&state.layout, drop, viewport, drag.pane);
+            let carried = state
+                .pane_rects()
+                .iter()
+                .position(|(id, _)| *id == drag.pane)
+                .and_then(|index| scene::PANES.get(index).copied());
+            if let (Some(landed), Some((id_unit, _)), Some(pane)) =
+                (landed, carried, state.pane(drag.pane))
+            {
+                let Some(fix) = scene::fixture().ok().and_then(|entries| {
+                    entries
+                        .into_iter()
+                        .find(|entry| entry.id_unit == id_unit)
+                        .and_then(|entry| entry.position)
+                }) else {
+                    failures.push(format!("panes-drag: hull {id_unit} has no fix"));
+                    return Err(failures);
+                };
+                // The ghost draws the pane as the wall drew it in its own slot, so the frame is the one
+                // the pane had, not the slot it is landing in: same size, both from `Layout`.
+                // The frame is the **landing** rectangle's: a dropped pane is drawn at the size it lands at,
+                // and the ghost is exactly that projection. Both come from `landing_rect`, so the assertion
+                // and the picture cannot disagree — and the viewport is the capture's, not a scene's
+                // default one (that mistake is worth seven pixels).
+                let frame = crate::ui::view::synthetic_frame(pane.camera, landed, 1.0);
+                let (px, py) = frame.project(fix.latitude, fix.longitude);
+                let (gx, gy) = (
+                    origin_x + f64::from(landed.x) + px,
+                    origin_y + f64::from(landed.y) + py,
+                );
+                let ink_here = if image.blob_centre(gx, gy, accent, 8).is_some() {
+                    accent
+                } else {
+                    dim
+                };
+                match image.blob_centre(gx, gy, ink_here, 8) {
+                    Some((centre, count)) if count >= 8 => {
+                        let distance =
+                            ((centre.0 - gx).powi(2) + (centre.1 - gy).powi(2)).sqrt();
+                        if distance > TOLERANCE_PX {
+                            failures.push(format!(
+                                "panes-drag: the lifted pane's hull {id_unit} is {distance:.1} px from \
+                                 the ghost's projection ({gx:.0}, {gy:.0}) — the ghost is the pane, drawn \
+                                 on the slot it lands in"
+                            ));
+                        } else {
+                            lines.push(format!(
+                                "panes-drag: the lifted pane is drawn on its landing slot, hull \
+                                 {id_unit} at ({gx:.0}, {gy:.0})"
+                            ));
+                        }
+                    }
+                    _ => failures.push(format!(
+                        "panes-drag: no hull ink at ({gx:.0}, {gy:.0}) — the pane in the air is not \
+                         drawn on the slot it lands in"
+                    )),
+                }
+            }
+
             // Every pane whose hulls are not covered by the gap still projects its own hulls.
             for (index, (id_unit, _zoom)) in scene::PANES.iter().enumerate() {
                 let Some((id, rect)) = rects.get(index).copied() else {

@@ -141,9 +141,18 @@ element, a point measured in the element's coordinates when the layout asks in t
 press inside pane 2 was read as 2 pt from the *window's* left edge). With the drag dropped, the border
 returns to half and three assertions go red — measured, not assumed.
 
-`panes-drag` is the same wall with a pane **lifted** (#70): one pane dimmed, and the gap it will land in
-drawn from `Layout::preview`. The assertion checks the gap's rectangle against that preview — the same
-function the release calls — so a preview that opened somewhere the pane does not land fails here.
+`panes-drag` is the same wall with a pane **lifted** (#70, #84): one pane dimmed in its slot, and the pane in
+the air **drawn on the slot it will land in** — `Layout::preview`'s rectangle, the pane's own camera projected
+against that rectangle's size, on the slot's plate. Two assertions: the slot's plate is drawn where the
+preview puts it, and the lifted pane's hull is where that projection puts it. Both call
+`ui::view::landing_rect` — the same function the picture draws from — so a preview that opened somewhere the
+pane does not land, or a ghost drawn anywhere but on the slot, fails here.
+
+Why the slot and not the pointer: a copy hanging from the hand covers the slot it is about to land in, which
+is the one thing an operator is looking at — and it is a second coordinate space in a ticket whose subject
+is a coordinate space got wrong (`Drag::x`/`y` are element-local; the handle is its own 28 × 4 element inside
+a pane that is itself at an offset, and `lift` had asked `drop_for` about the handle's local point, which is
+why a pane could only ever be dropped sideways).
 
 That is not a convenience. Until #54 the list was written by hand in `scripts/verify.sh`, and it
 omitted `photo` — so a scene added in #41 was never captured, its golden was regenerated blind in #42
