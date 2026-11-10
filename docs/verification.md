@@ -32,6 +32,18 @@ It exits non-zero on the first failure with the command that failed, and it need
 display, and no GPU beyond a software Vulkan driver**. If a check needs any of those, it belongs in a
 ticket that says so, not in the gate.
 
+**The map feature is the one thing the gate does not compile**, because compiling it means MapLibre's C++
+and this machine's toolchain. That is a real hole and it has cost us: #101 renamed a `State` field and left
+one `#[cfg(feature = "map")]` `drag_pane` assigning the old one; the default gate was green and CI's macOS
+`map` job was the first thing to notice. So:
+
+```sh
+VERIFY_WITH_MAP=1 scripts/verify.sh   # the same gate, plus `cargo check --features map`
+```
+
+Run it before pushing anything that touches code behind `cfg(feature = "map")`. CI's `map` jobs run the same
+command, which is why a change to those lines is decided there even when a local gate says PASSED.
+
 ## Every ticket carries a `## Proof` line
 
 One line: the command, and what a failure looks like. Not "tests pass" — the invocation.

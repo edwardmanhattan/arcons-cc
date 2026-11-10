@@ -344,3 +344,33 @@ fn the_wall_build_takes_the_precompiled_route() {
         "docs/runbook.md must tell the operator how the wall binary is built (§6)"
     );
 }
+
+/// **The interaction table is a claim about code, so the document names every state it covers** (#101).
+///
+/// `tests/transitions.rs` makes the matrix exhaustive over `Interaction` and `Begin`; this makes the *prose*
+/// exhaustive over the same enums. Adding a state to the machine therefore fails until the ADR has a row for
+/// it — a table that quietly stops describing the code is worse than no table.
+#[test]
+fn the_interaction_table_names_every_state() {
+    let adr = read("docs/adr/0004-interaction-state.md");
+    // Each name appears in the table's own row, which is why they are checked as "\n| **Name** |".
+    for state in ["Idle", "Lifted", "Resizing", "Menu", "Renaming", "Settings"] {
+        let row = format!("| **{state}** |");
+        assert!(
+            adr.contains(&row),
+            "docs/adr/0004-interaction-state.md has no table row for {state} — the machine has one more \
+             state than the table describes (#101)"
+        );
+    }
+    assert!(
+        adr.contains("Maximised") && adr.contains("layout"),
+        "the ADR must say that a maximised pane is a layout fact and not an interaction (#101): the \
+         decision is the reason the table is six rows and not twelve"
+    );
+    // And the code points at the document, so a reader of `Begin::allowed_from` finds the prose.
+    let source = read("src/ui/mod.rs");
+    assert!(
+        source.contains("docs/adr/0004-interaction-state.md"),
+        "`Begin::allowed_from` must name the ADR that is its prose (#101)"
+    );
+}

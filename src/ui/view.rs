@@ -279,6 +279,13 @@ pub struct Layout {
     root: Node,
     focused: ViewId,
     next: ViewId,
+    /// The pane drawn **full size over the tiling** (#85, and a layout fact since #101).
+    ///
+    /// It lives here rather than in the interaction state because it *is* a layout: the tiling behind it
+    /// stays exactly as it was, it survives every menu closing, and it has its own way back. Treating it as
+    /// an interaction would mean enumerating "maximised × renaming", "maximised × menu" and the rest — a
+    /// table twice the size for a fact that never interacts with them.
+    maximised: Option<ViewId>,
 }
 
 impl Default for Layout {
@@ -294,7 +301,29 @@ impl Layout {
             root: Node::Leaf(1),
             focused: 1,
             next: 2,
+            maximised: None,
         }
+    }
+
+    /// The pane drawn over the tiling, if any.
+    pub fn maximised(&self) -> Option<ViewId> {
+        self.maximised
+    }
+
+    /// Draw one pane over the tiling. `false` for a pane this layout does not have — a maximised rectangle
+    /// is still a pane of this tiling, and a stale id would cover the wall with nothing.
+    pub fn maximise(&mut self, id: ViewId) -> bool {
+        if !self.contains(id) {
+            return false;
+        }
+        self.maximised = Some(id);
+        self.focused = id;
+        true
+    }
+
+    /// Back to the tiling.
+    pub fn restore(&mut self) {
+        self.maximised = None;
     }
 
     pub fn focused(&self) -> ViewId {
@@ -358,6 +387,9 @@ impl Layout {
         self.root = remove_leaf(self.root.clone(), id, &mut removed);
         if !removed {
             return false;
+        }
+        if self.maximised == Some(id) {
+            self.maximised = None;
         }
         if !self.contains(self.focused) {
             self.focused = self.ids()[0];

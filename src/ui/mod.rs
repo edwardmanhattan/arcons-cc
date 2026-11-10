@@ -277,31 +277,20 @@ pub struct State {
     /// The picture panel's size in points, from its own layout. `None` until the first layout pass, when
     /// the panes are drawn into a provisional viewport the size of the window.
     pub panel: Option<(f32, f32)>,
-    /// The open context menu, if any: where it was asked for, and on which pane.
-    pub menu: Option<Menu>,
+    /// **What the wall is doing** (#101): one value, so "a menu and a rename at once" is not a state the
+    /// type can express. Everything that used to be a field beside this one — the menu, the drag, the
+    /// border, the rename, the settings sheet — is a variant of it.
+    pub interaction: Interaction,
     /// Set when a layout pass changed something the drawing depends on (the panel's size, a pane's
     /// frame), so `poll` redraws once instead of every frame.
     pub layout_dirty: bool,
-    /// The border a drag has hold of (#69). Set on the press, cleared on the release: a gesture that
-    /// starts on a border moves that border and never pans the map under it.
-    pub resizing: Option<view::Border>,
-    /// The pane a drag has lifted, and the drop it would make (#70). `None` when nothing is lifted.
-    pub dragging: Option<PaneDrag>,
     /// What the display remembers between runs: the settings file (#82). A scene gets the defaults, so a
     /// capture never depends on the machine it was rendered on.
     pub settings: crate::config::settings::Settings,
-    /// Whether the settings sheet is open. Chrome, not state: it changes nothing by itself.
-    pub settings_open: bool,
-    /// The pane drawn **full size over the wall** for a moment (#85): still in its slot, still rendering,
-    /// with a copy of itself on a layer above everything. `None` is the wall as it is.
-    pub maximised: Option<ViewId>,
     /// Device pixels per point, as the last layout pass reported it. The one number a *toggle* needs and
     /// cannot get from a layout callback: restoring a maximised pane resizes its map thread, and resizing
     /// it to the wrong scale is the blurred pane #85 exists to avoid.
     pub scale: f32,
-    /// The pane being renamed, and the field being typed into (#83). `None` when no rename is in progress —
-    /// which is also what makes Escape unambiguous: it abandons *this*, or it does nothing.
-    pub rename: Option<Rename>,
     /// The focused pane the threads were last told about, so a focus change re-cadences them exactly
     /// once (#71): the focused pane at 4 Hz, every other pane at 1 Hz. Only a wall has threads to tell.
     #[cfg(feature = "map")]
@@ -400,15 +389,13 @@ impl Default for State {
             panes: vec![Pane::new(1, camera)],
             layout: Layout::single(),
             settings: crate::config::settings::Settings::default(),
-            settings_open: false,
-            maximised: None,
+
             scale: 1.0,
-            rename: None,
+
             panel: None,
-            menu: None,
+            interaction: Interaction::Idle,
             layout_dirty: false,
-            resizing: None,
-            dragging: None,
+
             #[cfg(feature = "map")]
             cadenced: None,
             live: None,
@@ -523,6 +510,86 @@ impl State {
             let index = self.panes.len() - 1;
             &mut self.panes[index]
         }
+    }
+
+    /// The pane a menu is open on, and where — `None` when no menu is open.
+    pub fn menu(&self) -> Option<Menu> {
+        match self.interaction {
+            Interaction::Menu { pane, at } => Some(Menu { pane, at }),
+            _ => None,
+        }
+    }
+
+    /// The lifted pane and its drop, if one is in the air.
+    pub fn dragging(&self) -> Option<PaneDrag> {
+        match self.interaction {
+            Interaction::Lifted(drag) => Some(drag),
+            _ => None,
+        }
+    }
+
+    /// The border a drag is holding, if one is.
+    pub fn resizing(&self) -> Option<view::Border> {
+        match self.interaction {
+            Interaction::Resizing(border) => Some(border),
+            _ => None,
+        }
+    }
+
+    /// The rename in progress, if one is.
+    pub fn rename(&self) -> Option<&Rename> {
+        match &self.interaction {
+            Interaction::Renaming(rename) => Some(rename),
+            _ => None,
+        }
+    }
+
+    /// The rename's field, for the text input's `on_edit`. `None` when nothing is renaming.
+    pub fn renaming_mut(&mut self) -> Option<&mut Rename> {
+        match &mut self.interaction {
+            Interaction::Renaming(rename) => Some(rename),
+            _ => None,
+        }
+    }
+
+    /// Whether the settings sheet is open.
+    pub fn settings_open(&self) -> bool {
+        matches!(self.interaction, Interaction::Settings)
+    }
+
+    /// The pane drawn over the tiling, from the layout that owns it.
+    pub fn maximised(&self) -> Option<ViewId> {
+        self.layout.maximised()
+    }
+
+    /// **Enter a state, if the table allows it** (#101). Returns whether it happened, so a caller can do the
+    /// follow-up work only when the wall actually moved.
+    ///
+    /// One place, because the alternative is what this replaced: six fields, each set from whichever handler
+    /// felt like it, and nothing to say which combinations were meant to exist.
+    pub fn begin(&mut self, begin: Begin) -> bool {
+        if !begin.allowed_from(&self.interaction) {
+            return false;
+        }
+        self.interaction = match begin {
+            Begin::Lift(drag) => Interaction::Lifted(drag),
+            Begin::Resize(border) => Interaction::Resizing(border),
+            Begin::Menu { pane, at } => Interaction::Menu { pane, at },
+            Begin::Rename(rename) => Interaction::Renaming(rename),
+            Begin::Settings => Interaction::Settings,
+        };
+        self.layout_dirty = true;
+        true
+    }
+
+    /// Release whatever is held: the one way back to `Idle` (Escape, a release, a dismissal).
+    pub fn end(&mut self) -> bool {
+        if matches!(self.interaction, Interaction::Idle) {
+            return false;
+        }
+        self.interaction = Interaction::Idle;
+        self.layout_dirty = true;
+        true
     }
 
     pub fn pane(&self, id: ViewId) -> Option<&Pane> {
@@ -842,6 +909,95 @@ impl State {
     }
 }
 
+/// **What the wall is doing**, one value (#101).
+///
+/// Before this, six independent fields — `settings_open`, `menu`, `resizing`, `dragging`, `rename`,
+/// `maximised` — allowed fifteen meaningful combinations of which four are reachable. Two of the operator's
+/// reports were exactly that: a sheet with no legal way out (#98) and a lift whose drop disagreed with the
+/// geometry it would produce (#100).
+///
+/// Every state here is a thing that holds the **pointer** or the **keyboard**, so the machine's rule is the
+/// one an operator already assumes: one gesture at a time, and whatever you start next releases what you
+/// were holding. `Maximised` is not here — it is a layout fact (`Layout::maximised`), because it survives
+/// every one of these coming and going.
+#[derive(Default)]
+// One value exists at a time, so the size of the largest variant is one stack slot in `State` — not the
+// per-element cost it is when an enum is held in a collection. Boxing `Rename` would make every reader
+// dereference it for a saving nothing can spend.
+#[allow(clippy::large_enum_variant)]
+pub enum Interaction {
+    /// Nothing is being held: the wall is the picture, and a press goes wherever it lands.
+    #[default]
+    Idle,
+    /// A pane is in the air with the drop it would make (#70, #84). The pointer is the lift's.
+    Lifted(PaneDrag),
+    /// A border between two panes is being held (#69). The pointer is the border's.
+    Resizing(view::Border),
+    /// A pane's menu is open (#77, #81, #83). Passive: it holds nothing, so a press elsewhere closes it.
+    Menu { pane: ViewId, at: (f32, f32) },
+    /// A pane is being named (#83). **The keyboard is the sheet's**, and the sheet is modal.
+    Renaming(Rename),
+    /// The settings sheet is open (#82, #98). Modal, and it holds the pointer.
+    Settings,
+}
+
+/// A state the wall may be asked to enter. The `Interaction` variants are the states; this is the vocabulary
+/// of *requests*, so `begin` can answer yes or no in one place rather than each handler deciding a rule.
+// The same reasoning as `Interaction`: a request lives for the length of one call.
+#[allow(clippy::large_enum_variant)]
+pub enum Begin {
+    Lift(PaneDrag),
+    Resize(view::Border),
+    Menu { pane: ViewId, at: (f32, f32) },
+    Rename(Rename),
+    Settings,
+}
+
+impl Begin {
+    /// The transition table, in code — `docs/adr/0004-interaction-state.md` is its prose and a test keeps
+    /// the two in step.
+    ///
+    /// The rule is one hold at a time: a gesture that holds the pointer cannot be started while another
+    /// holds it, and the modal sheets cannot be entered from behind each other. Re-entering the state you
+    /// are in is allowed for the ones that can move (a menu re-asked, a lift re-aimed) and refused for the
+    /// ones that cannot (the settings sheet is not two settings sheets).
+    pub fn allowed_from(&self, now: &Interaction) -> bool {
+        match (self, now) {
+            // A gesture starts from nothing, or from a surface that holds nothing and can be dismissed by
+            // the press that starts it.
+            (Begin::Lift(_) | Begin::Resize(_), Interaction::Idle | Interaction::Menu { .. }) => {
+                true
+            }
+            // A menu opens where nothing has the pointer; from another menu it moves.
+            (Begin::Menu { .. }, Interaction::Idle | Interaction::Menu { .. }) => true,
+            // Naming comes from the menu ("Name this pane…") and from the wall, never from behind a sheet.
+            (Begin::Rename(_), Interaction::Idle | Interaction::Menu { .. }) => true,
+            // The settings sheet replaces a menu — the header's own control is the way in — and replaces
+            // itself, so pressing it twice is not two sheets.
+            (
+                Begin::Settings,
+                Interaction::Idle | Interaction::Menu { .. } | Interaction::Settings,
+            ) => true,
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Debug for Interaction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The states by name: a `Rename`'s field has no `Debug` of its own, and its caret is not the point.
+        let name = match self {
+            Interaction::Idle => "Idle",
+            Interaction::Lifted(_) => "Lifted",
+            Interaction::Resizing(_) => "Resizing",
+            Interaction::Menu { .. } => "Menu",
+            Interaction::Renaming(_) => "Renaming",
+            Interaction::Settings => "Settings",
+        };
+        f.write_str(name)
+    }
+}
+
 /// The socket's state, as the header shows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Link {
@@ -879,7 +1035,7 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
         units
     };
     // A wall left full size is a line in a file, not a mystery in a photograph (#85).
-    let units = match state.maximised {
+    let units = match state.maximised() {
         Some(id) => format!("{units} · max={id}"),
         None => units,
     };
@@ -933,7 +1089,7 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .font(tokens::LABEL)
                 .color(tokens::ink_dim())
                 .on_press(|state: &mut State| {
-                    state.settings_open = true;
+                    state.begin(Begin::Settings);
                     state.layout_dirty = true;
                 }),
         );
@@ -958,10 +1114,10 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
     // **Only when open**: an empty child is still a child, and the root's own gap would take 8 pt off the
     // picture to lay it out — which is what a capture noticed (#82) before a golden was regenerated.
     let mut root = root.child(picture(state, scale));
-    if state.settings_open {
+    if state.settings_open() {
         root = root.child(settings_sheet(state, scale));
     }
-    if state.rename.is_some() {
+    if state.rename().is_some() {
         root = root.child(rename_sheet(state));
     }
     root
@@ -980,8 +1136,10 @@ pub const SETTING_CLOSE: &str = "Close";
 
 /// Close the settings sheet, from any of its three exits: the row, the scrim, Escape.
 fn close_settings(state: &mut State) {
-    state.settings_open = false;
-    state.layout_dirty = true;
+    // Only the sheet closes: a rename that was somehow open behind it must not be ended by this.
+    if state.settings_open() {
+        state.end();
+    }
 }
 
 /// The settings sheet (#82): the wall's own preferences, as a modal over the picture.
@@ -1085,7 +1243,7 @@ fn settings_sheet(state: &State, scale: f32) -> El {
 /// operator's keyboard expects — a hand-rolled `String` would be a caret drawn by us and an input method
 /// that does not work.
 fn rename_sheet(state: &State) -> El {
-    let Some(rename) = state.rename.as_ref() else {
+    let Some(rename) = state.rename() else {
         return el();
     };
     let width = state.panel.map(|(w, _)| w).unwrap_or(tokens::WINDOW_SIZE.0);
@@ -1102,7 +1260,7 @@ fn rename_sheet(state: &State) -> El {
         .border(tokens::HAIRLINE, tokens::card_edge())
         .on_edit(|state: &mut State| {
             // The sheet is the only thing that can be renaming, so the field is unambiguous.
-            let rename = state.rename.as_mut().expect("a rename sheet has a field");
+            let rename = state.renaming_mut().expect("a rename sheet has a field");
             &mut rename.edit
         })
         .on_submit(|state: &mut State, _tx: &mut rune::Tx| commit_rename(state));
@@ -1126,7 +1284,7 @@ fn rename_sheet(state: &State) -> El {
         .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
         .fill(tokens::scrim())
         .modal(true, |state: &mut State| {
-            state.rename = None;
+            state.end();
             state.layout_dirty = true;
         })
         .child(sheet)
@@ -1175,7 +1333,7 @@ fn save_settings(state: &State) {
 /// element tree — and therefore the goldens and `INV-12`'s frame cost — stay exactly what they were.
 /// Multi View adds the wrapper, and `#71`'s golden pass decides whether one pane should clip too.
 fn maximised(state: &State, scale: f32, body: El) -> El {
-    let Some(id) = state.maximised else {
+    let Some(id) = state.maximised() else {
         return body;
     };
     let Some(pane) = state.pane(id) else {
@@ -1330,7 +1488,7 @@ fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
     // A pane with space around it is a surface of its own, so it is rounded; a pane that shares a border
     // with its neighbour is a piece of one surface, and rounds nothing (#82).
     let gapped = state.settings.pane_gap > 0.0;
-    let dragged = state.dragging.is_some_and(|drag| drag.pane == id);
+    let dragged = state.dragging().is_some_and(|drag| drag.pane == id);
     let mut body = el()
         .key(format!("pane-{id}"))
         .absolute(rect.x, rect.y)
@@ -1425,15 +1583,15 @@ fn lift(state: &mut State, id: ViewId, rect: Rect, drag: &mut rune::Drag) {
     let at = view::handle_point(rect, (drag.x, drag.y));
     match drag.phase {
         rune::Phase::Down => {
-            state.dragging = Some(PaneDrag {
+            state.begin(Begin::Lift(PaneDrag {
                 pane: id,
                 drop: None,
-            });
+            }));
             state.layout.focus(id);
         }
         rune::Phase::Move => {
             let drop = state.layout.drop_for(viewport, id, at);
-            if let Some(drag) = &mut state.dragging
+            if let Interaction::Lifted(drag) = &mut state.interaction
                 && drag.drop != drop
             {
                 drag.drop = drop;
@@ -1441,12 +1599,12 @@ fn lift(state: &mut State, id: ViewId, rect: Rect, drag: &mut rune::Drag) {
             state.layout_dirty = true;
         }
         rune::Phase::Up => {
-            let drop = state.dragging.and_then(|drag| drag.drop);
-            state.dragging = None;
+            let drop = state.dragging().and_then(|drag| drag.drop);
+            state.end();
             if let Some(drop) = drop
                 && state.layout.apply(drop)
             {
-                state.menu = None;
+                state.end();
             }
             state.layout_dirty = true;
         }
@@ -1470,7 +1628,7 @@ fn lift(state: &mut State, id: ViewId, rect: Rect, drag: &mut rune::Drag) {
 /// Its map pixels are not duplicated: one pane owns one `Pixels`. The hulls are what say *which* pane is
 /// being carried, and they are the part that can be drawn twice.
 fn ghost(state: &State, scale: f32, body: El) -> El {
-    let Some(drag) = state.dragging else {
+    let Some(drag) = state.dragging() else {
         return body;
     };
     let Some(drop) = drag.drop else { return body };
@@ -1517,7 +1675,7 @@ fn ghost(state: &State, scale: f32, body: El) -> El {
         &frame,
         scale,
         &pictures,
-        state.dragging.map(|drag| drag.pane).unwrap_or_default(),
+        state.dragging().map(|drag| drag.pane).unwrap_or_default(),
     )))
 }
 
@@ -1749,10 +1907,12 @@ fn pane_laid_out(state: &mut State, id: ViewId, width: f32, height: f32, scale: 
 /// closed is a wall that answers "no panes here", and `Layout::close` refuses it anyway, so offering it
 /// would be a control that does nothing. The surface is as tall as it has items.
 fn menu_view(state: &State, scale: f32, body: El) -> El {
-    let Some(menu) = state.menu else { return body };
+    let Some(menu) = state.menu() else {
+        return body;
+    };
     let viewport = state.pane_viewport();
     let Some(rect) = state.layout.rect_of(viewport, menu.pane).map(|rect| {
-        if state.maximised == Some(menu.pane) {
+        if state.maximised() == Some(menu.pane) {
             // A right-click on the full-size picture is a right-click on the picture the operator is
             // looking at, so the menu opens on that rectangle and not on the slot behind the scrim.
             Rect {
@@ -1798,10 +1958,8 @@ fn menu_view(state: &State, scale: f32, body: El) -> El {
 
 /// `Name this pane…`: open the rename sheet on this pane, with its current name in the field (#83).
 fn begin_rename(state: &mut State, pane: ViewId) {
-    state.menu = None;
     let current = state.pane(pane).and_then(|pane| pane.name.clone());
-    state.rename = Some(Rename::new(pane, current.as_deref()));
-    state.layout_dirty = true;
+    state.begin(Begin::Rename(Rename::new(pane, current.as_deref())));
 }
 
 /// `Full size`: the pane is drawn over the wall and its map renders at the window's size (#85).
@@ -1811,8 +1969,10 @@ fn begin_rename(state: &mut State, pane: ViewId) {
 /// "make this the only pane", which is what a tiled wall's operator actually wants when the traffic gets
 /// dense.
 fn full_size_from_menu(state: &mut State, pane: ViewId) {
-    state.menu = None;
-    state.maximised = Some(pane);
+    state.end();
+    if !state.layout.maximise(pane) {
+        return;
+    }
     // The keys and the highest cadence belong to the pane being looked at (`#71`).
     state.layout.focus(pane);
     if let Some(panel) = state.panel {
@@ -1829,14 +1989,15 @@ pub fn full_size_for_scene(state: &mut State, pane: ViewId) {
 
 /// `Back to the wall`: the pane goes back to the size its slot says, and its map thread with it.
 fn restore_from_menu(state: &mut State, _pane: ViewId) {
-    state.menu = None;
+    state.end();
     restore_full_size(state);
 }
 
 fn restore_full_size(state: &mut State) {
-    let Some(pane) = state.maximised.take() else {
+    let Some(pane) = state.maximised() else {
         return;
     };
+    state.layout.restore();
     // The map goes back to the pane's own rectangle, not to whatever it was before: the tiling may have
     // been dragged while the pane was full size.
     if let Some(rect) = state
@@ -1872,11 +2033,16 @@ fn resize_map(state: &mut State, pane: ViewId, points: (f32, f32), scale: f32) {
 
 /// Enter in the rename sheet: the name is the field's text, trimmed, and an empty field removes it.
 fn commit_rename(state: &mut State) {
-    let Some(rename) = state.rename.take() else {
+    // The sheet is the only thing that renames, so taking its text and ending the state in one step is
+    // unambiguous — and `end()` is what clears it, rather than a second way to leave the state.
+    let Some((pane, text)) = state
+        .rename()
+        .map(|rename| (rename.pane, rename.edit.text.clone()))
+    else {
         return;
     };
-    let text = rename.edit.text.clone();
-    if let Some(pane) = state.pane_mut(rename.pane) {
+    state.end();
+    if let Some(pane) = state.pane_mut(pane) {
         pane.name = shown_name(&text);
     }
     state.layout_dirty = true;
@@ -1913,7 +2079,7 @@ pub fn menu_items(state: &State, pane: ViewId) -> Vec<MenuItem> {
     });
     // Full size, and the way back: one row that says which it will do, and it is offered on the wall a
     // maximised pane is over as well as on the pane itself (#85).
-    if state.maximised.is_some() {
+    if state.maximised().is_some() {
         items.push(MenuItem {
             label: MENU_RESTORE,
             key: "menu-restore",
@@ -1974,11 +2140,12 @@ pub const ELLIPSIS: char = '…';
 fn open_menu(state: &mut State, id: ViewId, event: &rune::PointerEvent, scale: f32) {
     let scale = if scale > 0.0 { scale } else { 1.0 };
     state.layout.focus(id);
-    state.menu = Some(Menu {
+    // Through the machine, so a right-click during a lift is refused rather than opening a surface the
+    // operator's held pointer cannot reach (#101).
+    state.begin(Begin::Menu {
         pane: id,
         at: (event.x * scale, event.y * scale),
     });
-    state.layout_dirty = true;
 }
 
 /// A primary press in a pane: close the menu (the click was not for it) and focus the pane.
@@ -1988,8 +2155,9 @@ fn press_in(state: &mut State, id: ViewId) {
     // **A press on a pane's water clears that pane** (#99): the map underneath is that pane's, and the
     // press must not walk over to the pane that happens to have the keys.
     state.press_background(id);
-    if state.menu.take().is_some() {
-        state.layout_dirty = true;
+    // The press was not for the menu (the menu's own rows take their presses), so the menu goes.
+    if state.menu().is_some() {
+        state.end();
     }
 }
 
@@ -1997,7 +2165,7 @@ fn press_in(state: &mut State, id: ViewId) {
 /// before it is forgotten — a wall that leaks a render thread per closed pane is a wall that dies at the
 /// third split.
 fn close_from_menu(state: &mut State, id: ViewId) {
-    state.menu = None;
+    state.end();
     if !state.layout.close(id) {
         // The last pane: nothing happened, and the menu said so by not offering it. A redraw keeps the
         // menu from being left open on a pane that is still there.
@@ -2014,9 +2182,10 @@ fn close_from_menu(state: &mut State, id: ViewId) {
 /// The geographic point is the pane's **own** camera and frame, unprojected at the click — the inverse
 /// of the projection every marker is drawn with, which is why it lives in `map::geometry` beside it.
 fn split_from_menu(state: &mut State, id: ViewId) {
-    let Some(menu) = state.menu.take() else {
+    let Some(menu) = state.menu() else {
         return;
     };
+    state.end();
     let Some(pane) = state.pane(id) else { return };
     let Some(frame) = pane.frame else {
         // No frame yet means no camera to unproject against: a pane opened at a guessed point would
@@ -2126,13 +2295,13 @@ fn drag_pane(state: &mut State, id: ViewId, rect: Rect, drag: &mut rune::Drag, s
     match drag.phase {
         rune::Phase::Down => {
             let at = view::viewport_point(rect, (drag.start_x, drag.start_y));
-            state.resizing = state.layout.border_at(viewport, at, state.pane_grip());
-            if state.resizing.is_none() {
+            begin_resize(state, viewport, at);
+            if state.resizing().is_none() {
                 drag_map(state, id, drag);
             }
         }
         rune::Phase::Move => {
-            if let Some(border) = state.resizing {
+            if let Some(border) = state.resizing() {
                 // The pointer's coordinate along the border's own axis, in the viewport's points. A
                 // point, not a delta: the ratio follows the line the operator is holding, and a
                 // gesture that leaves the pane and comes back lands where the pointer is.
@@ -2150,15 +2319,24 @@ fn drag_pane(state: &mut State, id: ViewId, rect: Rect, drag: &mut rune::Drag, s
             }
         }
         rune::Phase::Up => {
-            if state.resizing.take().is_some() {
+            if state.resizing().is_some() {
                 // Nothing to render: the panes are elements, not pixels. The redraw is the layout
                 // change, and `poll` will see `layout_dirty`.
-                state.layout_dirty = true;
+                state.end();
             } else {
                 drag_map(state, id, drag);
             }
         }
     }
+}
+
+/// Begin holding the border under the pointer, if there is one (#69, and a state since #101): a press
+/// within a grip of a border is a border's, anywhere else is the map's.
+fn begin_resize(state: &mut State, viewport: crate::map::geometry::Viewport, at: (f32, f32)) {
+    let Some(border) = state.layout.border_at(viewport, at, state.pane_grip()) else {
+        return;
+    };
+    state.begin(Begin::Resize(border));
 }
 
 /// Without the engine there is still something to drag: the border between two panes (#69).
@@ -2168,10 +2346,10 @@ fn drag_pane(state: &mut State, _id: ViewId, rect: Rect, drag: &mut rune::Drag, 
     match drag.phase {
         rune::Phase::Down => {
             let at = view::viewport_point(rect, (drag.start_x, drag.start_y));
-            state.resizing = state.layout.border_at(viewport, at, state.pane_grip());
+            begin_resize(state, viewport, at);
         }
         rune::Phase::Move => {
-            if let Some(border) = state.resizing {
+            if let Some(border) = state.resizing() {
                 let pointer = view::viewport_point(rect, (drag.x, drag.y));
                 let pointer = match border.dir {
                     Dir::Horizontal => pointer.0,
@@ -2183,8 +2361,8 @@ fn drag_pane(state: &mut State, _id: ViewId, rect: Rect, drag: &mut rune::Drag, 
             }
         }
         rune::Phase::Up => {
-            if state.resizing.take().is_some() {
-                state.layout_dirty = true;
+            if state.resizing().is_some() {
+                state.end();
             }
         }
     }
@@ -2417,62 +2595,34 @@ fn tick_card_age(state: &mut State) -> bool {
     changed
 }
 
-/// Escape closes the card. A key press the focused control did not take comes here.
+/// **Escape, in one place** (#101): the thing being held is released, or the focused pane's card is closed.
+///
+/// This used to be five `if`s in a row over five fields, each with its own `is_some()`; the order *was* the
+/// policy, and it could only be read by reading it. Now it is a match on the state the wall is in, which is
+/// the same information the operator sees, and the order is the enum's:
+///
+/// 1. whatever `interaction` holds — a rename, a lift, the settings sheet, a menu;
+/// 2. a maximised pane, which is a **layout** fact rather than a state of being held (a pane drawn over the
+///    tiling is not a gesture): Escape is the way back the close plate also offers;
+/// 3. the focused pane's card, which is the pane's own state (#99) and so goes last and only there.
 fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool {
-    // A rename first: it is holding the keyboard, so Escape has to reach it before anything else.
-    if event.key == rune::Key::Escape && state.rename.is_some() {
-        state.rename = None;
-        state.layout_dirty = true;
+    if event.key != rune::Key::Escape {
+        return false;
+    }
+    if !matches!(state.interaction, Interaction::Idle) {
+        state.end();
         return true;
     }
-    // A full-size pane next: Escape is the way back the close plate also offers.
-    if event.key == rune::Key::Escape && state.maximised.is_some() {
+    if state.maximised().is_some() {
         restore_full_size(state);
         return true;
     }
-    // A lift in progress next: it is the live gesture, and cancelling it must not also close the menu or
-    // the card behind it.
-    if cancels_lift_on_escape(event, state.dragging.is_some()) {
-        state.dragging = None;
-        state.layout_dirty = true;
-        return true;
-    }
-    // Then the settings sheet: it is a modal over the wall, so it and nothing else goes away.
-    if event.key == rune::Key::Escape && state.settings_open {
-        state.settings_open = false;
-        state.layout_dirty = true;
-        return true;
-    }
-    // The menu next: it is the thing on top, and one Escape should not close a card behind it as well.
-    if closes_menu_on_escape(event, state.menu.is_some()) {
-        state.menu = None;
-        state.layout_dirty = true;
-        return true;
-    }
-    if !closes_on_escape(event, state.selection()) {
+    let focused = state.layout.focused();
+    if state.selected_in(focused).is_none() {
         return false;
     }
-    let focused = state.layout.focused();
     state.clear_selection(focused);
     true
-}
-
-/// The decision, without a `Tx`: Escape closes an open card and is consumed, and with nothing open it
-/// is left for whatever else wants it.
-fn closes_on_escape(event: &rune::KeyEvent, selected: Option<i64>) -> bool {
-    event.key == rune::Key::Escape && selected.is_some()
-}
-
-/// Escape cancels a pane lift: the tree is left exactly as it was, because the drop is only applied on
-/// release (#84). A gesture that cannot be abandoned is a gesture an operator is afraid of.
-fn cancels_lift_on_escape(event: &rune::KeyEvent, lifting: bool) -> bool {
-    event.key == rune::Key::Escape && lifting
-}
-
-/// Escape closes the pane menu — the menu, and not the card behind it, so one key press dismisses the
-/// thing on top and leaves the operator's selection where it was.
-fn closes_menu_on_escape(event: &rune::KeyEvent, menu_open: bool) -> bool {
-    event.key == rune::Key::Escape && menu_open
 }
 
 /// Start the socket actor, once, before the first frame.
@@ -3533,23 +3683,38 @@ mod tests {
     /// live thing, the menu and the card are behind it.
     #[test]
     fn escape_cancels_a_lift_and_nothing_behind_it() {
+        // The decision is the machine's now (#101): Escape ends whatever is held, and while a pane is in
+        // the air that is the lift — so the card behind it survives, which is the invariant's point.
+        let mut state = state_with_two_hulls();
+        let focused = state.layout.focused();
+        state.select_in(focused, 8);
+        assert!(
+            state.begin(Begin::Lift(PaneDrag {
+                pane: focused,
+                drop: None
+            })),
+            "a lift starts on an idle wall"
+        );
         let escape = rune::KeyEvent {
             key: rune::Key::Escape,
             mods: rune::Mods::default(),
         };
+        let mut tx = rune::Tx::default();
+        assert!(on_key(&mut state, &escape, &mut tx), "Escape is consumed");
         assert!(
-            !cancels_lift_on_escape(&escape, false),
-            "Escape with nothing in the air is not consumed"
+            !matches!(state.interaction, Interaction::Lifted(_)),
+            "Escape in the air puts the pane down"
         );
         assert!(
-            cancels_lift_on_escape(&escape, true),
-            "Escape in the air puts the pane down"
+            state.card_in(focused).is_some(),
+            "and does not close the card behind it"
         );
         let tab = rune::KeyEvent {
             key: rune::Key::Tab,
             mods: rune::Mods::default(),
         };
-        assert!(!cancels_lift_on_escape(&tab, true), "only Escape");
+        let mut tx = rune::Tx::default();
+        assert!(!on_key(&mut state, &tab, &mut tx), "only Escape");
     }
 
     #[test]
@@ -3559,24 +3724,31 @@ mod tests {
             key: rune::Key::Escape,
             mods: rune::Mods::default(),
         };
+        let mut tx = rune::Tx::default();
         assert!(
-            !closes_on_escape(&escape, state.selection()),
+            !on_key(&mut state, &escape, &mut tx),
             "Escape with nothing open is not consumed"
         );
-        state.select_in(state.layout.focused(), 8);
+        let focused = state.layout.focused();
+        state.select_in(focused, 8);
+        let mut tx = rune::Tx::default();
         assert!(
-            closes_on_escape(&escape, state.selection()),
+            on_key(&mut state, &escape, &mut tx),
             "Escape closes the open card"
         );
-        let focused = state.layout.focused();
-        state.clear_selection(focused);
         assert!(card_of(&state).is_none());
         // And a key that is not Escape never closes it, however the state looks.
+        state.select_in(focused, 8);
         let tab = rune::KeyEvent {
             key: rune::Key::Tab,
             mods: rune::Mods::default(),
         };
-        assert!(!closes_on_escape(&tab, Some(8)));
+        let mut tx = rune::Tx::default();
+        assert!(!on_key(&mut state, &tab, &mut tx));
+        assert!(
+            card_of(&state).is_some(),
+            "Tab is not Escape, so the card stays"
+        );
     }
 
     #[test]
@@ -3807,7 +3979,7 @@ mod tests {
         );
 
         let dragging = crate::scene::state_for("panes-drag");
-        assert!(dragging.dragging.is_some(), "the scene lifts a pane");
+        assert!(dragging.dragging().is_some(), "the scene lifts a pane");
         let rt = frame_once(dragging);
         assert!(
             rt.find("pane-ghost").is_some(),
@@ -4010,8 +4182,9 @@ mod tests {
     fn the_pane_menu_is_drawn_on_a_wall_with_one_pane() {
         let mut state = crate::scene::state_for("picture");
         assert!(state.layout.is_single(), "the wall this test is about");
-        state.menu = Some(Menu {
-            pane: state.layout.focused(),
+        let pane = state.layout.focused();
+        state.begin(Begin::Menu {
+            pane,
             at: (200.0, 160.0),
         });
         let rt = frame_once(state);
@@ -4030,8 +4203,9 @@ mod tests {
     #[test]
     fn escape_closes_the_menu_before_the_card() {
         let mut state = crate::scene::state_for("card-open");
-        state.menu = Some(Menu {
-            pane: state.layout.focused(),
+        let pane = state.layout.focused();
+        state.begin(Begin::Menu {
+            pane,
             at: (10.0, 10.0),
         });
         assert!(card_of(&state).is_some(), "the scene has a card open");
@@ -4040,28 +4214,63 @@ mod tests {
 
         // What `on_key` does on Escape: the menu first, the selection untouched.
         let mut state = crate::scene::state_for("card-open");
-        state.menu = Some(Menu {
-            pane: state.layout.focused(),
+        let pane = state.layout.focused();
+        state.begin(Begin::Menu {
+            pane,
             at: (10.0, 10.0),
         });
-        assert!(closes_menu_on_escape(
-            &rune::KeyEvent {
-                key: rune::Key::Escape,
-                mods: Default::default(),
-            },
-            state.menu.is_some()
-        ));
-        if closes_menu_on_escape(
-            &rune::KeyEvent {
-                key: rune::Key::Escape,
-                mods: Default::default(),
-            },
-            state.menu.is_some(),
-        ) {
-            state.menu = None;
-        }
-        assert!(state.menu.is_none(), "the menu closed");
+        let escape = rune::KeyEvent {
+            key: rune::Key::Escape,
+            mods: Default::default(),
+        };
+        let mut tx = rune::Tx::default();
+        assert!(on_key(&mut state, &escape, &mut tx), "Escape is consumed");
+        assert!(state.menu().is_none(), "the menu closed");
         assert!(card_of(&state).is_some(), "and the card behind it did not");
+    }
+
+    /// **Escape releases in the enum's order** (#101): what is held, then the layout's full-size pane, then
+    /// the pane's card. Three presses, three effects, and none of them does two things — which is the policy
+    /// that used to live in the order of five `if`s and could only be read by reading it.
+    #[test]
+    fn escape_releases_one_thing_at_a_time() {
+        let mut state = state_with_two_hulls();
+        let focused = state.layout.focused();
+        state.select_in(focused, 8);
+        assert!(state.layout.maximise(focused), "the pane goes full size");
+        assert!(state.begin(Begin::Settings), "and the sheet is over it");
+
+        let escape = rune::KeyEvent {
+            key: rune::Key::Escape,
+            mods: rune::Mods::default(),
+        };
+        let mut tx = rune::Tx::default();
+        assert!(on_key(&mut state, &escape, &mut tx), "the sheet takes it");
+        assert!(!state.settings_open(), "the sheet is gone");
+        assert_eq!(
+            state.maximised(),
+            Some(focused),
+            "and the full-size pane is still up: one press, one thing"
+        );
+        assert!(state.card_in(focused).is_some(), "and the card survived it");
+
+        let mut tx = rune::Tx::default();
+        assert!(
+            on_key(&mut state, &escape, &mut tx),
+            "the second press reaches the layout"
+        );
+        assert_eq!(state.maximised(), None, "the pane is back in its slot");
+        assert!(
+            state.card_in(focused).is_some(),
+            "and the card survived that too"
+        );
+
+        let mut tx = rune::Tx::default();
+        assert!(
+            on_key(&mut state, &escape, &mut tx),
+            "the third reaches the card"
+        );
+        assert!(state.card_in(focused).is_none(), "the card closes last");
     }
 
     /// The menu opens **at the click and stays inside its pane** (#77): a right-click 20 pt from the
@@ -4163,7 +4372,7 @@ mod tests {
         let id = tiles[1].0;
 
         full_size_for_scene(&mut state, id);
-        assert_eq!(state.maximised, Some(id));
+        assert_eq!(state.maximised(), Some(id));
         assert_eq!(
             state.layout.focused(),
             id,
@@ -4176,7 +4385,7 @@ mod tests {
         );
 
         restore_full_size(&mut state);
-        assert_eq!(state.maximised, None);
+        assert_eq!(state.maximised(), None);
         assert_eq!(state.layout.rects(state.pane_viewport()), tiles);
         assert_eq!(
             state
@@ -4223,7 +4432,7 @@ mod tests {
         let mut state = crate::scene::state_for("panes");
         let id = state.layout.focused();
         begin_rename(&mut state, id);
-        let rename = state.rename.as_ref().expect("the sheet opens");
+        let rename = state.rename().expect("the sheet opens");
         assert_eq!(rename.pane, id);
         assert_eq!(rename.edit.text, "", "the pane had no name");
         assert_eq!(
@@ -4231,9 +4440,9 @@ mod tests {
             "the caret is at the end of what there is"
         );
 
-        state.rename.as_mut().expect("open").edit.text = "  Underway  ".to_string();
+        state.renaming_mut().expect("open").edit.text = "  Underway  ".to_string();
         commit_rename(&mut state);
-        assert!(state.rename.is_none(), "the sheet closes on commit");
+        assert!(state.rename().is_none(), "the sheet closes on commit");
         assert_eq!(
             state.pane(id).and_then(|pane| pane.name.as_deref()),
             Some("Underway"),
@@ -4242,12 +4451,9 @@ mod tests {
 
         // Reopening starts from the name it has, so a rename edits rather than retypes.
         begin_rename(&mut state, id);
-        assert_eq!(
-            state.rename.as_ref().expect("reopened").edit.text,
-            "Underway"
-        );
+        assert_eq!(state.rename().expect("reopened").edit.text, "Underway");
         // Escape: the field goes, the name stays.
-        state.rename = None;
+        state.end();
         assert_eq!(
             state.pane(id).and_then(|pane| pane.name.as_deref()),
             Some("Underway")
@@ -4255,7 +4461,7 @@ mod tests {
 
         // An empty field next time removes it.
         begin_rename(&mut state, id);
-        state.rename.as_mut().expect("open").edit.text = "   ".to_string();
+        state.renaming_mut().expect("open").edit.text = "   ".to_string();
         commit_rename(&mut state);
         assert_eq!(state.pane(id).and_then(|pane| pane.name.as_deref()), None);
         assert!(

@@ -660,7 +660,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 return Err(failures);
             };
             let state = scene::state_for("panes-max");
-            let Some(id) = state.maximised else {
+            let Some(id) = state.maximised() else {
                 failures.push("panes-max: the scene maximises nothing".to_string());
                 return Err(failures);
             };
@@ -1024,7 +1024,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             };
             let state = scene::state_for(scene);
             let rows = state
-                .menu
+                .menu()
                 .map(|menu| crate::ui::menu_items(&state, menu.pane).len())
                 .unwrap_or(0);
             // One pane: grow the wall, name this pane, go full size — and no `Close pane`, because the last
@@ -1041,7 +1041,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             // wall it was written for and would have been wrong on any other.
             let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
             let rect = state
-                .menu
+                .menu()
                 .and_then(|menu| state.layout.rect_of(viewport, menu.pane))
                 .unwrap_or(crate::ui::Rect {
                     x: 0.0,
@@ -1142,7 +1142,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             let state = scene::state_for("panes-drag");
             let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
             let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
-            let Some(drag) = state.dragging else {
+            let Some(drag) = state.dragging() else {
                 failures.push("panes-drag: no pane is lifted in the scene".to_string());
                 return Err(failures);
             };
@@ -1527,7 +1527,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
         }
     }
 
-    if scene == "pane-menu" && state.menu.is_none() {
+    if scene == "pane-menu" && state.menu().is_none() {
         failures.push(
             "pane-menu: the scene has no menu open, so the capture shows nothing of it".into(),
         );
