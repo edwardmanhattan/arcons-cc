@@ -145,6 +145,24 @@ pub fn landing_rect(layout: &Layout, drop: Drop, viewport: Viewport, pane: ViewI
     layout.preview(drop)?.rect_of(viewport, pane)
 }
 
+/// Where a pane's name is **probed** in a capture: a small box on the plate's left end, past the rounded
+/// corner and past the label's own padding (#83).
+///
+/// One function, used by the picture (`ui::name_plate` places the plate at the same offsets) and by
+/// `verify`, for the reason the whole file exists: a capture and its assertion that compute a rectangle
+/// twice come to disagree about it.
+pub fn name_probe(rect: Rect) -> Rect {
+    let plate = crate::ui::tokens::GAP / 2.0;
+    let pad = crate::ui::tokens::GAP;
+    let height = crate::ui::tokens::NAME_H;
+    Rect {
+        x: rect.x + plate + pad / 2.0,
+        y: rect.y + plate + height / 4.0,
+        w: height / 2.0,
+        h: height / 2.0,
+    }
+}
+
 /// A rectangle pulled in by `by` on every side: the **plate** a lifted pane is drawn on, narrower than the
 /// pane so the target's own hulls stay visible around it while a drag is in the air (#70, #84).
 pub fn inset_rect(rect: Rect, by: f32) -> Rect {

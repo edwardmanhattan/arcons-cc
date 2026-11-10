@@ -60,6 +60,12 @@ pub struct Pane {
     /// The camera at the start of a drag on this pane, so a pan is absolute rather than a sum of deltas.
     #[cfg(feature = "map")]
     drag_origin: Option<Camera>,
+    /// What the operator called this pane (#83). `None` draws nothing: a name nobody typed is not a name.
+    ///
+    /// It lives on the pane and not in `settings.toml`, because a pane does not survive a restart yet — a
+    /// saved layout (which panes, at which cameras, in what tiling) is its own ticket, and a name that
+    /// outlived the pane it named would be a label on a wall that no longer exists.
+    pub name: Option<String>,
 }
 
 impl Pane {
@@ -72,6 +78,7 @@ impl Pane {
             frame: None,
             #[cfg(feature = "map")]
             frame_seen: None,
+            name: None,
             #[cfg(feature = "map")]
             drag_origin: None,
         }
@@ -86,6 +93,45 @@ impl Pane {
 pub struct PaneDrag {
     pub pane: ViewId,
     pub drop: Option<view::Drop>,
+}
+
+/// A rename in progress (#83): which pane, and the field being typed into.
+///
+/// The field is Rune's `TextEdit` and not a `String`: it owns the caret, the selection, the input method and
+/// the undo history, and a wall shows an operator's keyboard the same way any other app does. The commit is
+/// one function — Enter — and abandoning is Escape.
+pub struct Rename {
+    pub pane: ViewId,
+    pub edit: rune::TextEdit,
+}
+
+impl Rename {
+    /// Open a rename on a pane, with its current name in the field and the caret at the end — so typing
+    /// replaces nothing until the operator says so with a selection or a backspace.
+    pub fn new(pane: ViewId, current: Option<&str>) -> Rename {
+        let text = current.unwrap_or_default().to_string();
+        let caret = text.chars().count();
+        let mut edit = rune::TextEdit::default();
+        edit.text.clone_from(&text);
+        edit.anchor = caret;
+        edit.focus = caret;
+        edit.focused = true;
+        Rename { pane, edit }
+    }
+}
+
+/// What a name shows: trimmed, cut to `tokens::NAME_MAX_CHARS` with a drawn ellipsis. `None` for a name
+/// that is empty once trimmed — an empty plate is worse than no plate.
+pub fn shown_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut shown: String = trimmed.chars().take(tokens::NAME_MAX_CHARS).collect();
+    if trimmed.chars().count() > tokens::NAME_MAX_CHARS {
+        shown.push(ELLIPSIS);
+    }
+    Some(shown)
 }
 
 /// The drawn context menu: the pane it was asked on, and the point in that pane.
@@ -128,6 +174,9 @@ pub struct State {
     pub settings: crate::config::settings::Settings,
     /// Whether the settings sheet is open. Chrome, not state: it changes nothing by itself.
     pub settings_open: bool,
+    /// The pane being renamed, and the field being typed into (#83). `None` when no rename is in progress —
+    /// which is also what makes Escape unambiguous: it abandons *this*, or it does nothing.
+    pub rename: Option<Rename>,
     /// The focused pane the threads were last told about, so a focus change re-cadences them exactly
     /// once (#71): the focused pane at 4 Hz, every other pane at 1 Hz. Only a wall has threads to tell.
     #[cfg(feature = "map")]
@@ -225,6 +274,7 @@ impl Default for State {
             layout: Layout::single(),
             settings: crate::config::settings::Settings::default(),
             settings_open: false,
+            rename: None,
             panel: None,
             menu: None,
             layout_dirty: false,
@@ -719,6 +769,9 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
     if state.settings_open {
         root = root.child(settings_sheet(state, scale));
     }
+    if state.rename.is_some() {
+        root = root.child(rename_sheet(state));
+    }
     root
 }
 
@@ -794,6 +847,60 @@ fn settings_sheet(state: &State, scale: f32) -> El {
         .fill(tokens::scrim())
         .modal(true, |state: &mut State| {
             state.settings_open = false;
+            state.layout_dirty = true;
+        })
+        .child(sheet)
+}
+
+/// The rename sheet (#83): a field over the wall, with the pane it names said in words.
+///
+/// A modal for the same three reasons the settings sheet is one. The field is Rune's own `TextEdit`, reached
+/// through `on_edit`, so the caret, the selection, the input method and the keyboard all behave the way an
+/// operator's keyboard expects — a hand-rolled `String` would be a caret drawn by us and an input method
+/// that does not work.
+fn rename_sheet(state: &State) -> El {
+    let Some(rename) = state.rename.as_ref() else {
+        return el();
+    };
+    let width = state.panel.map(|(w, _)| w).unwrap_or(tokens::WINDOW_SIZE.0);
+    let height = state.panel.map(|(_, h)| h).unwrap_or(tokens::WINDOW_SIZE.1);
+    let (w, h) = tokens::SHEET_SIZE;
+    let field = rune::text_input(&rename.edit, tokens::LABEL)
+        .key("rename-field")
+        .single_line()
+        .w_full()
+        .h(tokens::NAME_H + tokens::GAP)
+        .px(tokens::GAP)
+        .fill(tokens::bg())
+        .radius(tokens::PANEL_RADIUS)
+        .border(tokens::HAIRLINE, tokens::card_edge())
+        .on_edit(|state: &mut State| {
+            // The sheet is the only thing that can be renaming, so the field is unambiguous.
+            let rename = state.rename.as_mut().expect("a rename sheet has a field");
+            &mut rename.edit
+        })
+        .on_submit(|state: &mut State, _tx: &mut rune::Tx| commit_rename(state));
+    let sheet = col()
+        .key("rename-sheet")
+        .absolute((width - w) / 2.0, (height - h) / 2.0)
+        .size(w, h)
+        .padding(tokens::PAD)
+        .gap(tokens::GAP)
+        .radius(tokens::PANEL_RADIUS)
+        .fill(tokens::panel())
+        .border(tokens::HAIRLINE, tokens::card_edge())
+        .child(text(RENAME_TITLE).font(tokens::TITLE).color(tokens::ink()))
+        .child(field)
+        .child(
+            text("Enter names it, Escape leaves it as it was")
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim()),
+        );
+    el().key("rename-scrim")
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .fill(tokens::scrim())
+        .modal(true, |state: &mut State| {
+            state.rename = None;
             state.layout_dirty = true;
         })
         .child(sheet)
@@ -916,6 +1023,10 @@ fn single_pane(state: &State, id: ViewId, rect: Rect, scale: f32, body: El) -> E
         let placement = crate::units::card::place(anchor, viewport);
         layer = layer.child(unitcard::card(card, placement, state.now()));
     }
+    // The name is chrome on the wall as it was, too: a one-pane wall with a name is a pane somebody named.
+    if let Some(plate) = state.pane(id).and_then(name_plate) {
+        layer = layer.child(plate);
+    }
     layer
 }
 
@@ -1006,6 +1117,11 @@ fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
             let placement = crate::units::card::place(anchor, viewport);
             layer = layer.child(unitcard::card(card, placement, state.now()));
         }
+    }
+    // The plate is chrome over the picture, and the handle goes on top of it: a grab must never be a press
+    // on the label either (#83).
+    if let Some(plate) = state.pane(id).and_then(name_plate) {
+        layer = layer.child(plate);
     }
     // The handle is drawn **last**, over the markers: it is the element a grab lands on, and a grab must
     // never be a press on the hull underneath it.
@@ -1130,6 +1246,30 @@ fn ghost(state: &State, scale: f32, body: El) -> El {
         images: &state.pictures,
     };
     body.child(element.child(markers::layer(&placed, &frame, scale, &pictures)))
+}
+
+/// A pane's name, on its own border (#83): a plate in the top-left corner, left of the handle.
+///
+/// **Inside the pane, not straddling its edge**: a pane clips its picture (`clip_rounded`), so a plate
+/// half outside would be cut in half — and a name is chrome, which belongs *on* the picture rather than
+/// hanging off it. Unnamed panes draw nothing at all: a placeholder is a promise of a name nobody made.
+fn name_plate(pane: &Pane) -> Option<El> {
+    let shown = shown_name(pane.name.as_deref().unwrap_or_default())?;
+    Some(
+        row()
+            .key(format!("pane-name-{}", pane.id))
+            // The same offsets `view::name_probe` measures against: the plate sits half a gap in from the
+            // pane's corner, so the probe lands on it rather than on the pane beside it.
+            .absolute(tokens::GAP / 2.0, tokens::GAP / 2.0)
+            .h(tokens::NAME_H)
+            .max_w(tokens::NAME_MAX_W)
+            .items_center()
+            .px(tokens::GAP)
+            .radius(tokens::NAME_H / 2.0)
+            .fill(tokens::name_plate())
+            .border(tokens::HAIRLINE, tokens::hairline())
+            .child(text(shown).font(tokens::LABEL).color(tokens::ink_dim())),
+    )
 }
 
 /// One pane's picture: the map's pixels, its failure, or the placeholder.
@@ -1328,6 +1468,26 @@ fn menu_view(state: &State, scale: f32, body: El) -> El {
     body.child(surface)
 }
 
+/// `Name this pane…`: open the rename sheet on this pane, with its current name in the field (#83).
+fn begin_rename(state: &mut State, pane: ViewId) {
+    state.menu = None;
+    let current = state.pane(pane).and_then(|pane| pane.name.clone());
+    state.rename = Some(Rename::new(pane, current.as_deref()));
+    state.layout_dirty = true;
+}
+
+/// Enter in the rename sheet: the name is the field's text, trimmed, and an empty field removes it.
+fn commit_rename(state: &mut State) {
+    let Some(rename) = state.rename.take() else {
+        return;
+    };
+    let text = rename.edit.text.clone();
+    if let Some(pane) = state.pane_mut(rename.pane) {
+        pane.name = shown_name(&text);
+    }
+    state.layout_dirty = true;
+}
+
 /// One row of the pane menu: what it says, what a capture calls it, and what a press does.
 #[derive(Clone, Copy)]
 pub struct MenuItem {
@@ -1352,6 +1512,11 @@ pub fn menu_items(state: &State, pane: ViewId) -> Vec<MenuItem> {
         key: "menu-split",
         action: split_from_menu,
     }];
+    items.push(MenuItem {
+        label: MENU_RENAME,
+        key: "menu-rename",
+        action: begin_rename,
+    });
     if state.layout.len() > 1 {
         items.push(MenuItem {
             label: MENU_CLOSE,
@@ -1385,7 +1550,11 @@ pub fn menu_origin(rect: Rect, at: (f32, f32), size: (f32, f32)) -> (f32, f32) {
 
 /// What the pane menu offers.
 pub const MENU_SPLIT: &str = "Focus on new pane";
+pub const MENU_RENAME: &str = "Name this pane…";
 pub const MENU_CLOSE: &str = "Close pane";
+/// What the rename sheet is called, and what a name longer than `NAME_MAX_CHARS` ends with.
+pub const RENAME_TITLE: &str = "Name this pane";
+pub const ELLIPSIS: char = '…';
 
 /// A right-click in a pane: focus it, and open the menu where the pointer is.
 #[cfg(feature = "map")]
@@ -1818,7 +1987,13 @@ fn tick_card_age(state: &mut State) -> bool {
 
 /// Escape closes the card. A key press the focused control did not take comes here.
 fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool {
-    // A lift in progress first: it is the live gesture, and cancelling it must not also close the menu or
+    // A rename first: it is holding the keyboard, so Escape has to reach it before anything else.
+    if event.key == rune::Key::Escape && state.rename.is_some() {
+        state.rename = None;
+        state.layout_dirty = true;
+        return true;
+    }
+    // A lift in progress next: it is the live gesture, and cancelling it must not also close the menu or
     // the card behind it.
     if cancels_lift_on_escape(event, state.dragging.is_some()) {
         state.dragging = None;
@@ -3283,6 +3458,81 @@ mod tests {
         assert!(x >= 0.0 && y >= 0.0, "({x}, {y})");
     }
 
+    /// #83: a name is trimmed and cut, and an empty one is no name at all — the three things the plate
+    /// draws for and the sheet commits.
+    #[test]
+    fn a_name_is_trimmed_cut_and_never_empty() {
+        assert_eq!(
+            shown_name("  Surabaya approaches ").as_deref(),
+            Some("Surabaya approaches")
+        );
+        assert_eq!(
+            shown_name("   "),
+            None,
+            "an empty plate is worse than no plate"
+        );
+        assert_eq!(shown_name(""), None);
+
+        let long = "x".repeat(tokens::NAME_MAX_CHARS + 10);
+        let shown = shown_name(&long).expect("a long name is still a name");
+        assert_eq!(shown.chars().count(), tokens::NAME_MAX_CHARS + 1);
+        assert!(
+            shown.ends_with(ELLIPSIS),
+            "a cut name says it was cut: {shown:?}"
+        );
+        // Exactly at the limit is not cut: the ellipsis is for a name that lost something.
+        let exact = "y".repeat(tokens::NAME_MAX_CHARS);
+        assert_eq!(shown_name(&exact).as_deref(), Some(exact.as_str()));
+    }
+
+    /// #83: renaming opens on the pane's current name, commits on Enter, and abandons on Escape — and a
+    /// committed empty field removes the name rather than drawing an empty plate.
+    #[test]
+    fn the_rename_sheet_names_a_pane_and_abandons_cleanly() {
+        let mut state = crate::scene::state_for("panes");
+        let id = state.layout.focused();
+        begin_rename(&mut state, id);
+        let rename = state.rename.as_ref().expect("the sheet opens");
+        assert_eq!(rename.pane, id);
+        assert_eq!(rename.edit.text, "", "the pane had no name");
+        assert_eq!(
+            rename.edit.focus, 0,
+            "the caret is at the end of what there is"
+        );
+
+        state.rename.as_mut().expect("open").edit.text = "  Underway  ".to_string();
+        commit_rename(&mut state);
+        assert!(state.rename.is_none(), "the sheet closes on commit");
+        assert_eq!(
+            state.pane(id).and_then(|pane| pane.name.as_deref()),
+            Some("Underway"),
+            "the name is stored trimmed"
+        );
+
+        // Reopening starts from the name it has, so a rename edits rather than retypes.
+        begin_rename(&mut state, id);
+        assert_eq!(
+            state.rename.as_ref().expect("reopened").edit.text,
+            "Underway"
+        );
+        // Escape: the field goes, the name stays.
+        state.rename = None;
+        assert_eq!(
+            state.pane(id).and_then(|pane| pane.name.as_deref()),
+            Some("Underway")
+        );
+
+        // An empty field next time removes it.
+        begin_rename(&mut state, id);
+        state.rename.as_mut().expect("open").edit.text = "   ".to_string();
+        commit_rename(&mut state);
+        assert_eq!(state.pane(id).and_then(|pane| pane.name.as_deref()), None);
+        assert!(
+            state.pane(id).and_then(name_plate).is_none(),
+            "an unnamed pane draws no plate"
+        );
+    }
+
     /// #82: the gap switch moves every pane, names its own state, and widens the border's grip — a pointer
     /// in the middle of an 8 pt gutter is 4 pt from the line, which a 6 pt grip does not reach.
     #[test]
@@ -3346,7 +3596,7 @@ mod tests {
                 .iter()
                 .map(|item| item.label)
                 .collect::<Vec<_>>(),
-            vec![MENU_SPLIT],
+            vec![MENU_SPLIT, MENU_RENAME],
             "the last pane cannot be closed, so the menu does not offer it"
         );
 
@@ -3355,12 +3605,12 @@ mod tests {
         let items = crate::ui::menu_items(&tiled, pane);
         assert_eq!(
             items.iter().map(|item| item.label).collect::<Vec<_>>(),
-            vec![MENU_SPLIT, MENU_CLOSE]
+            vec![MENU_SPLIT, MENU_RENAME, MENU_CLOSE]
         );
         assert_eq!(
             tokens::menu_size(items.len()),
-            (tokens::MENU_WIDTH, tokens::MENU_ROW * 2.0),
-            "two rows, not one row's box clipped"
+            (tokens::MENU_WIDTH, tokens::MENU_ROW * 3.0),
+            "three rows, not one row's box clipped"
         );
     }
 
