@@ -70,6 +70,59 @@ pub enum Error {
     Decode(String),
 }
 
+impl Error {
+    /// Whether **waiting** could fix this. A wall starts at boot, before the network is up, and a wall on a
+    /// ship loses its route: those are transport and overload failures, and they must be retried rather
+    /// than reported once and abandoned (#94). A refused credential is the opposite — no amount of waiting
+    /// signs in an account that may not read this feed — and a decode failure is a contract change, which a
+    /// human has to look at.
+    pub fn retryable(&self) -> bool {
+        match self {
+            Error::Transport(_) | Error::RateLimited => true,
+            Error::Status { status, .. } => *status >= 500,
+            Error::NoCredential
+            | Error::Unauthorized
+            | Error::Forbidden { .. }
+            | Error::Decode(_) => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::Error;
+
+    /// #94: a wall that starts before its network is up has to wait, not die. A refused credential is the
+    /// one thing waiting never fixes, and a decode failure is a contract change for a human.
+    #[test]
+    fn only_what_waiting_can_fix_is_retryable() {
+        for transient in [
+            Error::Transport("connect refused".into()),
+            Error::RateLimited,
+            Error::Status {
+                status: 503,
+                message: "unavailable".into(),
+            },
+        ] {
+            assert!(transient.retryable(), "{transient} is worth retrying");
+        }
+        for permanent in [
+            Error::NoCredential,
+            Error::Unauthorized,
+            Error::Forbidden {
+                message: "no read on /system/live-feed".into(),
+            },
+            Error::Status {
+                status: 404,
+                message: "not found".into(),
+            },
+            Error::Decode("no such field".into()),
+        ] {
+            assert!(!permanent.retryable(), "{permanent} needs a human");
+        }
+    }
+}
+
 /// What `--self-check` learned from the live server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveCheck {
