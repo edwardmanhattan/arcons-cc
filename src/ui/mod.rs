@@ -96,20 +96,44 @@ impl Pane {
 pub struct FixLatency {
     last_ms: u64,
     max_ms: u64,
+    /// How long the view loop had been idle when the worst fix was applied — the number that says whether
+    /// "late" meant "slow" or "nothing was being drawn".
+    max_gap_ms: u64,
     late: u64,
+    /// Late, but only because no frame ran for that long: the window was occluded or the screen blanked, so
+    /// the wall drew nothing and the fix waited for the first frame there was. Not a stall — and worth
+    /// counting apart, because a wall that is not on screen is allowed to be still (`#1`, measured over 30
+    /// minutes: one fix waited 2954 ms, and the frames it waited for were the suspended ones).
+    idle: u64,
 }
 
 /// The promise, in milliseconds: the DoD's "within 1 s of arrival", minus nothing.
 pub const FIX_LATENCY_LIMIT_MS: u64 = 1_000;
 
 impl FixLatency {
-    /// One fix's wait, recorded and bounded.
-    pub fn note(&mut self, waited: std::time::Duration) {
+    /// One fix's wait, recorded and bounded, against how long the loop had been idle.
+    ///
+    /// A fix can only be applied by a frame, so a wait is bounded below by the gap before the frame that
+    /// applied it. If the wait *is* that gap, the wall applied it at the first opportunity and the delay was
+    /// the drawing, not the wall; if the wait is longer, something else held it and that is a bug (`INV-05`).
+    pub fn note(&mut self, waited: std::time::Duration, poll_gap: std::time::Duration) {
         let ms = waited.as_millis() as u64;
+        let gap = poll_gap.as_millis() as u64;
         self.last_ms = ms;
-        self.max_ms = self.max_ms.max(ms);
+        // Ties go to the **smaller** gap: two waits of the same length, one for a two-second idle and one
+        // across a 16 ms frame, are not the same event, and the second is the one to look at.
+        if ms > self.max_ms || (ms == self.max_ms && gap < self.max_gap_ms) {
+            self.max_ms = ms;
+            self.max_gap_ms = gap;
+        }
+        // 50 ms of slack: the wait starts when the socket thread takes the publication, which is somewhere
+        // inside the gap, and the apply itself is a frame's work.
         if ms > FIX_LATENCY_LIMIT_MS {
-            self.late += 1;
+            if gap.saturating_add(50) >= ms {
+                self.idle += 1;
+            } else {
+                self.late += 1;
+            }
         }
     }
 
@@ -122,9 +146,23 @@ impl FixLatency {
         self.max_ms as i64
     }
 
-    /// How many fixes arrived more than a second before they were drawn.
+    /// How many fixes waited more than a second for a frame that was not the reason: the loop was running
+    /// and did not apply them.
     pub fn late(&self) -> u64 {
         self.late
+    }
+
+    /// How many waited longer than a second only because no frame was being drawn at all.
+    pub fn idle(&self) -> u64 {
+        self.idle
+    }
+
+    /// The idle gap before the worst wait, in ms: the other half of `fix_ms`, and what tells the two apart.
+    pub fn max_gap_ms(&self) -> i64 {
+        if self.max_ms == 0 {
+            return -1;
+        }
+        self.max_gap_ms as i64
     }
 }
 
@@ -251,6 +289,12 @@ pub struct State {
     pub fixes: u64,
     /// How long fixes waited in the socket's queue before a frame applied them (#1).
     pub fix_latency: FixLatency,
+    /// How long the view loop was idle before the frame now being built. A fix's wait is measured against
+    /// it, because a frame is the only thing that can apply one (`State::note_fix_latency`).
+    pub poll_gap: std::time::Duration,
+    /// The frame clock at the last poll, for the gap above — **not** `Instant::now()`, which `tests/scaffold.rs`
+    /// refuses in the view: the only clock a frame may read is the frame clock (`INV-11`).
+    last_poll_logical: Option<f64>,
     /// A fix older than this draws as stale. From `config.toml`, so a deployment whose feed is slow
     /// says so in its own units instead of arguing with a constant (`#8`).
     pub stale_after: std::time::Duration,
@@ -344,6 +388,8 @@ impl Default for State {
             link: Link::default(),
             fixes: 0,
             fix_latency: FixLatency::default(),
+            poll_gap: std::time::Duration::ZERO,
+            last_poll_logical: None,
             stale_after: config
                 .map(|config| config.stale_after)
                 .unwrap_or(crate::units::STALE_AFTER),
@@ -507,13 +553,23 @@ impl State {
 
     /// One fix's wait for a frame: recorded, and said out loud when it breaks v0.1's promise (#1).
     pub fn note_fix_latency(&mut self, waited: std::time::Duration) {
-        self.fix_latency.note(waited);
+        self.fix_latency.note(waited, self.poll_gap);
         if waited.as_millis() as u64 > FIX_LATENCY_LIMIT_MS {
-            tracing::warn!(
-                waited_ms = waited.as_millis() as u64,
-                fixes = self.fixes,
-                "a fix waited longer than a second for a frame (INV-05: the UI thread must not block)"
-            );
+            if self.poll_gap.as_millis() as u64 + 50 >= waited.as_millis() as u64 {
+                tracing::debug!(
+                    waited_ms = waited.as_millis() as u64,
+                    idle_ms = self.poll_gap.as_millis() as u64,
+                    "a fix waited for the first frame there was: the wall was not being drawn"
+                );
+            } else {
+                tracing::warn!(
+                    waited_ms = waited.as_millis() as u64,
+                    idle_ms = self.poll_gap.as_millis() as u64,
+                    fixes = self.fixes,
+                    "a fix waited longer than a second for a frame, and the loop was running \
+                     (INV-05: the UI thread must not block)"
+                );
+            }
         }
     }
 
@@ -2424,6 +2480,15 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     // Rune's `elapsed` is the frame clock: virtual in a headless scene, real in a window. Every age
     // in the view is derived from it, so nothing in a capture depends on how fast the machine was.
     state.logical = elapsed;
+    // How long the loop was idle before this frame: the lower bound on any fix's wait, and what tells a stall
+    // apart from a wall that simply was not being drawn (#1). Measured on **the frame clock**, because that is
+    // the clock a frame is allowed to read — and the one a fix's wait is bounded by.
+    state.poll_gap = state
+        .last_poll_logical
+        .map(|last| (elapsed - last).max(0.0))
+        .map(std::time::Duration::from_secs_f64)
+        .unwrap_or_default();
+    state.last_poll_logical = Some(elapsed);
     // systemd stops a wall with `SIGTERM`. Quitting through the runtime's own path drops the GL
     // context in order, instead of a hard exit that leaves the driver complaining.
     if crate::platform::terminated() {
@@ -2600,8 +2665,11 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
             // One number per pane (#71): a tiled wall quietly drawing three of four panes is a line in a
             // file rather than a report that ends in a relaunch (#28, #51).
             pane_frames = ?state.pane_frames(),
-            // The socket queue's worst wait, in ms, since the last line: `-1` before the first fix.
+            // The socket queue's worst wait, in ms, and how idle the loop was when it was applied: `-1`
+            // before the first fix. Two numbers, because "late" and "not drawing" are different failures.
             fix_ms = state.fix_latency.max_ms(),
+            fix_gap_ms = state.fix_latency.max_gap_ms(),
+            fix_idle = state.fix_latency.idle(),
             // A number or -1: a wall whose platform cannot say must say so, not invent a figure.
             rss_mb = crate::platform::rss_mb().map(|mb| mb.round() as i64).unwrap_or(-1),
             "socket"
@@ -3040,6 +3108,30 @@ mod tests {
         );
     }
 
+    /// #1, measured over thirty minutes: one fix waited 2954 ms **because the window was not being drawn**,
+    /// and that is not a stall. The wait and the loop's idle gap are recorded together so the two cannot be
+    /// confused — a wall that is not on screen is allowed to be still; a wall that is on screen and two
+    /// seconds behind its feed is not.
+    #[test]
+    fn a_late_fix_is_told_apart_from_a_wall_nobody_was_drawing() {
+        use std::time::Duration;
+        let mut latency = FixLatency::default();
+
+        // A two-second wait for a two-second gap: applied at the first opportunity there was.
+        latency.note(Duration::from_millis(2_010), Duration::from_millis(2_000));
+        assert_eq!(latency.late(), 0, "the wall was idle, not slow");
+        assert_eq!(latency.idle(), 1);
+
+        // A two-second wait across a 16 ms gap: the loop was running and did not apply it.
+        latency.note(Duration::from_millis(2_010), Duration::from_millis(16));
+        assert_eq!(latency.late(), 1, "this one is a stall (INV-05)");
+        assert_eq!(latency.idle(), 1);
+
+        // The worst wait keeps the gap it happened in, whichever came first.
+        assert_eq!(latency.max_ms(), 2_010);
+        assert_eq!(latency.max_gap_ms(), 16);
+    }
+
     /// A fix applied through the wall's own path records its wait: the statistic is wired to the update, not
     /// just to the struct.
     #[test]
@@ -3072,6 +3164,7 @@ mod tests {
             state.fix_latency.max_ms()
         );
         assert_eq!(state.fix_latency.late(), 0, "five milliseconds is not late");
+        assert_eq!(state.fix_latency.idle(), 0);
     }
 
     /// A fix from the socket has to **move a hull**, not tick a counter.

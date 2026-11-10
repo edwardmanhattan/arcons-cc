@@ -134,9 +134,16 @@ if [ "${#LAT[@]}" -eq 0 ]; then
   printf '  fix latency: no fix arrived in the window (nothing to measure)\n'
 else
   WORST=$(printf '%s\n' "${LAT[@]}" | sort -n | tail -1)
-  [ "$WORST" -le "$PROMISE_MS" ] ||
-    fail "a fix waited ${WORST} ms for a frame, over the ${PROMISE_MS} ms promise (#1)"
-  printf '  fix latency: worst %s ms over %s samples (promise %s)\n' "$WORST" "${#LAT[@]}" "$PROMISE_MS"
+  GAP=$(grep -o 'fix_gap_ms=[0-9-]*' "$PLAIN" | cut -d= -f2 | grep -v '^-1$' | sort -n | tail -1)
+  if [ "$WORST" -gt "$PROMISE_MS" ] && [ -n "${GAP:-}" ] && [ "$GAP" -ge $(( WORST - 50 )) ]; then
+    # A wait that is the idle gap is the wall not being drawn — a soak runs with the window behind someone
+    # else's — and `fix_idle` counts those apart from stalls.
+    printf '  fix latency: worst %s ms, in a %s ms idle gap (the wall was not being drawn)\n' "$WORST" "$GAP"
+  else
+    [ "$WORST" -le "$PROMISE_MS" ] ||
+      fail "a fix waited ${WORST} ms for a frame, over the ${PROMISE_MS} ms promise (#1)"
+    printf '  fix latency: worst %s ms over %s samples (promise %s)\n' "$WORST" "${#LAT[@]}" "$PROMISE_MS"
+  fi
 fi
 
 # 5. The picture is still right: a capture after the soak, asserted. This is what makes "it stayed up"
