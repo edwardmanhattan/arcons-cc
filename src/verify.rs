@@ -537,6 +537,61 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                     "settings: the sheet's rows are drawn ({brightest} luma)"
                 ));
             }
+            // **The way out is on the sheet, in accent ink** (#98): the operator asked for a close control,
+            // and a control nobody can see is the same defect as no control. Scanned in the sheet's own
+            // bottom strip, so the claim is about this sheet's foot and not "there is accent somewhere".
+            let accent = ink(tokens::accent());
+            let mut close_ink = 0;
+            for y in (sy as u32 + sh as u32 - 45)..(sy as u32 + sh as u32 - 4) {
+                for x in (sx as u32 + 4)..(sx as u32 + sw as u32 - 4) {
+                    if x < image.width && y < image.height && near(image.at(x, y), accent, 60) {
+                        close_ink += 1;
+                    }
+                }
+            }
+            if close_ink < 40 {
+                failures.push(format!(
+                    "settings: {close_ink} pixels of accent ink at the foot of the sheet — the Close row \
+                     is what the operator asked for and it is not drawn (#98)"
+                ));
+            } else {
+                lines.push(format!(
+                    "settings: the Close row is drawn at the sheet's foot ({close_ink} px)"
+                ));
+            }
+        }
+        "settings-dismiss" => {
+            // **The press outside the sheet closed it**, and the picture is how you can tell: with the
+            // scrim up the whole wall is darkened (measured: 6.6 % of the panel's pixels above luma 12),
+            // and with it gone the wall is lit again (98 %). A scrim whose press does nothing leaves the
+            // sheet and its scrim on screen and this goes red (#98).
+            let mut lit = 0usize;
+            let mut total = 0usize;
+            for y in (60..image.height.saturating_sub(10)).step_by(3) {
+                for x in (10..image.width.saturating_sub(10)).step_by(3) {
+                    total += 1;
+                    if image.luma(x, y) >= 12 {
+                        lit += 1;
+                    }
+                }
+            }
+            let share = if total == 0 {
+                0.0
+            } else {
+                lit as f64 / total as f64
+            };
+            if share < 0.5 {
+                failures.push(format!(
+                    "settings-dismiss: {:.1} % of the wall is lit — a press outside the sheet must close \
+                     it, and a wall still under the scrim means the press reached nothing (#98)",
+                    share * 100.0
+                ));
+            } else {
+                lines.push(format!(
+                    "settings-dismiss: the sheet is gone — {:.1} % of the wall is lit again",
+                    share * 100.0
+                ));
+            }
         }
         "panes-max" => {
             // **A maximised pane is a bigger rectangle, not a different pane** (#85). Its hulls project

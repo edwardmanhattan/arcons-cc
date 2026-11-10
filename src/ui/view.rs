@@ -165,6 +165,21 @@ pub fn name_probe(rect: Rect) -> Rect {
 
 /// A rectangle pulled in by `by` on every side: the **plate** a lifted pane is drawn on, narrower than the
 /// pane so the target's own hulls stay visible around it while a drag is in the air (#70, #84).
+/// Where a sheet sits: centred in the panel it is a modal over.
+///
+/// **One function**, because two things ask: the sheet's own placement, and the press that dismisses it —
+/// a press outside the sheet closes it, a press inside must not. Two centres would be a sheet whose
+/// corners dismiss it (#98).
+pub fn sheet_rect(viewport: crate::map::geometry::Viewport, size: (f32, f32)) -> Rect {
+    let (w, h) = size;
+    Rect {
+        x: ((viewport.w as f32 - w) / 2.0).max(0.0),
+        y: ((viewport.h as f32 - h) / 2.0).max(0.0),
+        w,
+        h,
+    }
+}
+
 pub fn inset_rect(rect: Rect, by: f32) -> Rect {
     Rect {
         x: rect.x + by,

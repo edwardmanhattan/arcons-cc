@@ -278,6 +278,16 @@ fn settings_sheet(state: &mut State) {
     state.settings_open = true;
 }
 
+/// The `settings-dismiss` scene (#98): the same sheet, and **a press outside it** — from
+/// `fixtures/scripts/settings-dismiss.json`, so the dismissal is a pointer's and not a function call.
+///
+/// Its picture is the claim: with the sheet open the scrim darkens the whole wall, and with it closed the
+/// wall is lit again. `verify` measures that, so a scrim whose press does nothing leaves the sheet up and
+/// the gate red.
+fn settings_dismiss(state: &mut State) {
+    settings_sheet(state);
+}
+
 /// The `panes-menu` scene (#81): **a tiled wall with its menu open**, which is the only wall that offers
 /// `Close pane`. The one-pane `pane-menu` is its control: one row there, two here, and the surface has to be
 /// tall enough for both.
@@ -354,6 +364,7 @@ pub const SCENES: &[Scene] = &[
     ("panes-named", panes_named),
     ("panes-max", panes_max),
     ("settings", settings_sheet),
+    ("settings-dismiss", settings_dismiss),
     ("pane-menu", pane_menu),
 ];
 
@@ -441,6 +452,9 @@ mod tests {
                 "panes-named",
                 "panes-max",
                 "settings",
+                // The one scene whose point is that something is **not** there: the sheet, after a press
+                // outside it (#98).
+                "settings-dismiss",
                 "pane-menu"
             ]
         );

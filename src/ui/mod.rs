@@ -911,6 +911,14 @@ pub const SETTINGS_LABEL: &str = "settings";
 pub const SETTING_GAPS: &str = "Gaps between panes";
 pub const SETTING_ON: &str = "on";
 pub const SETTING_OFF: &str = "off";
+/// The way out of the sheet, in words. A key nobody was told about is not a way out (#98).
+pub const SETTING_CLOSE: &str = "Close";
+
+/// Close the settings sheet, from any of its three exits: the row, the scrim, Escape.
+fn close_settings(state: &mut State) {
+    state.settings_open = false;
+    state.layout_dirty = true;
+}
 
 /// The settings sheet (#82): the wall's own preferences, as a modal over the picture.
 ///
@@ -919,14 +927,14 @@ pub const SETTING_OFF: &str = "off";
 /// focus in the sheet and closes it on a press outside, rather than a hand-rolled equivalent that would
 /// get one of the three wrong.
 fn settings_sheet(state: &State, scale: f32) -> El {
-    let width = state.panel.map(|(w, _)| w).unwrap_or(tokens::WINDOW_SIZE.0);
-    let height = state.panel.map(|(_, h)| h).unwrap_or(tokens::WINDOW_SIZE.1);
+    let viewport = state.pane_viewport();
     let _ = scale;
     let (w, h) = tokens::SHEET_SIZE;
+    let at = view::sheet_rect(viewport, tokens::SHEET_SIZE);
     let gaps_on = state.settings.pane_gap > 0.0;
     // The row is the control: pressing it flips the setting, which is what a switch on a wall with no
     // pointer-driven chrome has to be. It says its state in words, so a capture can assert the words.
-    let row = row()
+    let gaps_row = row()
         .key("setting-gaps")
         .w_full()
         .gap(tokens::GAP)
@@ -948,9 +956,26 @@ fn settings_sheet(state: &State, scale: f32) -> El {
                 }),
         )
         .on_press(|state: &mut State| toggle_pane_gap(state));
+    // The way out, as a row like the setting above it: same height, same words-not-icons rule. Pressing it
+    // closes the sheet — the one exit the operator asked for (#98).
+    let close = row()
+        .key("settings-close")
+        .w_full()
+        .gap(tokens::GAP)
+        .items_center()
+        .child(
+            text(SETTING_CLOSE)
+                .font(tokens::LABEL)
+                .color(tokens::accent())
+                .grow(1.0),
+        )
+        .on_press(|state: &mut State| close_settings(state));
     let sheet = col()
         .key("settings-sheet")
-        .absolute((width - w) / 2.0, (height - h) / 2.0)
+        // Swallows a press that lands on the sheet rather than on one of its rows: without it the press
+        // would reach the scrim underneath and close the sheet the operator was pressing in (#98).
+        .on_press(|_: &mut State| {})
+        .absolute(at.x, at.y)
         .size(w, h)
         .padding(tokens::PAD)
         .gap(tokens::GAP)
@@ -958,25 +983,34 @@ fn settings_sheet(state: &State, scale: f32) -> El {
         .fill(tokens::panel())
         .border(tokens::HAIRLINE, tokens::card_edge())
         .child(text("Settings").font(tokens::TITLE).color(tokens::ink()))
-        .child(row)
+        .child(gaps_row)
         .child(
             text("saved to settings.toml, beside config.toml")
                 .font(tokens::LABEL)
                 .color(tokens::ink_dim()),
-        );
-    // The scrim: full-window, behind the sheet, and the press that dismisses. `modal` is what tells Rune
-    // the wall behind it is inert — without it a click would reach a pane and start a drag under the sheet.
-    let _ = (width, height);
+        )
+        // A spacer, because the way out belongs at the bottom of the sheet and the tiling behind it must
+        // stay visible: the sheet keeps its box and the row sits at the foot of it.
+        .child(el().grow(1.0))
+        .child(close);
+    // The scrim: full-window, behind the sheet, and the press that dismisses.
+    //
+    // **`modal` alone does not dismiss this sheet.** Rune dismisses a modal when a press reaches something
+    // *outside* the modal's node (`runtime/input/pointer.rs`), and here the modal node is the full-window
+    // scrim with the sheet inside it: every press is on the modal's own surface, so nothing is ever
+    // "outside" and the callback cannot fire. That is why the sheet had no way out but Escape (#98). The
+    // scrim's own press does the work, and `modal` still earns its keep by making the wall behind inert.
     el().key("settings-scrim")
         // **Pinned, not sized**: a child in the flow takes height away from the picture, so opening the
         // sheet would reflow the wall it is a preference about. Pinned to all four edges, it covers the
         // root's box and the picture underneath is untouched.
         .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
         .fill(tokens::scrim())
-        .modal(true, |state: &mut State| {
-            state.settings_open = false;
-            state.layout_dirty = true;
-        })
+        .modal(true, |state: &mut State| close_settings(state))
+        // Rune hands a press to the **nearest element under the pointer with a primary handler**, and only
+        // there (#80) — so the scrim's press is a press on the scrim, and the sheet's own press below is how
+        // a press *inside* the sheet is told apart from one outside it without a second copy of the box.
+        .on_press(|state: &mut State| close_settings(state))
         .child(sheet)
 }
 
