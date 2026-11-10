@@ -1061,21 +1061,42 @@ fn menu_view(state: &State, scale: f32, body: El) -> El {
         return body;
     };
     let points = if scale > 0.0 { scale } else { 1.0 };
+    let (x, y) = menu_origin(rect, (menu.at.0 / points, menu.at.1 / points));
+    let (w, h) = tokens::MENU_SIZE;
     let item = text(MENU_SPLIT)
         .key("menu-split")
         .font(tokens::LABEL)
         .color(tokens::ink());
     let surface = col()
         .key("pane-menu")
-        .absolute(rect.x + menu.at.0 / points, rect.y + menu.at.1 / points)
-        .padding(tokens::GAP)
-        .gap(tokens::GAP)
+        .absolute(x, y)
+        .size(w, h)
+        .center()
         .radius(tokens::PANEL_RADIUS)
         .border(tokens::HAIRLINE, tokens::card_edge())
         .fill(tokens::bg())
         .child(item)
         .on_press(move |state: &mut State| split_from_menu(state, menu.pane));
     body.child(surface)
+}
+
+/// Where the menu's top-left corner goes for a click at `at` in its pane, in the pane's own points.
+///
+/// The menu opens **at the click**, and is clamped inside its pane: a right-click 20 pt from the wall's
+/// edge would otherwise draw half a menu over the window bezel, and the item would be off-screen on the
+/// one wall that needs it. Pure, so the clamp is tested without a pointer.
+pub fn menu_origin(rect: Rect, at: (f32, f32)) -> (f32, f32) {
+    let (w, h) = tokens::MENU_SIZE;
+    let margin = tokens::GAP / 2.0;
+    let x = (rect.x + at.0).clamp(
+        rect.x + margin,
+        (rect.x + rect.w - w - margin).max(rect.x + margin),
+    );
+    let y = (rect.y + at.1).clamp(
+        rect.y + margin,
+        (rect.y + rect.h - h - margin).max(rect.y + margin),
+    );
+    (x, y)
 }
 
 /// What the pane menu offers. One item for now: #69 and #70 add the border drag and the swap, and a
@@ -2883,5 +2904,39 @@ mod tests {
         }
         assert!(state.menu.is_none(), "the menu closed");
         assert!(state.card.is_some(), "and the card behind it did not");
+    }
+
+    /// The menu opens **at the click and stays inside its pane** (#77): a right-click 20 pt from the
+    /// wall's edge would otherwise draw half a menu over the bezel, on the one wall that needs it.
+    #[test]
+    fn the_menu_opens_at_the_click_and_never_leaves_its_pane() {
+        let pane = Rect {
+            x: 16.0,
+            y: 40.0,
+            w: 600.0,
+            h: 400.0,
+        };
+        let (w, h) = tokens::MENU_SIZE;
+        // A click in the middle: the menu's corner is the click.
+        assert_eq!(menu_origin(pane, (200.0, 150.0)), (216.0, 190.0));
+        // A click at the far corner: pushed back inside, by the margin.
+        let (x, y) = menu_origin(pane, (595.0, 395.0));
+        assert!(
+            x + w <= pane.right() && y + h <= pane.bottom(),
+            "the menu left its pane: ({x}, {y}) {w}×{h} in {pane:?}"
+        );
+        // A click outside the pane (a stale menu after a re-tile) is still inside it.
+        let (x, y) = menu_origin(pane, (-500.0, -500.0));
+        assert!(x >= pane.x && y >= pane.y, "({x}, {y}) is inside {pane:?}");
+        // A pane smaller than a menu keeps the menu's corner at the pane's corner rather than inverting
+        // the clamp.
+        let tiny = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 20.0,
+        };
+        let (x, y) = menu_origin(tiny, (50.0, 10.0));
+        assert!(x >= 0.0 && y >= 0.0, "({x}, {y})");
     }
 }

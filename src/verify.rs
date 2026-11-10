@@ -592,6 +592,68 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 ));
             }
         }
+        "pane-menu" => {
+            // **The menu is drawn, at the click, inside its pane** (#77). It had no capture at all until
+            // this scene: a pointer is what opens it, and no test clicks.
+            let Some((origin_x, origin_y, panel_w, panel_h)) =
+                image.find_panel_rect(ink(tokens::panel()))
+            else {
+                failures.push("pane-menu: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let (mx, my) = crate::ui::menu_origin(
+                crate::ui::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: panel_w as f32,
+                    h: panel_h as f32,
+                },
+                scene::MENU_AT,
+            );
+            let (mx, my) = (origin_x + f64::from(mx), origin_y + f64::from(my));
+            let (w, h) = (
+                f64::from(tokens::MENU_SIZE.0),
+                f64::from(tokens::MENU_SIZE.1),
+            );
+            // The surface's own fill, where the click was: the panel is `panel()`, a menu is `bg()`.
+            let surface = ink(tokens::bg());
+            let mut hits = 0;
+            let mut samples = 0;
+            for dy in (4..(h as i32 - 4)).step_by(4) {
+                for dx in (4..(w as i32 - 4)).step_by(4) {
+                    let (x, y) = ((mx + f64::from(dx)) as u32, (my + f64::from(dy)) as u32);
+                    if x >= image.width || y >= image.height {
+                        continue;
+                    }
+                    samples += 1;
+                    if near(image.at(x, y), surface, 6)
+                        || near(image.at(x, y), ink(tokens::ink()), 40)
+                    {
+                        hits += 1;
+                    }
+                }
+            }
+            let inside = mx >= origin_x
+                && my >= origin_y
+                && mx + w <= origin_x + panel_w + 0.5
+                && my + h <= origin_y + panel_h + 0.5;
+            if !inside {
+                failures.push(format!(
+                    "pane-menu: the menu at ({mx:.0}, {my:.0}) {w:.0}×{h:.0} is not inside the picture \
+                     at ({origin_x:.0}, {origin_y:.0}) {panel_w:.0}×{panel_h:.0} — a menu half over the \
+                     bezel is a menu whose item cannot be pressed"
+                ));
+            } else if hits * 10 < samples * 8 {
+                failures.push(format!(
+                    "pane-menu: {hits}/{samples} samples inside the menu's box are its surface or its \
+                     label — the menu at ({mx:.0}, {my:.0}) is not drawn"
+                ));
+            } else {
+                lines.push(format!(
+                    "pane-menu: menu at ({mx:.0}, {my:.0}) {w:.0}×{h:.0}, inside the picture"
+                ));
+            }
+        }
         "panes-drag" => {
             // **The gap is where the pane lands** (#70): it is drawn from `Layout::preview`, so this
             // checks the drawn rectangle against the preview — the same function the release calls.
@@ -902,6 +964,12 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                 ));
             }
         }
+    }
+
+    if scene == "pane-menu" && state.menu.is_none() {
+        failures.push(
+            "pane-menu: the scene has no menu open, so the capture shows nothing of it".into(),
+        );
     }
 
     let cards = usize::from(state.card.is_some());
