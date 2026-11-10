@@ -706,11 +706,11 @@ fn picture(state: &State, scale: f32) -> El {
         }
         body
     };
-    // The gap and the context menu are drawn last, over every pane — **and over the one-pane wall too**:
+    // The pane in the air and the context menu are drawn last, over every pane — **and over the one-pane wall too**:
     // "Focus on new pane" lives in that menu, and a wall with one pane is exactly the wall that needs it
     // to get a second one. Drawing the menu only once there were panes made the first split impossible
     // to ask for.
-    body = gap(state, scale, body);
+    body = ghost(state, scale, body);
     body = menu_view(state, scale, body);
     body
 }
@@ -849,15 +849,20 @@ fn handle(id: ViewId, rect: Rect) -> El {
         .size(w, h)
         .radius(h / 2.0)
         .fill(tokens::handle_ink())
-        .on_drag(move |state: &mut State, drag, _tx| lift(state, id, drag))
+        .on_drag(move |state: &mut State, drag, _tx| lift(state, id, rect, drag))
 }
 
 /// The handle's gesture: lift, follow the pointer, drop.
 ///
 /// The drop is recomputed from the pointer each move and the **preview** layout is what draws the gap,
 /// so the gap is the place the pane lands — `Layout::preview` and `Layout::apply` are one operation.
-fn lift(state: &mut State, id: ViewId, drag: &mut rune::Drag) {
+fn lift(state: &mut State, id: ViewId, rect: Rect, drag: &mut rune::Drag) {
     let viewport = state.pane_viewport();
+    // **The handle is its own element.** `Drag::x`/`y` are local to *it* (`runtime/input/gesture.rs`),
+    // and the handle is a 28 × 4 box at the top centre of a pane that is itself at `rect` — so a drag
+    // that skipped these offsets asked `drop_for` about a point near the window's top-left corner, which
+    // is why a pane could only ever be dropped to the right of where the station began (#84).
+    let at = view::handle_point(rect, (drag.x, drag.y));
     match drag.phase {
         rune::Phase::Down => {
             state.dragging = Some(PaneDrag {
@@ -867,7 +872,6 @@ fn lift(state: &mut State, id: ViewId, drag: &mut rune::Drag) {
             state.layout.focus(id);
         }
         rune::Phase::Move => {
-            let at = (drag.x, drag.y);
             let drop = state.layout.drop_for(viewport, id, at);
             if let Some(drag) = &mut state.dragging
                 && drag.drop != drop
@@ -889,37 +893,66 @@ fn lift(state: &mut State, id: ViewId, drag: &mut rune::Drag) {
     }
 }
 
-/// The gap a lifted pane will land in, drawn from the preview of the drop.
+/// The pane in the air: **the pane, drawn at the slot it will land in** (#84).
 ///
-/// One element, over the panes, at the rectangle `Layout::preview(...).rect_of(dragged)` — the same
-/// answer the release gets, because it is the same function.
-fn gap(state: &State, scale: f32, body: El) -> El {
+/// Before this a lifted pane was only its dimmed slot and an empty gap, so the thing being carried was
+/// invisible: a hole in one place, a hand in another, and nothing between them. The ghost is the pane
+/// itself — its own camera and its own hulls (`INV-04` holds in the air too), projected at the size it will
+/// be drawn at once it lands — on the rectangle the release will use, so the picture during a drag is also
+/// the answer to "where does it go".
+///
+/// **At the slot, not under the pointer**, which is a deliberate departure from #84's first sketch: a copy
+/// hanging from the hand covers the slot it is about to land in — the one thing the operator is looking at —
+/// and it is a second coordinate space to get wrong, in a ticket whose whole subject is a coordinate space
+/// got wrong. The rectangle is `Layout::preview`'s answer: one function, used by the picture here and by
+/// `verify` when it projects the pane's hulls into the same rectangle.
+///
+/// Its map pixels are not duplicated: one pane owns one `Pixels`. The hulls are what say *which* pane is
+/// being carried, and they are the part that can be drawn twice.
+fn ghost(state: &State, scale: f32, body: El) -> El {
     let Some(drag) = state.dragging else {
         return body;
     };
     let Some(drop) = drag.drop else { return body };
-    let Some(preview) = state.layout.preview(drop) else {
+    let Some(landing) = view::landing_rect(&state.layout, drop, state.pane_viewport(), drag.pane)
+    else {
         return body;
     };
-    let Some(rect) = preview.rect_of(state.pane_viewport(), drag.pane) else {
+    let Some(pane) = state.pane(drag.pane) else {
         return body;
     };
-    let _ = scale;
-    // **Inset**, not the whole pane: the slot reads as a slot while the target's own hulls stay visible
-    // around it, which keeps the picture a picture during a drag — TabDragState opens a gap narrower
-    // than the thing that lands, for the same reason.
-    let inset = tokens::GAP;
-    body.child(
-        el().key("pane-gap")
-            .absolute(rect.x + inset, rect.y + inset)
-            .size(
-                (rect.w - inset * 2.0).max(1.0),
-                (rect.h - inset * 2.0).max(1.0),
-            )
-            .radius(tokens::PANEL_RADIUS)
-            .fill(tokens::gap_fill())
-            .border(tokens::HAIRLINE, tokens::focus_edge()),
-    )
+    let rect = view::inset_rect(landing, tokens::GAP);
+    let element = el()
+        .key("pane-ghost")
+        .absolute(rect.x, rect.y)
+        .size(rect.w, rect.h)
+        .radius(tokens::PANEL_RADIUS)
+        // The plate is the slot's material — the ghost *is* the slot the pane will land in, with the pane
+        // standing on it, and the hulls are what say which pane that is. Deliberately not a faded copy: a
+        // ghost at a third of the panel's brightness is a ghost nobody sees on a dark wall.
+        .fill(tokens::gap_fill())
+        // Drawn over the panes, so it must not take the press that is carrying it: `inert` draws it and
+        // passes every gesture through to what is below.
+        .inert()
+        .clip_rounded(0.0)
+        .border(tokens::HAIRLINE, tokens::focus_edge());
+    // **The slot's frame, not the pane's old one**: a dropped pane is drawn at the size it lands at, so
+    // the ghost is its camera projected against the landing rectangle. Using the frame it had would cram
+    // the hulls into the corner of a slot with a different shape.
+    let frame = view::synthetic_frame(pane.camera, landing, scale);
+    let sizes = |id_unit: i64| state.sizes.get(&id_unit).copied();
+    let placed = markers::place(
+        &state.picture,
+        &frame,
+        state.now(),
+        state.stale_after,
+        state.range,
+        &sizes,
+    );
+    let pictures = markers::Pictures {
+        images: &state.pictures,
+    };
+    body.child(element.child(markers::layer(&placed, &frame, scale, &pictures)))
 }
 
 /// One pane's picture: the map's pixels, its failure, or the placeholder.
@@ -1543,7 +1576,14 @@ fn tick_card_age(state: &mut State) -> bool {
 
 /// Escape closes the card. A key press the focused control did not take comes here.
 fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool {
-    // The menu first: it is the thing on top, and one Escape should not close a card behind it as well.
+    // A lift in progress first: it is the live gesture, and cancelling it must not also close the menu or
+    // the card behind it.
+    if cancels_lift_on_escape(event, state.dragging.is_some()) {
+        state.dragging = None;
+        state.layout_dirty = true;
+        return true;
+    }
+    // The menu next: it is the thing on top, and one Escape should not close a card behind it as well.
     if closes_menu_on_escape(event, state.menu.is_some()) {
         state.menu = None;
         state.layout_dirty = true;
@@ -1560,6 +1600,12 @@ fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool
 /// is left for whatever else wants it.
 fn closes_on_escape(event: &rune::KeyEvent, selected: Option<i64>) -> bool {
     event.key == rune::Key::Escape && selected.is_some()
+}
+
+/// Escape cancels a pane lift: the tree is left exactly as it was, because the drop is only applied on
+/// release (#84). A gesture that cannot be abandoned is a gesture an operator is afraid of.
+fn cancels_lift_on_escape(event: &rune::KeyEvent, lifting: bool) -> bool {
+    event.key == rune::Key::Escape && lifting
 }
 
 /// Escape closes the pane menu — the menu, and not the card behind it, so one key press dismisses the
@@ -2426,6 +2472,29 @@ mod tests {
         assert!(rect[2] > 200.0, "and a width, got {}", rect[2]);
     }
 
+    /// #84: a lift is cancelled by Escape, and cancelling it closes nothing else — the gesture is the
+    /// live thing, the menu and the card are behind it.
+    #[test]
+    fn escape_cancels_a_lift_and_nothing_behind_it() {
+        let escape = rune::KeyEvent {
+            key: rune::Key::Escape,
+            mods: rune::Mods::default(),
+        };
+        assert!(
+            !cancels_lift_on_escape(&escape, false),
+            "Escape with nothing in the air is not consumed"
+        );
+        assert!(
+            cancels_lift_on_escape(&escape, true),
+            "Escape in the air puts the pane down"
+        );
+        let tab = rune::KeyEvent {
+            key: rune::Key::Tab,
+            mods: rune::Mods::default(),
+        };
+        assert!(!cancels_lift_on_escape(&tab, true), "only Escape");
+    }
+
     #[test]
     fn escape_closes_the_card_only_when_there_is_one() {
         let mut state = state_with_two_hulls();
@@ -2649,13 +2718,13 @@ mod tests {
         let _: Option<Rendered> = first.rendered();
     }
 
-    /// #70: a tiled wall draws a handle per pane, and a gap only while something is lifted.
+    /// #70, #84: a tiled wall draws a handle per pane, and the pane in the air only while one is lifted.
     ///
     /// The handle is its own element **above** the markers, which is how a grab avoids selecting the hull
     /// under the pointer: `TabDragState`'s `suppress_click` in a different mechanism, because the press
     /// that starts a lift never reaches a marker in the first place.
     #[test]
-    fn a_tiled_wall_has_a_handle_per_pane_and_a_gap_only_while_lifted() {
+    fn a_tiled_wall_has_a_handle_per_pane_and_a_ghost_only_while_lifted() {
         let panes = crate::scene::state_for("panes");
         let rt = frame_once(panes);
         for id in 1..=3 {
@@ -2665,20 +2734,16 @@ mod tests {
             );
         }
         assert!(
-            rt.find("pane-gap").is_none(),
-            "a gap is drawn only while a pane is lifted"
+            rt.find("pane-ghost").is_none(),
+            "a ghost is drawn only while a pane is lifted"
         );
 
         let dragging = crate::scene::state_for("panes-drag");
         assert!(dragging.dragging.is_some(), "the scene lifts a pane");
         let rt = frame_once(dragging);
         assert!(
-            rt.find("pane-gap").is_some(),
-            "a lifted pane previews the slot it lands in"
-        );
-        assert!(
-            rt.find("pane-gap").is_some(),
-            "the gap is a named element, so a capture's assertion can find it"
+            rt.find("pane-ghost").is_some(),
+            "a lifted pane is drawn on the slot it lands in — that is what says which pane is in the air"
         );
     }
 

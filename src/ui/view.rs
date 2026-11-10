@@ -97,6 +97,43 @@ pub fn viewport_point(rect: Rect, local: (f32, f32)) -> (f32, f32) {
     (rect.x + local.0, rect.y + local.1)
 }
 
+/// A point in a pane's **handle**, as the viewport knows it.
+///
+/// The handle is drawn at the top centre of its pane (see `ui::handle`), so a drag that starts on it
+/// reports a point local to a 28 × 4 box that is itself at an offset inside the pane. Both offsets are
+/// added here, once, for the same reason as [`viewport_point`]: the layout asks in viewport points.
+pub fn handle_point(rect: Rect, local: (f32, f32)) -> (f32, f32) {
+    let (w, _h) = crate::ui::tokens::PANE_HANDLE;
+    viewport_point(
+        rect,
+        (
+            rect.w / 2.0 - w / 2.0 + local.0,
+            crate::ui::tokens::GAP / 2.0 + local.1,
+        ),
+    )
+}
+
+/// Where a lifted pane **will land**: the slot `Layout::preview` puts it in.
+///
+/// `Layout::preview` is the layout the release will apply, so this is the pane's rectangle after the drop —
+/// one function, used by the picture (the ghost stands on it and its camera is projected against it) and by
+/// `verify` (which projects the pane's hulls into it). A second copy of "where the pane lands" is how a
+/// capture and its assertion come to disagree about where a pane is, which is the sin `INV-04` is about.
+pub fn landing_rect(layout: &Layout, drop: Drop, viewport: Viewport, pane: ViewId) -> Option<Rect> {
+    layout.preview(drop)?.rect_of(viewport, pane)
+}
+
+/// A rectangle pulled in by `by` on every side: the **plate** a lifted pane is drawn on, narrower than the
+/// pane so the target's own hulls stay visible around it while a drag is in the air (#70, #84).
+pub fn inset_rect(rect: Rect, by: f32) -> Rect {
+    Rect {
+        x: rect.x + by,
+        y: rect.y + by,
+        w: (rect.w - by * 2.0).max(1.0),
+        h: (rect.h - by * 2.0).max(1.0),
+    }
+}
+
 /// A draggable border between two panes: the split it belongs to, and where the line is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Border {
@@ -1037,6 +1074,40 @@ mod tests {
         assert_eq!((deepest.a, deepest.b), (right, bottom));
     }
 
+    /// #84: a pane picked up takes hold where the hand closed. The handle is a 28 × 4 box at the top
+    /// centre of its pane, so a press on it is local to *that box*, inside the pane — and the pane's
+    /// origin is the second offset. Both, once, or the drop is computed from near the window's corner.
+    #[test]
+    fn a_lifted_pane_is_measured_from_the_handle_its_hand_closed_on() {
+        let mut layout = Layout::single();
+        let first = layout.ids()[0];
+        let second = layout.split(first, Dir::Vertical).unwrap();
+        let rect = layout.rect_of(viewport(), second).expect("the lower pane");
+        assert!(
+            rect.y > 0.0,
+            "the point of the test: a pane whose origin is not the window's"
+        );
+
+        let (w, h) = tokens::PANE_HANDLE;
+        // The handle's centre in the handle's coordinates: the press that picks the pane up.
+        let at = handle_point(rect, (w / 2.0, h / 2.0));
+        assert_eq!(
+            layout.pane_at(viewport(), at),
+            Some(second),
+            "a press on the handle reports a point inside its own pane, not near the window corner \
+             (invariant: the lift's drop is asked about this point)"
+        );
+
+        // The handle's top edge is a gap/2 below the pane's, and its left edge is centred: read as a
+        // pane-local point those are the two offsets, and a lift that skipped either would drop the pane
+        // somewhere it was never dragged to.
+        assert!((at.0 - (rect.x + rect.w / 2.0)).abs() < 0.001, "{at:?}");
+        assert!(
+            (at.1 - (rect.y + tokens::GAP / 2.0 + h / 2.0)).abs() < 0.001,
+            "{at:?}"
+        );
+    }
+
     /// #70: the middle of a pane swaps, an edge re-tiles against that edge, and a release over the
     /// pane's own slot is nothing at all.
     #[test]
@@ -1052,24 +1123,25 @@ mod tests {
             Some(Drop::Swap { a: right, b: left }),
             "the middle is a swap"
         );
-        let near_left = (rect.x + rect.w * 0.1, middle.1);
-        assert_eq!(
-            layout.drop_for(viewport(), left, near_left),
-            Some(Drop::Retile {
-                dragged: left,
-                target: right,
-                side: Side::Left
-            })
-        );
-        let near_top = (middle.0, rect.y + rect.h * 0.05);
-        assert_eq!(
-            layout.drop_for(viewport(), left, near_top),
-            Some(Drop::Retile {
-                dragged: left,
-                target: right,
-                side: Side::Top
-            })
-        );
+        // **All four bands**, and not just the two a live pane happens to have on one side: a mirrored
+        // pair (`Right`/`Bottom`) is exactly the half a test that only tries `Left`/`Top` never checks,
+        // and it is where #84's sideways-only drop lived.
+        for (name, at, side) in [
+            ("left", (rect.x + rect.w * 0.1, middle.1), Side::Left),
+            ("right", (rect.x + rect.w * 0.9, middle.1), Side::Right),
+            ("top", (middle.0, rect.y + rect.h * 0.08), Side::Top),
+            ("bottom", (middle.0, rect.y + rect.h * 0.92), Side::Bottom),
+        ] {
+            assert_eq!(
+                layout.drop_for(viewport(), left, at),
+                Some(Drop::Retile {
+                    dragged: left,
+                    target: right,
+                    side
+                }),
+                "the {name} band of the target pane re-tiles on that side: {at:?}"
+            );
+        }
         // Over its own slot: no drop, so a release where the drag began changes nothing.
         assert_eq!(layout.drop_for(viewport(), left, (100.0, 300.0)), None);
         assert_eq!(layout.drop_for(viewport(), left, (5000.0, 5000.0)), None);
