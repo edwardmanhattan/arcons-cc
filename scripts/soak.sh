@@ -12,7 +12,8 @@
 #   1. memory flat after warm-up      — a leak of a few KB per fix kills a wall in a week
 #   2. one deliberate gap, survived   — the socket must come back AND re-read the picture (INV-09)
 #   3. no credential in any log       — one token in a log line is a token forever (INV-08)
-#   4. the picture still right at the end — "stayed up" must not mean "stayed up showing anything"
+#   4. every fix drawn within 1 s     — v0.1's promise, as the `fix_ms=` number the wall logs (#1)
+#   5. the picture still right at the end — "stayed up" must not mean "stayed up showing anything"
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -124,7 +125,21 @@ fi
 grep -qE 'eyJ[A-Za-z0-9_-]{10,}' "$PLAIN" && fail "a JWT-shaped string appears in $LOG (INV-08)"
 printf '  secrets: none in %s (%s lines)\n' "$LOG" "$(wc -l < "$LOG")"
 
-# 4. The picture is still right: a capture after the soak, asserted. This is what makes "it stayed up"
+# 4. **The promise in v0.1's definition of done**: a fix moves its marker within 1 s of arrival. The wall
+#    measures the wait each fix had for a frame and logs the worst one on its `socket` line, so this is a
+#    number rather than a feeling — and `-1` (no fix yet) is skipped rather than counted as zero.
+PROMISE_MS="${SOAK_FIX_MS:-1000}"
+mapfile -t LAT < <(grep -o 'fix_ms=[0-9-]*' "$PLAIN" | cut -d= -f2 | grep -v '^-1$')
+if [ "${#LAT[@]}" -eq 0 ]; then
+  printf '  fix latency: no fix arrived in the window (nothing to measure)\n'
+else
+  WORST=$(printf '%s\n' "${LAT[@]}" | sort -n | tail -1)
+  [ "$WORST" -le "$PROMISE_MS" ] ||
+    fail "a fix waited ${WORST} ms for a frame, over the ${PROMISE_MS} ms promise (#1)"
+  printf '  fix latency: worst %s ms over %s samples (promise %s)\n' "$WORST" "${#LAT[@]}" "$PROMISE_MS"
+fi
+
+# 5. The picture is still right: a capture after the soak, asserted. This is what makes "it stayed up"
 #    mean "it stayed up showing something true" — the scenes are fixtures, so this is the live case.
 CAPTURE="out/soak-final.png"
 [ "$QUICK" -eq 0 ] || printf '  (quick run: the final capture is the one from the scene, not the wall)\n'
