@@ -320,8 +320,12 @@ fn panes_drag(state: &mut State) {
     if dragged == target {
         return;
     }
-    let middle = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
-    let drop = state.layout.drop_for(viewport, dragged, middle);
+    // **The top edge, not the middle.** The middle is a swap — which needs no geometry — and it was the
+    // only drop a capture made, so a `Drop::Retile` that quietly split the wrong way stayed invisible
+    // (#100). The top band of the first pane makes the picture show a stacked slot, and `verify` says
+    // that slot is wider than it is tall.
+    let at = (rect.x + rect.w / 2.0, rect.y + rect.h * 0.08);
+    let drop = state.layout.drop_for(viewport, dragged, at);
     state.dragging = Some(crate::ui::PaneDrag {
         pane: dragged,
         drop,

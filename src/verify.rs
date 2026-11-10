@@ -1051,6 +1051,27 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                     .push("panes-drag: the preview does not place the dragged pane".to_string());
                 return Err(failures);
             };
+            // **A drop on the top edge makes a wide slot, not a tall one** (#100): `Drop::Retile`'s
+            // direction is the *side's*, and a tree that handed its own direction down made every
+            // top/bottom drop a left/right split. `landing_rect` comes from the preview, so this is the
+            // same question the release asks — and the answer is a shape, not an intention.
+            let expected = crate::ui::view::Drop::Retile {
+                dragged: drag.pane,
+                target: state.pane_rects()[0].0,
+                side: crate::ui::view::Side::Top,
+            };
+            if drop != expected {
+                failures.push(format!(
+                    "panes-drag: the scene drops on the first pane's top edge, but the drop is {drop:?}"
+                ));
+            } else if landing.w <= landing.h {
+                failures.push(format!(
+                    "panes-drag: a pane dropped on the top edge lands in a {:.0}×{:.0} slot — wider \
+                     than tall is the whole point of a top drop (a left/right split leaking into a \
+                     top/bottom one, #100)",
+                    landing.w, landing.h
+                ));
+            }
             let gap = crate::ui::view::inset_rect(landing, tokens::GAP);
             let (gx, gy) = (origin_x + f64::from(gap.x), origin_y + f64::from(gap.y));
             let (gw, gh) = (f64::from(gap.w), f64::from(gap.h));
