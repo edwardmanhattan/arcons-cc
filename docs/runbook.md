@@ -171,6 +171,11 @@ the script on purpose: compiled on this machine at `-O2` and above, MapLibre's C
 first map frame inside glslang, while the debug build and the amalgam both render. That is why every
 capture in `fixtures/golden/` was taken on a debug build, and why the wall must not be given one.
 
+**A plain `cargo build --release --features map` is refused** — `build.rs` fails the build and prints the
+command that works. `MLN_PRECOMPILE` defaults to `0`, so before that guard the trap was silent: `#93` walked
+into it while taking v0.1's definition of done, and produced a binary that segfaulted five seconds into a wall
+run while every check in the repo stayed green (they all use debug builds).
+
 Frame cost with this binary, warm, 1080p, render plus RGBA readback: **42.5 ms median** (30.9 ms at
 720p). Debug is 65.2 / 45.5 ms — `docs/research/map-engines.md` has both rows.
 

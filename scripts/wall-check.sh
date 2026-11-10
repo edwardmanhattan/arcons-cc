@@ -28,7 +28,11 @@ STUB_LOG="${WALL_CHECK_STUB_LOG:-out/wall-check.stub.log}"
 DROP_AFTER_S="${WALL_CHECK_DROP_AFTER_S:-$(( SECONDS_TO_RUN / 2 ))}"
 FIX_EVERY_S="${WALL_CHECK_FIX_EVERY:-2}"
 FIX_PROMISE_MS="${WALL_CHECK_FIX_MS:-1000}"
-BINARY="${WALL_CHECK_BINARY:-./target/debug/arcons-cc}"
+# **The wall build, unless told otherwise** (#93). This check is about the binary a wall runs, and a wall runs
+# `scripts/build-wall.sh`'s release build — taken from upstream's precompiled map core. A plain
+# `cargo build --release --features map` now refuses to build for the reason in `build.rs`; a debug binary
+# renders but is 1.5× the frame cost, so passing one here is a deliberate choice, named on the command line.
+BINARY="${WALL_CHECK_BINARY:-./target/release/arcons-cc}"
 
 mkdir -p out
 : > "$LOG"
@@ -38,7 +42,10 @@ fail() { printf '\033[31mWALL CHECK FAILED\033[0m: %s\n' "$1" >&2; exit 1; }
 say() { printf '  %s\n' "$1"; }
 
 command -v python3 >/dev/null 2>&1 || fail "python3 is needed for the stub (it is a test tool, not a dependency)"
-[ -x "$BINARY" ] || fail "$BINARY does not exist — cargo build --features map first"
+if [ -z "${WALL_CHECK_BINARY:-}" ]; then
+  scripts/build-wall.sh -q || fail "the wall build failed (see build.rs for why it must be this script)"
+fi
+[ -x "$BINARY" ] || fail "$BINARY does not exist — scripts/build-wall.sh first"
 # The map is the thing under test, so a build without it fails the first check rather than passing silently.
 "$BINARY" --version >/dev/null 2>&1 || fail "$BINARY does not run"
 
