@@ -685,7 +685,7 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
 /// element tree — and therefore the goldens and `INV-12`'s frame cost — stay exactly what they were.
 /// Multi View adds the wrapper, and `#71`'s golden pass decides whether one pane should clip too.
 fn picture(state: &State, scale: f32) -> El {
-    let body = col()
+    let mut body = col()
         .key("picture")
         .w_full()
         .h_full()
@@ -695,19 +695,21 @@ fn picture(state: &State, scale: f32) -> El {
         .fill(tokens::panel())
         .on_layout(|state: &mut State, [_, _, width, height]| panel_laid_out(state, width, height));
 
-    if state.layout.is_single() {
-        let Some((id, _)) = state.pane_rects().into_iter().next() else {
-            return body;
-        };
-        return single_pane(state, id, scale, body);
-    }
-
-    let mut body = body;
-    for (id, rect) in state.pane_rects() {
-        body = body.child(pane(state, id, rect, scale));
-    }
-    // The gap and the context menu are drawn last, over every pane: the gap is where a lifted pane will
-    // land, and a menu under the pane it belongs to would be clipped by the next split.
+    let mut body = if state.layout.is_single() {
+        match state.pane_rects().into_iter().next() {
+            Some((id, _)) => single_pane(state, id, scale, body),
+            None => return body,
+        }
+    } else {
+        for (id, rect) in state.pane_rects() {
+            body = body.child(pane(state, id, rect, scale));
+        }
+        body
+    };
+    // The gap and the context menu are drawn last, over every pane — **and over the one-pane wall too**:
+    // "Focus on new pane" lives in that menu, and a wall with one pane is exactly the wall that needs it
+    // to get a second one. Drawing the menu only once there were panes made the first split impossible
+    // to ask for.
     body = gap(state, scale, body);
     body = menu_view(state, scale, body);
     body
@@ -1495,6 +1497,12 @@ fn tick_card_age(state: &mut State) -> bool {
 
 /// Escape closes the card. A key press the focused control did not take comes here.
 fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool {
+    // The menu first: it is the thing on top, and one Escape should not close a card behind it as well.
+    if closes_menu_on_escape(event, state.menu.is_some()) {
+        state.menu = None;
+        state.layout_dirty = true;
+        return true;
+    }
     if !closes_on_escape(event, state.selected) {
         return false;
     }
@@ -1506,6 +1514,12 @@ fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool
 /// is left for whatever else wants it.
 fn closes_on_escape(event: &rune::KeyEvent, selected: Option<i64>) -> bool {
     event.key == rune::Key::Escape && selected.is_some()
+}
+
+/// Escape closes the pane menu — the menu, and not the card behind it, so one key press dismisses the
+/// thing on top and leaves the operator's selection where it was.
+fn closes_menu_on_escape(event: &rune::KeyEvent, menu_open: bool) -> bool {
+    event.key == rune::Key::Escape && menu_open
 }
 
 /// Start the socket actor, once, before the first frame.
@@ -2805,5 +2819,69 @@ mod tests {
             );
         }
         state.close_maps();
+    }
+
+    /// **A wall with one pane can ask for a second one** (#68 follow-up): the right-click menu is the
+    /// only door to "Focus on new pane", so it has to be drawn before there are any panes to tile.
+    ///
+    /// It was not: `picture` returned the one-pane wall before it drew the menu, so a right-click set the
+    /// state and nothing appeared — the first split was impossible to ask for, and no capture showed it
+    /// because a capture has no pointer to right-click with.
+    #[test]
+    fn the_pane_menu_is_drawn_on_a_wall_with_one_pane() {
+        let mut state = crate::scene::state_for("picture");
+        assert!(state.layout.is_single(), "the wall this test is about");
+        state.menu = Some(Menu {
+            pane: state.layout.focused(),
+            at: (200.0, 160.0),
+        });
+        let rt = frame_once(state);
+        assert!(
+            rt.find("pane-menu").is_some(),
+            "the menu is not in the tree: right-click would set state and show nothing"
+        );
+        assert!(
+            rt.find("menu-split").is_some(),
+            "the menu has no item, so there is nothing to press"
+        );
+    }
+
+    /// The menu is only drawn while it is open: a wall at rest draws no menu, and one Escape takes it
+    /// away without closing the card behind it.
+    #[test]
+    fn escape_closes_the_menu_before_the_card() {
+        let mut state = crate::scene::state_for("card-open");
+        state.menu = Some(Menu {
+            pane: state.layout.focused(),
+            at: (10.0, 10.0),
+        });
+        assert!(state.card.is_some(), "the scene has a card open");
+        let rt = frame_once(state);
+        assert!(rt.find("pane-menu").is_some());
+
+        // What `on_key` does on Escape: the menu first, the selection untouched.
+        let mut state = crate::scene::state_for("card-open");
+        state.menu = Some(Menu {
+            pane: state.layout.focused(),
+            at: (10.0, 10.0),
+        });
+        assert!(closes_menu_on_escape(
+            &rune::KeyEvent {
+                key: rune::Key::Escape,
+                mods: Default::default(),
+            },
+            state.menu.is_some()
+        ));
+        if closes_menu_on_escape(
+            &rune::KeyEvent {
+                key: rune::Key::Escape,
+                mods: Default::default(),
+            },
+            state.menu.is_some(),
+        ) {
+            state.menu = None;
+        }
+        assert!(state.menu.is_none(), "the menu closed");
+        assert!(state.card.is_some(), "and the card behind it did not");
     }
 }
