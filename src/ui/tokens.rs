@@ -55,6 +55,16 @@ pub const MIN_PANE_PT: f32 = 160.0;
 /// The width of the border between two panes: the grip a drag starts on, and the width `rune-kit`'s
 /// own `SplitView` uses, so the wall moves like the rest of Rune's shell.
 pub const PANE_GRIP: f32 = 6.0;
+/// The share of a pane, from each edge, that reads as "drop against this edge" rather than "drop on
+/// this pane". A third: the middle of a pane is a big enough target to swap, and the edges are wide
+/// enough to hit with a hand on a wall (#70).
+pub const PANE_EDGE_BAND: f32 = 0.3;
+/// A pane's handle: the mark you grab to move a pane, and its size in points. Small enough not to
+/// cover the water, large enough to find without aiming.
+pub const PANE_HANDLE: (f32, f32) = (28.0, 4.0);
+/// How much a lifted pane fades while it is being dragged: enough to read as "in the air", not so
+/// much that the hulls inside it cannot be seen.
+pub const PANE_LIFTED: f32 = 0.55;
 
 // ---------------------------------------------------------------------------
 // Type.
@@ -105,6 +115,18 @@ pub fn ink_dim() -> Color {
 /// decoration — if it is on screen it means "this is happening now".
 pub fn accent() -> Color {
     oklch(0.78, 0.11, 220.0)
+}
+
+/// The handle's ink: a neutral, a shade below the focus edge so the mark reads as something to grab
+/// rather than as a border.
+pub fn handle_ink() -> Color {
+    oklch(0.46, 0.008, 250.0)
+}
+
+/// The gap a dragged pane will land in: the panel's own colour, one step up, so an empty slot reads as
+/// a slot and not as a hole in the wall (#70).
+pub fn gap_fill() -> Color {
+    oklch(0.235, 0.02, 220.0)
 }
 
 /// The focused pane's edge: a **neutral** line, not the accent (#68).

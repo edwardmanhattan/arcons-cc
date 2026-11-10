@@ -109,6 +109,52 @@ impl Border {
     }
 }
 
+/// Which edge of a target pane a dragged pane was released over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl Side {
+    fn dir(self) -> Dir {
+        match self {
+            Side::Left | Side::Right => Dir::Horizontal,
+            Side::Top | Side::Bottom => Dir::Vertical,
+        }
+    }
+
+    /// Whether the dropped pane takes the `a` side (left or top) of the split it creates.
+    fn on_a(self) -> bool {
+        matches!(self, Side::Left | Side::Top)
+    }
+}
+
+/// What a released pane does to the layout.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Drop {
+    /// The two panes trade places.
+    Swap { a: ViewId, b: ViewId },
+    /// The dragged pane takes the `side` edge of the target, which is split in two.
+    Retile {
+        dragged: ViewId,
+        target: ViewId,
+        side: Side,
+    },
+}
+
+impl Drop {
+    /// The pane that moves.
+    pub fn dragged(self) -> ViewId {
+        match self {
+            Drop::Swap { a: _, b } => b,
+            Drop::Retile { dragged, .. } => dragged,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum Node {
     Leaf(ViewId),
@@ -244,6 +290,106 @@ impl Layout {
             &mut found,
         );
         found
+    }
+
+    /// What a pane released at a point would do: swap with the pane under the middle of the pointer,
+    /// re-tile against the edge it is nearest.
+    ///
+    /// A point over the dragged pane itself is **no drop**, which is what makes "released where it
+    /// started" a no-op rather than a swap with itself.
+    pub fn drop_for(&self, viewport: Viewport, dragged: ViewId, at: (f32, f32)) -> Option<Drop> {
+        let target = self.pane_at(viewport, at)?;
+        if target == dragged {
+            return None;
+        }
+        let rect = self.rect_of(viewport, target)?;
+        let band = crate::ui::tokens::PANE_EDGE_BAND;
+        let edges = [
+            (Side::Left, at.0 - rect.x, rect.w),
+            (Side::Right, rect.right() - at.0, rect.w),
+            (Side::Top, at.1 - rect.y, rect.h),
+            (Side::Bottom, rect.bottom() - at.1, rect.h),
+        ];
+        let mut nearest: Option<(Side, f32)> = None;
+        for (side, distance, span) in edges {
+            if span <= 0.0 || distance / span >= band {
+                continue;
+            }
+            if nearest.is_none_or(|(_, best)| distance < best) {
+                nearest = Some((side, distance));
+            }
+        }
+        Some(match nearest {
+            Some((side, _)) => Drop::Retile {
+                dragged,
+                target,
+                side,
+            },
+            None => Drop::Swap {
+                a: target,
+                b: dragged,
+            },
+        })
+    }
+
+    /// The layout this drop results in — **the same function the release calls**, so the gap a drag
+    /// previews is the place the pane lands. A preview computed some other way is two layouts that
+    /// disagree, which is the bug the whole "one function" discipline exists to prevent.
+    pub fn preview(&self, drop: Drop) -> Option<Layout> {
+        let mut preview = self.clone();
+        preview.apply(drop).then_some(preview)
+    }
+
+    /// Perform a drop. `false` when it cannot be done (a pane that is no longer there, a swap with
+    /// itself, the last pane) — in which case the layout is untouched.
+    pub fn apply(&mut self, drop: Drop) -> bool {
+        match drop {
+            Drop::Swap { a, b } => {
+                if a == b || !self.contains(a) || !self.contains(b) {
+                    return false;
+                }
+                self.root = swap_leaves(self.root.clone(), a, b);
+                true
+            }
+            Drop::Retile {
+                dragged,
+                target,
+                side,
+            } => {
+                if dragged == target || self.len() < 2 || !self.contains(dragged) {
+                    return false;
+                }
+                // Collapse the dragged pane out first, then split the target it lands on. The other
+                // order would renumber nothing but could split a pane that is about to disappear.
+                if !self.close(dragged) {
+                    return false;
+                }
+                // **The dropped pane keeps its id**: its camera, its map thread and its frame live on
+                // that id, and a re-tile that minted a new one would drop the pane's whole state and
+                // open a fresh map where the operator's picture used to be.
+                self.splice(target, side.dir(), side.on_a(), dragged)
+                    .is_some()
+            }
+        }
+    }
+
+    /// Split a pane, putting the new one on a named side (the drop's side, not always `b`).
+    pub fn split_side(&mut self, target: ViewId, side: Side) -> Option<ViewId> {
+        let id = self.next;
+        self.splice(target, side.dir(), side.on_a(), id)
+    }
+
+    /// The one place a leaf becomes a split, for a caller that already knows the id it wants — a
+    /// re-tile reuses the dragged pane's id, a new pane takes the next one.
+    fn splice(&mut self, target: ViewId, dir: Dir, on_a: bool, id: ViewId) -> Option<ViewId> {
+        let mut split = false;
+        self.root = replace_leaf_side(self.root.clone(), target, dir, id, on_a, &mut split);
+        if !split {
+            return None;
+        }
+        self.next = self.next.max(id + 1);
+        self.focused = id;
+        Some(id)
     }
 
     /// The rectangles, one per pane, **covering the viewport exactly**: no gaps between panes, no
@@ -412,6 +558,58 @@ fn find_border(node: &Node, rect: Rect, at: (f32, f32), reach: f32, found: &mut 
             start,
             span,
         });
+    }
+}
+
+fn swap_leaves(node: Node, a: ViewId, b: ViewId) -> Node {
+    match node {
+        Node::Leaf(id) if id == a => Node::Leaf(b),
+        Node::Leaf(id) if id == b => Node::Leaf(a),
+        Node::Leaf(id) => Node::Leaf(id),
+        Node::Split {
+            dir,
+            ratio,
+            a: na,
+            b: nb,
+        } => Node::Split {
+            dir,
+            ratio,
+            a: Box::new(swap_leaves(*na, a, b)),
+            b: Box::new(swap_leaves(*nb, a, b)),
+        },
+    }
+}
+
+fn replace_leaf_side(
+    node: Node,
+    target: ViewId,
+    dir: Dir,
+    id: ViewId,
+    on_a: bool,
+    split: &mut bool,
+) -> Node {
+    match node {
+        Node::Leaf(leaf) if leaf == target => {
+            *split = true;
+            let (a, b) = if on_a {
+                (Node::Leaf(id), Node::Leaf(leaf))
+            } else {
+                (Node::Leaf(leaf), Node::Leaf(id))
+            };
+            Node::Split {
+                dir,
+                ratio: 0.5,
+                a: Box::new(a),
+                b: Box::new(b),
+            }
+        }
+        Node::Leaf(leaf) => Node::Leaf(leaf),
+        Node::Split { dir, ratio, a, b } => Node::Split {
+            dir,
+            ratio,
+            a: Box::new(replace_leaf_side(*a, target, dir, id, on_a, split)),
+            b: Box::new(replace_leaf_side(*b, target, dir, id, on_a, split)),
+        },
     }
 }
 
@@ -770,6 +968,146 @@ mod tests {
             .expect("the border inside the right half");
         assert_eq!(deepest.dir, Dir::Vertical, "{deepest:?}");
         assert_eq!((deepest.a, deepest.b), (right, bottom));
+    }
+
+    /// #70: the middle of a pane swaps, an edge re-tiles against that edge, and a release over the
+    /// pane's own slot is nothing at all.
+    #[test]
+    fn a_drop_is_a_swap_in_the_middle_and_a_re_tile_on_an_edge() {
+        let mut layout = Layout::single();
+        let left = layout.ids()[0];
+        let right = layout.split(left, Dir::Horizontal).unwrap();
+        let rect = layout.rect_of(viewport(), right).unwrap();
+        let middle = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+
+        assert_eq!(
+            layout.drop_for(viewport(), left, middle),
+            Some(Drop::Swap { a: right, b: left }),
+            "the middle is a swap"
+        );
+        let near_left = (rect.x + rect.w * 0.1, middle.1);
+        assert_eq!(
+            layout.drop_for(viewport(), left, near_left),
+            Some(Drop::Retile {
+                dragged: left,
+                target: right,
+                side: Side::Left
+            })
+        );
+        let near_top = (middle.0, rect.y + rect.h * 0.05);
+        assert_eq!(
+            layout.drop_for(viewport(), left, near_top),
+            Some(Drop::Retile {
+                dragged: left,
+                target: right,
+                side: Side::Top
+            })
+        );
+        // Over its own slot: no drop, so a release where the drag began changes nothing.
+        assert_eq!(layout.drop_for(viewport(), left, (100.0, 300.0)), None);
+        assert_eq!(layout.drop_for(viewport(), left, (5000.0, 5000.0)), None);
+    }
+
+    /// The gap a drag previews is the place the pane lands: the preview and the release are one
+    /// function, so this compares the two answers rather than trusting them.
+    #[test]
+    fn the_preview_of_a_drop_is_the_layout_the_drop_makes() {
+        let mut layout = Layout::single();
+        let first = layout.ids()[0];
+        let second = layout.split(first, Dir::Horizontal).unwrap();
+        let third = layout.split(second, Dir::Vertical).unwrap();
+
+        for drop in [
+            Drop::Swap { a: first, b: third },
+            Drop::Retile {
+                dragged: third,
+                target: first,
+                side: Side::Right,
+            },
+            Drop::Retile {
+                dragged: first,
+                target: third,
+                side: Side::Top,
+            },
+        ] {
+            let preview = layout.preview(drop).expect("a preview");
+            let mut applied = layout.clone();
+            assert!(applied.apply(drop));
+            assert_eq!(
+                preview, applied,
+                "the preview and the release disagree about {drop:?} — the gap would open where the \
+                 pane does not land"
+            );
+            // And the rectangle the gap is drawn at is the pane's rectangle after the drop.
+            let moved = drop.dragged();
+            assert_eq!(
+                preview.rect_of(viewport(), moved).map(|rect| (
+                    rect.x.round(),
+                    rect.y.round(),
+                    rect.w.round(),
+                    rect.h.round()
+                )),
+                applied.rect_of(viewport(), moved).map(|rect| (
+                    rect.x.round(),
+                    rect.y.round(),
+                    rect.w.round(),
+                    rect.h.round()
+                )),
+            );
+        }
+    }
+
+    #[test]
+    fn a_swap_moves_both_panes_and_a_re_tile_splits_the_target() {
+        let mut layout = Layout::single();
+        let first = layout.ids()[0];
+        let second = layout.split(first, Dir::Horizontal).unwrap();
+        let before = layout.rects(viewport());
+        let first_rect = before[0].1;
+
+        assert!(layout.apply(Drop::Swap {
+            a: first,
+            b: second
+        }));
+        let after = layout.rects(viewport());
+        assert_eq!(
+            after[0].0, second,
+            "the pane that was on the right is now on the left"
+        );
+        assert_eq!(after[0].1, first_rect, "and it took the left pane's slot");
+        // The layout still covers the viewport: a swap is a renaming, not new geometry.
+        let area: f64 = after
+            .iter()
+            .map(|(_, r)| f64::from(r.w) * f64::from(r.h))
+            .sum();
+        assert!((area - viewport().w * viewport().h).abs() < 0.5);
+
+        // Re-tiling puts the dragged pane on the named side of its target.
+        let mut layout = Layout::single();
+        let a = layout.ids()[0];
+        let b = layout.split(a, Dir::Horizontal).unwrap();
+        assert!(layout.apply(Drop::Retile {
+            dragged: a,
+            target: b,
+            side: Side::Top,
+        }));
+        let rects = layout.rects(viewport());
+        let moved = rects.iter().find(|(id, _)| *id == a).unwrap().1;
+        let stayed = rects.iter().find(|(id, _)| *id == b).unwrap().1;
+        assert_eq!(moved.y, 0.0, "the dragged pane took the top");
+        assert_eq!(moved.x, stayed.x, "inside the target's own column");
+        assert!(moved.h < stayed.h + 1.0);
+
+        // A drop that cannot be done leaves the layout alone.
+        let untouched = layout.clone();
+        assert!(!layout.apply(Drop::Swap { a, b: a }));
+        assert_eq!(layout, untouched);
+        assert!(!layout.apply(Drop::Retile {
+            dragged: a,
+            target: a,
+            side: Side::Left
+        }));
+        assert_eq!(layout, untouched);
     }
 
     #[test]

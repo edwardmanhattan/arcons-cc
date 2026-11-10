@@ -11,6 +11,9 @@
 //!   moves the ground under it; the frame catches up on the next render, which is what makes a drag
 //!   feel like dragging water rather than a photograph.
 //! - **Every colour and size comes from [`tokens`].** Nothing in this file names one.
+//! - **A pane is a rectangle from one function** ([`view::Layout::rects`]) and a drag on one is a
+//!   preview of an operation ([`view::Layout::preview`]) the release applies: the gap a lifted pane
+//!   shows is computed by the same code that moves it, so it cannot open where the pane will not land.
 //!
 //! Without `--features map` the map element is absent and the panel says so: the engine is optional
 //! so the gate stays free of C++ and of a network. `--probe-map` is the headless witness.
@@ -75,6 +78,16 @@ impl Pane {
     }
 }
 
+/// A lifted pane (#70): which pane, and the drop its handle is currently over.
+///
+/// The drop is recomputed from the pointer on every move, and the **preview layout** is derived from
+/// it — dragging is a preview of an operation, not an operation in progress.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaneDrag {
+    pub pane: ViewId,
+    pub drop: Option<view::Drop>,
+}
+
 /// The drawn context menu: the pane it was asked on, and the point in that pane.
 ///
 /// The point is in **device pixels**, because that is what it is used for twice: the menu is drawn at
@@ -108,6 +121,8 @@ pub struct State {
     /// The border a drag has hold of (#69). Set on the press, cleared on the release: a gesture that
     /// starts on a border moves that border and never pans the map under it.
     pub resizing: Option<view::Border>,
+    /// The pane a drag has lifted, and the drop it would make (#70). `None` when nothing is lifted.
+    pub dragging: Option<PaneDrag>,
     /// Whether the first map frame's camera has been reported. One log line per process, so a wall showing
     /// the wrong sea leaves a trace rather than a screenshot to argue with (`#56`).
     pub camera_reported: bool,
@@ -203,6 +218,7 @@ impl Default for State {
             menu: None,
             layout_dirty: false,
             resizing: None,
+            dragging: None,
             live: None,
             backend: None,
             selected: None,
@@ -628,8 +644,9 @@ fn picture(state: &State, scale: f32) -> El {
     for (id, rect) in state.pane_rects() {
         body = body.child(pane(state, id, rect, scale));
     }
-    // The context menu is drawn last, over every pane, at the point it was asked for: a menu under the
-    // pane it belongs to would be clipped by the next split.
+    // The gap and the context menu are drawn last, over every pane: the gap is where a lifted pane will
+    // land, and a menu under the pane it belongs to would be clipped by the next split.
+    body = gap(state, scale, body);
     body = menu_view(state, scale, body);
     body
 }
@@ -673,14 +690,21 @@ fn single_pane(state: &State, id: ViewId, scale: f32, body: El) -> El {
     layer
 }
 
-/// One pane: its picture, its markers, its own frame, and the ring that says the keys are here.
+/// One pane: its picture, its markers, its own frame, the handle that moves it, and the ring that says
+/// the keys are here.
 fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
     let focused = state.layout.focused() == id;
-    let single = state.layout.is_single();
+    let dragged = state.dragging.is_some_and(|drag| drag.pane == id);
     let mut body = el()
         .key(format!("pane-{id}"))
         .absolute(rect.x, rect.y)
         .size(rect.w.max(1.0), rect.h.max(1.0))
+        // A pane that lands somewhere else glides there rather than blinking (`El::matched_crop`): the
+        // swap reads as movement, which is what tells the operator what happened. At rest it draws
+        // exactly the rectangle the layout says, so a settled capture is unchanged by it.
+        .matched(format!("pane-{}", id))
+        .matched_crop()
+        .opacity(if dragged { tokens::PANE_LIFTED } else { 1.0 })
         .on_layout(move |state: &mut State, [_, _, width, height]| {
             pane_laid_out(state, id, width, height, scale)
         })
@@ -688,17 +712,11 @@ fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
         // is**: within a grip of a border it resizes, anywhere else it pans the map. Two handlers
         // (one on the map, one on the border) would put the decision in Rune's hit order instead of in
         // the arithmetic the panes are laid out with.
-        .on_drag(move |state: &mut State, drag, _tx| drag_pane(state, id, drag, scale));
-    // The ring means "the keys are here rather than there", so a wall with one pane has none: the
-    // panel's own hairline is that pane's frame, and a second edge drawn on it is a line that says
-    // nothing.
-    if !single {
-        // **A pane is a window on its own water**: a marker or a picture that overflows must not appear
-        // in the pane beside it. Only when there *is* a pane beside it — a clip costs the marker layer
-        // about a third of its frame CPU (`INV-12`: 5.07 → 3.78 ms reference for 200 markers), and a
-        // wall with one pane has nothing to clip against. `#71` measures the multi-pane case, where the
-        // clip is doing work.
-        body = body.clip_rounded(0.0).border(
+        .on_drag(move |state: &mut State, drag, _tx| drag_pane(state, id, drag, scale))
+        // **A pane is a window on its own water**: a marker or a picture that overflows must not
+        // appear in the pane beside it.
+        .clip_rounded(0.0)
+        .border(
             tokens::HAIRLINE,
             if focused {
                 tokens::focus_edge()
@@ -706,49 +724,131 @@ fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
                 tokens::hairline()
             },
         );
-    }
 
     body = picture_content(state, id, scale, false, body);
 
-    let Some(pane) = state.pane(id) else {
-        return body;
-    };
-    // Markers project against THIS pane's frame (`INV-04`): its camera, its size, and nothing else.
-    let Some(frame) = pane.frame else {
-        return body;
-    };
-    let sizes = |id_unit: i64| state.sizes.get(&id_unit).copied();
-    let placed = markers::place(
-        &state.picture,
-        &frame,
-        state.now(),
-        state.stale_after,
-        state.range,
-        &sizes,
-    );
-    let pictures = markers::Pictures {
-        images: &state.pictures,
-    };
-    let mut layer = body.child(markers::layer(&placed, &frame, scale, &pictures));
-
-    // The card points at its marker's DRAWN position inside its own pane, so it follows a hull that is
-    // travelling and a map that has been panned. Placement is arithmetic in `units::card::place`, where
-    // it is property-tested against the window.
-    if let Some(card) = &state.card
-        && let Some(marker) = placed
-            .iter()
-            .find(|marker| marker.id_unit == card.unit.id_unit)
-    {
-        let points = if scale > 0.0 { f64::from(scale) } else { 1.0 };
-        let anchor = (marker.x / points, marker.y / points);
-        let viewport = (
-            f64::from(frame.width) / points,
-            f64::from(frame.height) / points,
+    // Markers project against THIS pane's frame (`INV-04`): its camera, its size, and nothing else. A
+    // pane whose map has not drawn yet draws no markers — and still has its handle.
+    let mut layer = body;
+    if let Some(frame) = state.pane(id).and_then(|pane| pane.frame) {
+        let sizes = |id_unit: i64| state.sizes.get(&id_unit).copied();
+        let placed = markers::place(
+            &state.picture,
+            &frame,
+            state.now(),
+            state.stale_after,
+            state.range,
+            &sizes,
         );
-        let placement = crate::units::card::place(anchor, viewport);
-        layer = layer.child(unitcard::card(card, placement, state.now()));
+        let pictures = markers::Pictures {
+            images: &state.pictures,
+        };
+        layer = layer.child(markers::layer(&placed, &frame, scale, &pictures));
+        if let Some(card) = &state.card
+            && let Some(marker) = placed
+                .iter()
+                .find(|marker| marker.id_unit == card.unit.id_unit)
+        {
+            let points = if scale > 0.0 { f64::from(scale) } else { 1.0 };
+            let anchor = (marker.x / points, marker.y / points);
+            let viewport = (
+                f64::from(frame.width) / points,
+                f64::from(frame.height) / points,
+            );
+            let placement = crate::units::card::place(anchor, viewport);
+            layer = layer.child(unitcard::card(card, placement, state.now()));
+        }
     }
-    layer
+    // The handle is drawn **last**, over the markers: it is the element a grab lands on, and a grab must
+    // never be a press on the hull underneath it.
+    layer.child(handle(id, rect))
+}
+
+/// A pane's handle: a small bar at the top of the pane, and the gesture that lifts the pane.
+///
+/// It is **its own element on top of the map**, which is how a grab avoids selecting the hull under the
+/// pointer — `TabDragState`'s `suppress_click` in a different mechanism. The press that starts a lift
+/// never reaches a marker, so nothing has to be undone afterwards.
+fn handle(id: ViewId, rect: Rect) -> El {
+    let (w, h) = tokens::PANE_HANDLE;
+    // **Pane-local**, because the handle is drawn inside its pane: the pane is already at `rect.x`,
+    // and adding that again puts the handle off the right of a pane that is not the first one.
+    el().key(format!("handle-{id}"))
+        .absolute(rect.w / 2.0 - w / 2.0, tokens::GAP / 2.0)
+        .size(w, h)
+        .radius(h / 2.0)
+        .fill(tokens::handle_ink())
+        .on_drag(move |state: &mut State, drag, _tx| lift(state, id, drag))
+}
+
+/// The handle's gesture: lift, follow the pointer, drop.
+///
+/// The drop is recomputed from the pointer each move and the **preview** layout is what draws the gap,
+/// so the gap is the place the pane lands — `Layout::preview` and `Layout::apply` are one operation.
+fn lift(state: &mut State, id: ViewId, drag: &mut rune::Drag) {
+    let viewport = state.pane_viewport();
+    match drag.phase {
+        rune::Phase::Down => {
+            state.dragging = Some(PaneDrag {
+                pane: id,
+                drop: None,
+            });
+            state.layout.focus(id);
+        }
+        rune::Phase::Move => {
+            let at = (drag.x, drag.y);
+            let drop = state.layout.drop_for(viewport, id, at);
+            if let Some(drag) = &mut state.dragging
+                && drag.drop != drop
+            {
+                drag.drop = drop;
+            }
+            state.layout_dirty = true;
+        }
+        rune::Phase::Up => {
+            let drop = state.dragging.and_then(|drag| drag.drop);
+            state.dragging = None;
+            if let Some(drop) = drop
+                && state.layout.apply(drop)
+            {
+                state.menu = None;
+            }
+            state.layout_dirty = true;
+        }
+    }
+}
+
+/// The gap a lifted pane will land in, drawn from the preview of the drop.
+///
+/// One element, over the panes, at the rectangle `Layout::preview(...).rect_of(dragged)` — the same
+/// answer the release gets, because it is the same function.
+fn gap(state: &State, scale: f32, body: El) -> El {
+    let Some(drag) = state.dragging else {
+        return body;
+    };
+    let Some(drop) = drag.drop else { return body };
+    let Some(preview) = state.layout.preview(drop) else {
+        return body;
+    };
+    let Some(rect) = preview.rect_of(state.pane_viewport(), drag.pane) else {
+        return body;
+    };
+    let _ = scale;
+    // **Inset**, not the whole pane: the slot reads as a slot while the target's own hulls stay visible
+    // around it, which keeps the picture a picture during a drag — TabDragState opens a gap narrower
+    // than the thing that lands, for the same reason.
+    let inset = tokens::GAP;
+    body.child(
+        el().key("pane-gap")
+            .absolute(rect.x + inset, rect.y + inset)
+            .size(
+                (rect.w - inset * 2.0).max(1.0),
+                (rect.h - inset * 2.0).max(1.0),
+            )
+            .radius(tokens::PANEL_RADIUS)
+            .fill(tokens::gap_fill())
+            .border(tokens::HAIRLINE, tokens::focus_edge()),
+    )
 }
 
 /// One pane's picture: the map's pixels, its failure, or the placeholder.
@@ -756,48 +856,33 @@ fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
 fn picture_content(state: &State, id: ViewId, scale: f32, single: bool, body: El) -> El {
     if let Some(map) = state.pane(id).and_then(|pane| pane.map.as_ref()) {
         if map.error().is_none() {
-            return body.child(
-                rune::el()
-                    .key("map")
-                    .w_full()
-                    .h_full()
-                    .pixels(map.pixels())
-                    .on_wheel(move |state: &mut State, event: rune::WheelEvent, _tx| {
-                        wheel(state, id, &event)
-                    })
-                    .on_drag(move |state: &mut State, drag, _tx| drag_map(state, id, drag))
-                    .on_secondary_press_local(
-                        move |state: &mut State, event: rune::PointerEvent, _tx| {
-                            open_menu(state, id, &event, scale)
-                        },
-                    )
-                    .on_press(move |state: &mut State| press_in(state, id)),
-            );
-        }
-        if single {
-            // One pane: the map element reports its own size, as it always has, so a wall with no
-            // panes is the wall it was. With panes, the pane's wrapper does it — one `on_layout` per
-            // frame is a measurable cost when 200 markers are inside it (`INV-12`).
-            return body.child(
-                rune::el()
-                    .key("map")
-                    .w_full()
-                    .h_full()
-                    .pixels(map.pixels())
+            // Wheel, a right-click and a press belong to the map in both shapes. **Drag and `on_layout`
+            // do not**: with one pane the map element owns them (the wall it has always been), and with
+            // panes the pane's wrapper does — one `on_layout` per frame is a measurable cost with 200
+            // markers inside it (`INV-12`), and a wrapper that decides border-versus-pan has to see the
+            // press itself.
+            let mut element = rune::el()
+                .key("map")
+                .w_full()
+                .h_full()
+                .pixels(map.pixels())
+                .on_wheel(move |state: &mut State, event: rune::WheelEvent, _tx| {
+                    wheel(state, id, &event)
+                })
+                .on_secondary_press_local(
+                    move |state: &mut State, event: rune::PointerEvent, _tx| {
+                        open_menu(state, id, &event, scale)
+                    },
+                )
+                .on_press(move |state: &mut State| press_in(state, id));
+            if single {
+                element = element
                     .on_layout(move |state: &mut State, [_, _, width, height]| {
                         pane_laid_out(state, id, width, height, scale)
                     })
-                    .on_wheel(move |state: &mut State, event: rune::WheelEvent, _tx| {
-                        wheel(state, id, &event)
-                    })
-                    .on_drag(move |state: &mut State, drag, _tx| drag_map(state, id, drag))
-                    .on_secondary_press_local(
-                        move |state: &mut State, event: rune::PointerEvent, _tx| {
-                            open_menu(state, id, &event, scale)
-                        },
-                    )
-                    .on_press(move |state: &mut State| press_in(state, id)),
-            );
+                    .on_drag(move |state: &mut State, drag, _tx| drag_map(state, id, drag));
+            }
+            return body.child(element);
         }
         if let Some(error) = map.error() {
             return body
@@ -2425,5 +2510,51 @@ mod tests {
              are sharing a render loop, which is the design #64 rejected"
         );
         let _: Option<Rendered> = first.rendered();
+    }
+
+    /// #70: a tiled wall draws a handle per pane, and a gap only while something is lifted.
+    ///
+    /// The handle is its own element **above** the markers, which is how a grab avoids selecting the hull
+    /// under the pointer: `TabDragState`'s `suppress_click` in a different mechanism, because the press
+    /// that starts a lift never reaches a marker in the first place.
+    #[test]
+    fn a_tiled_wall_has_a_handle_per_pane_and_a_gap_only_while_lifted() {
+        let panes = crate::scene::state_for("panes");
+        let rt = frame_once(panes);
+        for id in 1..=3 {
+            assert!(
+                rt.find(&format!("handle-{id}")).is_some(),
+                "pane {id} has no handle: a pane that cannot be picked up cannot be moved"
+            );
+        }
+        assert!(
+            rt.find("pane-gap").is_none(),
+            "a gap is drawn only while a pane is lifted"
+        );
+
+        let dragging = crate::scene::state_for("panes-drag");
+        assert!(dragging.dragging.is_some(), "the scene lifts a pane");
+        let rt = frame_once(dragging);
+        assert!(
+            rt.find("pane-gap").is_some(),
+            "a lifted pane previews the slot it lands in"
+        );
+        assert!(
+            rt.find("pane-gap").is_some(),
+            "the gap is a named element, so a capture's assertion can find it"
+        );
+    }
+
+    /// One pane is the wall as it was: no handle, no ring, no gap (#68, #70).
+    #[test]
+    fn one_pane_has_no_handle_and_no_ring() {
+        let state = crate::scene::state_for("picture");
+        assert!(state.layout.is_single());
+        let rt = frame_once(state);
+        assert!(
+            rt.find("handle-1").is_none(),
+            "a wall with one pane has nothing to pick up"
+        );
+        assert!(rt.find("pane-gap").is_none());
     }
 }
