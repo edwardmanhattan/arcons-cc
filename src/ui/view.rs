@@ -83,6 +83,20 @@ pub fn synthetic_frame(
     }
 }
 
+/// A point in a pane's own coordinates, as the viewport knows it.
+///
+/// **`Drag::x`/`y` are element-local** — `runtime/input/gesture.rs` builds them from the hit node's local
+/// point, and `El::on_drag` hands them over unchanged — while every question the layout answers
+/// (`border_at`, `drop_for`, `Border::ratio_for`) is asked in the **viewport's** points. A handler on an
+/// element that fills its pane therefore adds the pane's origin, exactly once, here.
+///
+/// It is not a rounding error to skip it: the point lands in whichever pane owns the window's top-left
+/// corner, so the first pane behaves and the rest do not — which is how #80 survived the milestone that
+/// introduced panes, and why this has a test whose pane origin is not (0, 0).
+pub fn viewport_point(rect: Rect, local: (f32, f32)) -> (f32, f32) {
+    (rect.x + local.0, rect.y + local.1)
+}
+
 /// A draggable border between two panes: the split it belongs to, and where the line is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Border {
@@ -914,6 +928,59 @@ mod tests {
             Dir::Vertical,
             "a tall pane splits up/down"
         );
+    }
+
+    /// #80: a gesture's point arrives in the **element's** coordinates, and the layout's questions are
+    /// asked in the viewport's. The conversion is `viewport_point`, and this test is the bug: the second
+    /// pane's left edge is 2 pt below the pointer, and read un-converted that point is 2 pt from the
+    /// window's left edge — in the *first* pane, nowhere near a border.
+    #[test]
+    fn a_press_is_measured_from_the_pane_it_landed_in() {
+        let mut layout = Layout::single();
+        let first = layout.ids()[0];
+        let second = layout.split(first, Dir::Horizontal).unwrap();
+        let grip = tokens::PANE_GRIP;
+        let rect = layout
+            .rect_of(viewport(), second)
+            .expect("the right-hand pane");
+        assert!(
+            rect.x > 0.0,
+            "the point of this test: an origin that is not the window's"
+        );
+
+        // 2 pt inside the second pane's left edge, half a grip from the border.
+        let local = (2.0, 200.0);
+        let unconverted = layout.border_at(viewport(), local, grip);
+        assert!(
+            unconverted.is_none(),
+            "read as a viewport point, a press inside pane 2 lands at {local:?}, in pane 1: {unconverted:?}"
+        );
+
+        let at = viewport_point(rect, local);
+        let border = layout
+            .border_at(viewport(), at, grip)
+            .unwrap_or_else(|| panic!("the border beside the pane the press landed in, at {at:?}"));
+        assert_eq!((border.a, border.b), (first, second));
+
+        // And the ratio follows the same point: a hand 128 pt to the right of the line — stated as the
+        // pane it is holding sees it — asks for a ratio 128 pt to the right of the line, not for the
+        // far edge of the window.
+        let moved = viewport_point(rect, (border.at - rect.x + 128.0, local.1));
+        assert!(
+            (border.ratio_for(moved.0) - 0.6).abs() < 1e-3,
+            "{moved:?} asks for {}",
+            border.ratio_for(moved.0)
+        );
+
+        // The single-pane wall is the identity: its pane's origin is the window's, which is why the
+        // bug looked like "panes work until there are two".
+        let one = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: viewport().w as f32,
+            h: viewport().h as f32,
+        };
+        assert_eq!(viewport_point(one, (12.0, 34.0)), (12.0, 34.0));
     }
 
     /// #69: the border is grabbed on the line, and only there — a drag that starts a few pixels away

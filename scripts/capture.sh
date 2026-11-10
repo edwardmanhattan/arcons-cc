@@ -46,12 +46,20 @@ for scene in "${SCENES[@]}"; do
   printf '\n\033[1m▶ capture %s\033[0m\n' "$scene"
   # `--at 2`: two seconds of the virtual clock, so a scene with a travel animation has settled and a
   # `--at 0` capture cannot accidentally be right for the wrong reason.
+  # **A scene may bring a script** (`fixtures/scripts/<scene>.json`): the capture is then driven by Rune's
+  # own input events rather than by a function call, which is how a gesture that reaches no handler is
+  # caught (#80). The flags are still spelled out here and nowhere else — the script only adds input.
+  SCRIPT=()
+  if [ -f "fixtures/scripts/$scene.json" ]; then
+    SCRIPT=(--script "fixtures/scripts/$scene.json")
+  fi
   if ! ./target/debug/arcons-cc \
       --scene "$scene" \
       --at 2 \
       --fps 60 \
       --size 1280x720 \
       --scale 1 \
+      ${SCRIPT[@]+"${SCRIPT[@]}"} \
       --snap "out/$scene.png" > "out/$scene.log" 2>&1; then
     echo "  FAILED to render $scene — see out/$scene.log" >&2
     tail -3 "out/$scene.log" >&2
@@ -71,7 +79,7 @@ for scene in "${SCENES[@]}"; do
   # first. This is the part of INV-11 that is true everywhere, and it is the part CI can hold.
   cp "out/$scene.png" "out/$scene.first.png"
   ./target/debug/arcons-cc --scene "$scene" --at 2 --fps 60 --size 1280x720 --scale 1 \
-    --snap "out/$scene.png" > "out/$scene.log" 2>&1
+    ${SCRIPT[@]+"${SCRIPT[@]}"} --snap "out/$scene.png" > "out/$scene.log" 2>&1
   if cmp -s "out/$scene.first.png" "out/$scene.png"; then
     echo "  two runs identical (INV-11)"
   else

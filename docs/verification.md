@@ -118,7 +118,7 @@ into the cache: a capture then covers bytes → cache → marker, which is the r
 **The gate renders every scene the binary lists**, and the list comes from the binary:
 
 ```sh
-cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-drag · pane-menu
+cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-drag · panes-pan · pane-menu
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -132,6 +132,14 @@ wall quietly drawing three of four panes is a line in a file, not a report (#71)
 `pane-menu` is a wall with **one** pane and its right-click menu open (#77) — the one shape the menu was
 never drawn on, and the only wall that needs it, because "Focus on new pane" is the only route to a second
 pane. The assertion checks the menu's box against `ui::menu_origin` and that it stays inside the picture.
+
+`panes-pan` is the only capture **driven by a pointer** (#80). `fixtures/scripts/panes-pan.json` presses
+the border at 50% of the panel and drags it to 58% — the share `panes` sets in code — and the two captures
+are then the same picture to within a hair of a point. That matters because a whole class of bug is
+invisible to every other kind of test: a gesture that reaches no handler, a press landing on the wrong
+element, a point measured in the element's coordinates when the layout asks in the viewport's (the bug: a
+press inside pane 2 was read as 2 pt from the *window's* left edge). With the drag dropped, the border
+returns to half and three assertions go red — measured, not assumed.
 
 `panes-drag` is the same wall with a pane **lifted** (#70): one pane dimmed, and the gap it will land in
 drawn from `Layout::preview`. The assertion checks the gap's rectangle against that preview — the same

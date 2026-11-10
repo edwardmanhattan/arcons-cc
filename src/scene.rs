@@ -160,6 +160,23 @@ pub const PANES_FOCUSED: usize = 1;
 /// `scripts/assert.sh out/panes.png` checks exactly that, by calling the same `Layout::rects` the view
 /// lays the panes out with.
 fn panes(state: &mut State) {
+    panes_wall(state, true)
+}
+
+/// The same wall with the border drag **left to a pointer**: `panes-pan`'s script presses the border and
+/// drags it to the share the scene above sets in code.
+///
+/// This is the only capture in the repo driven by an input event rather than by a function call, and it
+/// exists because a whole class of bug is invisible to every other kind: the drag that reaches nothing
+/// (#80), the point measured in the wrong coordinate space (#84), a press that lands on the wrong element.
+/// `fixtures/scripts/panes-pan.json` makes the gesture; `scripts/capture.sh` hands the script to Rune;
+/// `verify` projects the hulls against the 58% layout the drag must produce, so a dropped gesture moves the
+/// border back to half and the assertion goes red rather than the picture going quietly wrong.
+fn panes_pan(state: &mut State) {
+    panes_wall(state, false)
+}
+
+fn panes_wall(state: &mut State, drag_the_border: bool) {
     load(state);
     let mut ids = vec![state.layout.focused()];
     for (index, (id_unit, zoom)) in PANES.iter().enumerate() {
@@ -188,7 +205,10 @@ fn panes(state: &mut State) {
     // pointer, ask it for the ratio the pointer means. The root split is dragged from half to 58%, so
     // the capture is of a layout someone moved rather than of a layout a constructor produced — and
     // `assert.sh` projects against the same `Layout::rects`, so a drag that moved a hull out of its
-    // pane fails there.
+    // pane fails there. `panes-pan` skips this: its pointer does the same thing from the outside.
+    if !drag_the_border {
+        return;
+    }
     let viewport = state.pane_viewport();
     let middle = (viewport.w as f32 / 2.0, viewport.h as f32 / 2.0);
     if let Some(border) = state
@@ -261,6 +281,7 @@ pub const SCENES: &[Scene] = &[
     ("photo", photo),
     ("panes", panes),
     ("panes-drag", panes_drag),
+    ("panes-pan", panes_pan),
     ("pane-menu", pane_menu),
 ];
 
@@ -339,6 +360,10 @@ mod tests {
                 "photo",
                 "panes",
                 "panes-drag",
+                // The only scene whose picture is made by an **input event** rather than by a call
+                // (`fixtures/scripts/panes-pan.json`), so it is also the only witness a dropped
+                // gesture has (#80).
+                "panes-pan",
                 "pane-menu"
             ]
         );

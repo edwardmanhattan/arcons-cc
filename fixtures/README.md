@@ -4,6 +4,18 @@ Wire-shaped data the tests read. **Fixtures come from the wire** — recorded fr
 from the pinned spec — never generated from our own types. A test that round-trips our struct through
 our own serializer proves only that we agree with ourselves.
 
+## `scripts/` — input, not data
+
+Rune's `--script` format: an array of timestamped input events (`t` in seconds). `scripts/capture.sh` hands
+`fixtures/scripts/<scene>.json` to the renderer when it exists, so a capture can be **driven by a pointer**
+instead of by a function call — the only kind of test that catches a gesture that reaches no handler (#80).
+
+| file | what it does |
+| --- | --- |
+| `panes-pan.json` | presses the border at 50% of the `panes` panel and drags it to 58%, which is the share `panes` sets in code. The two captures are the same picture, so one asserts the other |
+
+Coordinates are window points at `--scale 1`, and `verify` projects against the layout the gesture must produce.
+
 ## `rest/` — recorded 2026-11-06
 
 From the dev Minos at the commit pinned in `docs/spec/`, with the wall's read-only account. The
