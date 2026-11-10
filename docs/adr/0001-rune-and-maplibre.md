@@ -19,7 +19,7 @@ from a fixed clock, so a capture is reproducible and a test can count what is in
 `rune` (github.com/anomalyco/rune), **pinned by rev**:
 
 ```
-rune = "46cfcd64cf348ea9391c5db01f0d488c548d74d9"
+rune = "b73010b85b451ad687a7189d347dd8875fb91e24"
 ```
 
 Why:
@@ -59,6 +59,24 @@ sentence, because an ADR that lists an API without saying what it buys is a chan
   already written and public upstream; we write the adoption, not the interaction.
 - Smaller, and the reason `El` is worth re-measuring upstream: `El` is 192 bytes with in-place
   builders (#337), popup tooltips, scroll modes and RTL. None of it is load-bearing for v0.1.
+
+### Bumped again: `46cfcd64` → `b73010b` (#79)
+
+54 commits on, 2026-11-09, and the reason is the v0.2 pane work rather than the renderer: `rune-kit` grew
+**`image_zoom`** (`Stage`, `Preview`, `ImageZoom` — a full-window layer over a live element with zoom, a
+close affordance and Escape, which is the shape of "full-size this pane for a moment", #85), and the
+60-ish handlers between the pins are fixes we would otherwise work around. Nothing in `src/` changed for
+the bump; the only visible difference is **text rasterisation** — the wordmark and the card's glyphs, at
+the same positions, which is what the eight goldens' diff was before they were regenerated. What the pane
+backlog needs *already existed* at `46cfcd64` and needs no bump: `rune-kit`'s `menu` (including
+`context_menu` at a `PointerPress`), `dialog`, `overlay::scrim`, `text_input`, `segmented`, and
+`shell::{SplitView, PaneState, PaneMotion}` — so #80–#84 are API work we have, and #85 is the one the bump
+buys.
+
+Two things about *our* code that the bump did not fix, and #84 records: `Drag::x`/`y` are **element-local**
+(`runtime/input/gesture.rs`), and a drag reaches the element that was **pressed**, not its ancestors — so
+the pane drags were computing drops from the wrong point and the map's drag never fired once panes existed.
+Neither is a Rune bug; both were ours.
 
 The bump is not free, and the frame budget is where it shows. **`INV-12`'s raw CPU went up ~7–10%**
 (4.09–4.12 → 4.38–4.76 ms per frame with 200 markers, this laptop, Intel iGPU), while the
