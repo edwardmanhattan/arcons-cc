@@ -226,6 +226,17 @@ pub const PANES_DRAGGED: f32 = 0.58;
 /// Where the `pane-menu` scene right-clicks: the menu's own point, in the pane's points.
 pub const MENU_AT: (f32, f32) = (300.0, 220.0);
 
+/// The `panes-menu` scene (#81): **a tiled wall with its menu open**, which is the only wall that offers
+/// `Close pane`. The one-pane `pane-menu` is its control: one row there, two here, and the surface has to be
+/// tall enough for both.
+fn panes_menu(state: &mut State) {
+    panes(state);
+    state.menu = Some(crate::ui::Menu {
+        pane: state.layout.focused(),
+        at: MENU_AT,
+    });
+}
+
 /// The `pane-menu` scene (#77): **a wall with one pane and its menu open**.
 ///
 /// The one shape the menu had never been drawn on, and the only wall that needs it — it is the only route
@@ -282,6 +293,7 @@ pub const SCENES: &[Scene] = &[
     ("panes", panes),
     ("panes-drag", panes_drag),
     ("panes-pan", panes_pan),
+    ("panes-menu", panes_menu),
     ("pane-menu", pane_menu),
 ];
 
@@ -364,6 +376,7 @@ mod tests {
                 // (`fixtures/scripts/panes-pan.json`), so it is also the only witness a dropped
                 // gesture has (#80).
                 "panes-pan",
+                "panes-menu",
                 "pane-menu"
             ]
         );

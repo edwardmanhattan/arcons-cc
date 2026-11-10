@@ -595,29 +595,44 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 ));
             }
         }
-        "pane-menu" => {
-            // **The menu is drawn, at the click, inside its pane** (#77). It had no capture at all until
-            // this scene: a pointer is what opens it, and no test clicks.
+        "pane-menu" | "panes-menu" => {
+            // **The menu is drawn, at the click, inside its pane** (#77), and **as tall as its items**
+            // (#81): a menu sized for one row clips the second, which no golden notices until someone opens
+            // it on a wall. So every row is sampled for its own label ink.
             let Some((origin_x, origin_y, panel_w, panel_h)) =
                 image.find_panel_rect(ink(tokens::panel()))
             else {
-                failures.push("pane-menu: no picture panel on screen".to_string());
+                failures.push(format!("{scene}: no picture panel on screen"));
                 return Err(failures);
             };
-            let (mx, my) = crate::ui::menu_origin(
-                crate::ui::Rect {
+            let state = scene::state_for(scene);
+            let rows = state
+                .menu
+                .map(|menu| crate::ui::menu_items(&state, menu.pane).len())
+                .unwrap_or(0);
+            let expected = if scene == "panes-menu" { 2 } else { 1 };
+            if rows != expected {
+                failures.push(format!(
+                    "{scene}: the menu offers {rows} items, and this wall is the case for {expected}"
+                ));
+            }
+            let (w, h) = tokens::menu_size(rows.max(1));
+            // **The pane's rectangle, not the panel's**: a menu is clamped inside the pane it was asked
+            // on. With one pane those are the same rectangle, which is why #77's assertion passed on the
+            // wall it was written for and would have been wrong on any other.
+            let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
+            let rect = state
+                .menu
+                .and_then(|menu| state.layout.rect_of(viewport, menu.pane))
+                .unwrap_or(crate::ui::Rect {
                     x: 0.0,
                     y: 0.0,
                     w: panel_w as f32,
                     h: panel_h as f32,
-                },
-                scene::MENU_AT,
-            );
+                });
+            let (mx, my) = crate::ui::menu_origin(rect, scene::MENU_AT, (w, h));
             let (mx, my) = (origin_x + f64::from(mx), origin_y + f64::from(my));
-            let (w, h) = (
-                f64::from(tokens::MENU_SIZE.0),
-                f64::from(tokens::MENU_SIZE.1),
-            );
+            let (w, h) = (f64::from(w), f64::from(h));
             // The surface's own fill, where the click was: the panel is `panel()`, a menu is `bg()`.
             let surface = ink(tokens::bg());
             let mut hits = 0;
@@ -642,19 +657,58 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 && my + h <= origin_y + panel_h + 0.5;
             if !inside {
                 failures.push(format!(
-                    "pane-menu: the menu at ({mx:.0}, {my:.0}) {w:.0}×{h:.0} is not inside the picture \
+                    "{scene}: the menu at ({mx:.0}, {my:.0}) {w:.0}×{h:.0} is not inside the picture \
                      at ({origin_x:.0}, {origin_y:.0}) {panel_w:.0}×{panel_h:.0} — a menu half over the \
                      bezel is a menu whose item cannot be pressed"
                 ));
             } else if hits * 10 < samples * 8 {
                 failures.push(format!(
-                    "pane-menu: {hits}/{samples} samples inside the menu's box are its surface or its \
+                    "{scene}: {hits}/{samples} samples inside the menu's box are its surface or its \
                      label — the menu at ({mx:.0}, {my:.0}) is not drawn"
                 ));
             } else {
                 lines.push(format!(
-                    "pane-menu: menu at ({mx:.0}, {my:.0}) {w:.0}×{h:.0}, inside the picture"
+                    "{scene}: menu at ({mx:.0}, {my:.0}) {w:.0}×{h:.0}, {rows} row(s), inside the picture"
                 ));
+            }
+            // **Each row is on the plate, and has its own label** (#81). Sampled from `MENU_ROW` — one
+            // row's height, the constant — rather than from the surface's declared size, so a surface that
+            // is shorter than its items is caught: the second label still draws (nothing clips it), it just
+            // hangs off the plate, which is the failure this looks for.
+            for row in 0..rows {
+                let top = my + f64::from(tokens::MENU_ROW) * row as f64;
+                let mut on_plate = 0;
+                let mut plate_samples = 0;
+                let mut brightest = 0u8;
+                for dy in 6..(tokens::MENU_ROW as i32 - 6) {
+                    for dx in 6..(w as i32 - 6) {
+                        let (x, y) = ((mx + f64::from(dx)) as u32, (top + f64::from(dy)) as u32);
+                        if x >= image.width || y >= image.height {
+                            continue;
+                        }
+                        plate_samples += 1;
+                        let pixel = image.at(x, y);
+                        if near(pixel, surface, 6) {
+                            on_plate += 1;
+                        }
+                        brightest = brightest.max(image.luma(x, y));
+                    }
+                }
+                if plate_samples == 0 || on_plate * 2 < plate_samples {
+                    failures.push(format!(
+                        "{scene}: row {row} of the menu is off its plate — {on_plate}/{plate_samples} \
+                         samples are the menu's own fill at y={top:.0}, so the surface is shorter than \
+                         its items"
+                    ));
+                } else if brightest < 120 {
+                    failures.push(format!(
+                        "{scene}: row {row} of the menu has no label ink (brightest {brightest})"
+                    ));
+                } else {
+                    lines.push(format!(
+                        "{scene}: row {row} is on the plate, with its label ({brightest} luma)"
+                    ));
+                }
             }
         }
         "panes-drag" => {

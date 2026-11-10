@@ -141,6 +141,12 @@ element, a point measured in the element's coordinates when the layout asks in t
 press inside pane 2 was read as 2 pt from the *window's* left edge). With the drag dropped, the border
 returns to half and three assertions go red — measured, not assumed.
 
+`panes-menu` is the same wall with its menu **open** (#81), which is the only wall that offers `Close pane`. Its
+assertion samples each row of the menu from `tokens::MENU_ROW` rather than from the surface's declared size, so
+a surface shorter than its items is caught: the second label still draws, it just hangs off the plate — which
+is what the ticket meant by "a menu sized for one row clips the second", and what the first attempt at the
+assertion missed by asking the same function that drew it.
+
 `panes-drag` is the same wall with a pane **lifted** (#70, #84): one pane dimmed in its slot, and the pane in
 the air **drawn on the slot it will land in** — `Layout::preview`'s rectangle, the pane's own camera projected
 against that rectangle's size, on the slot's plate. Two assertions: the slot's plate is drawn where the
