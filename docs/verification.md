@@ -118,7 +118,7 @@ into the cache: a capture then covers bytes → cache → marker, which is the r
 **The gate renders every scene the binary lists**, and the list comes from the binary:
 
 ```sh
-cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-drag
+cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-drag · pane-menu
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -128,6 +128,10 @@ it is drawn in, using the same `Layout::rects` the view lays the panes out with.
 
 A tiled wall also says so in its header (`40 units · panes=3`) and in its log (`pane_frames=[12, 3, 3]`): a
 wall quietly drawing three of four panes is a line in a file, not a report (#71).
+
+`pane-menu` is a wall with **one** pane and its right-click menu open (#77) — the one shape the menu was
+never drawn on, and the only wall that needs it, because "Focus on new pane" is the only route to a second
+pane. The assertion checks the menu's box against `ui::menu_origin` and that it stays inside the picture.
 
 `panes-drag` is the same wall with a pane **lifted** (#70): one pane dimmed, and the gap it will land in
 drawn from `Layout::preview`. The assertion checks the gap's rectangle against that preview — the same

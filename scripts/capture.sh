@@ -15,11 +15,14 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# **Built every time, and without features.** The goldens are rendered from the default build; a binary
+# left behind by `cargo run --features map` draws the map-feature placeholder in every scene and turns
+# every capture into a false diff (found while adding `pane-menu`, #77). `cargo build` is a no-op when the
+# binary is current, so this costs a check rather than a build.
+cargo build -q || exit 1
 # **The scene list comes from the binary**, not from a list written here: the gate renders what
 # `arcons-cc --scenes` prints (#54), and a golden pass with its own list silently skips a new scene —
-# which is what happened to `panes` the first time, in #68. The binary has to exist to answer, so it is
-# built here rather than after the flags are parsed.
-[ -x ./target/debug/arcons-cc ] || cargo build -q || exit 1
+# which is what happened to `panes` the first time, in #68.
 mapfile -t SCENES_ALL < <(./target/debug/arcons-cc --scenes)
 [ ${#SCENES_ALL[@]} -gt 0 ] || { echo "capture: the binary listed no scenes" >&2; exit 1; }
 

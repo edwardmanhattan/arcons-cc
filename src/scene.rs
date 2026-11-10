@@ -203,6 +203,22 @@ fn panes(state: &mut State) {
 /// Where the `panes` scene drags its first border to: the share of the panel the first pane keeps.
 pub const PANES_DRAGGED: f32 = 0.58;
 
+/// Where the `pane-menu` scene right-clicks: the menu's own point, in the pane's points.
+pub const MENU_AT: (f32, f32) = (300.0, 220.0);
+
+/// The `pane-menu` scene (#77): **a wall with one pane and its menu open**.
+///
+/// The one shape the menu had never been drawn on, and the only wall that needs it — it is the only route
+/// to "Focus on new pane", so a menu that does not draw here is a wall that can never have a second pane.
+/// The capture is the witness the pointer-driven bug could not have: no test right-clicks.
+fn pane_menu(state: &mut State) {
+    load(state);
+    state.menu = Some(crate::ui::Menu {
+        pane: state.layout.focused(),
+        at: MENU_AT,
+    });
+}
+
 /// The `panes-drag` scene (#70): a pane lifted, and the gap it will land in.
 ///
 /// The lift is built the way the gesture builds it — `drop_for` on the point the handle has been dragged
@@ -245,6 +261,7 @@ pub const SCENES: &[Scene] = &[
     ("photo", photo),
     ("panes", panes),
     ("panes-drag", panes_drag),
+    ("pane-menu", pane_menu),
 ];
 
 /// Look a scene up by the name `scripts/capture.sh` was given.
@@ -321,7 +338,8 @@ mod tests {
                 "card-open",
                 "photo",
                 "panes",
-                "panes-drag"
+                "panes-drag",
+                "pane-menu"
             ]
         );
         for name in names() {

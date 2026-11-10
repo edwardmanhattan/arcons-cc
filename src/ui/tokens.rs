@@ -62,6 +62,10 @@ pub const PANE_EDGE_BAND: f32 = 0.3;
 /// A pane's handle: the mark you grab to move a pane, and its size in points. Small enough not to
 /// cover the water, large enough to find without aiming.
 pub const PANE_HANDLE: (f32, f32) = (28.0, 4.0);
+/// A pane menu's own size, in points. A context menu is a **surface with a known box** on this wall, not
+/// an intrinsic one: the drag of a menu's corner is not a gesture the operator has, and a known box is
+/// what lets the menu be clamped inside the pane it was asked on without measuring the text first (#77).
+pub const MENU_SIZE: (f32, f32) = (216.0, 36.0);
 /// How much a lifted pane fades while it is being dragged: enough to read as "in the air", not so
 /// much that the hulls inside it cannot be seen.
 pub const PANE_LIFTED: f32 = 0.55;
