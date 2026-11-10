@@ -2296,12 +2296,12 @@ fn drag_pane(state: &mut State, id: ViewId, rect: Rect, drag: &mut rune::Drag, s
         rune::Phase::Down => {
             let at = view::viewport_point(rect, (drag.start_x, drag.start_y));
             begin_resize(state, viewport, at);
-            if state.resizing.is_none() {
+            if state.resizing().is_none() {
                 drag_map(state, id, drag);
             }
         }
         rune::Phase::Move => {
-            if let Some(border) = state.resizing {
+            if let Some(border) = state.resizing() {
                 // The pointer's coordinate along the border's own axis, in the viewport's points. A
                 // point, not a delta: the ratio follows the line the operator is holding, and a
                 // gesture that leaves the pane and comes back lands where the pointer is.

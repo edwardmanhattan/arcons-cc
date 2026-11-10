@@ -61,6 +61,16 @@ if have_crate; then
   step "cargo fmt --check"           cargo fmt --all -- --check
   step "cargo clippy -D warnings"    cargo clippy --all-targets -- -D warnings
   step "cargo test"                  cargo test --all-targets
+  # **The gate does not compile the map feature**, and cannot: that is MapLibre's C++ and the gate may need
+  # no compiler, no network and no GPU. The cost of the hole is real — `#[cfg(feature = "map")]` code can rot
+  # without a red line here (#101: a rename of a `State` field left one `drag_pane` assigning the old one, and
+  # the first thing to notice was CI's macOS map job) — so it is named rather than silent, and `VERIFY_WITH_MAP=1`
+  # closes it locally for a change that touches those lines. CI's `map` jobs run the same command.
+  if [ "${VERIFY_WITH_MAP:-0}" = "1" ]; then
+    step "cargo check --features map" cargo check --features map
+  else
+    skip "map feature compiles" "VERIFY_WITH_MAP=1 to check it here; CI's map jobs do"
+  fi
 else
   skip "rust checks" "no Cargo.toml yet (ticket #2 creates the crate)"
 fi
