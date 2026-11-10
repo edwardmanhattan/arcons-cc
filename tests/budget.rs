@@ -25,6 +25,19 @@ use chrono::{TimeZone, Utc};
 /// The wall's limit for camera pan/zoom at 1080p with 200 units, in milliseconds of frame CPU.
 const LIMIT_MS: f64 = 8.0;
 
+/// The Multi View limit (#71): four panes at 960×540, 200 markers each, while ONE pane is panned.
+///
+/// **Measured, then set**: 10.5 ms on the reference machine for this workload, against 3.8 ms for one
+/// pane — a tiled wall rebuilds every pane's marker layer when any pane's frame changes, so it is ~2.7×
+/// one pane and not 4×. The limit is 14 ms: a third above the measurement, and **under the 16.6 ms frame
+/// clock**, because a budget that allows a missed frame is not one. `docs/research/multi-view.md` has the
+/// map thread's half of the arithmetic; this is the markers' half.
+const PANES_LIMIT_MS: f64 = 14.0;
+/// The pane count that limit is for, named so the failure says which layout it measured.
+const PANES: usize = 4;
+/// The size of one pane in that layout: four of them tile a 1080p wall.
+const PANE_SIZE: (u32, u32) = (960, 540);
+
 /// What that same machine measures for a fixed reference workload, in milliseconds per frame.
 ///
 /// This is the measurement that makes the budget a budget instead of a lottery (`#48`). A shared CI
@@ -101,6 +114,89 @@ fn machine_factor() -> f64 {
     }
     let per_frame = started.elapsed().as_secs_f64() * 1000.0 / f64::from(FRAMES);
     (per_frame / CALIBRATION_MS).clamp(0.25, 10.0)
+}
+
+/// **`INV-12`, restated for a tiled wall** (#71): four panes, 200 markers each, one of them panning.
+///
+/// The cadence this measures is the wall's own: the focused pane's camera moves every frame (so every
+/// pane's marker layer is rebuilt — Rune rebuilds the tree whole), and the unfocused panes' *map threads*
+/// idle at 1 Hz while the focused one keeps its 4 Hz. The marker cost is the one that does not follow the
+/// cadence, which is exactly why it needs a number.
+#[test]
+#[ignore = "budget: scripts/verify.sh runs it by name"]
+fn budget_four_panes_pan_frame_cpu() {
+    let mut state = State::new(picture_with(200));
+    let camera = Camera::new((-6.108, 106.910), 11.0);
+    let (w, h) = PANE_SIZE;
+    // Four panes, tiled like a wall: split twice, then the right half again.
+    let first = state.layout.ids()[0];
+    let mut ids = vec![first];
+    for index in 1..PANES {
+        let from = ids[index - 1];
+        let id = state.split_pane(from, camera).expect("a split");
+        ids.push(id);
+    }
+    // Every pane's frame is its own rectangle — the rule the view applies — and every pane is centred
+    // on the same water so all 200 hulls are inside every pane.
+    state.panel = Some((f64::from(w) as f32 * 2.0, f64::from(h) as f32 * 2.0));
+    for (id, rect) in state.pane_rects() {
+        let frame = arcons_cc::ui::view::synthetic_frame(camera, rect, 1.0);
+        if let Some(pane) = state.pane_mut(id) {
+            pane.camera = camera;
+            pane.frame = Some(frame);
+        }
+    }
+    state.layout.focus(ids[0]);
+    assert_eq!(state.panes.len(), PANES, "four panes");
+
+    let mut runtime = rune::Runtime::new(
+        state,
+        arcons_cc::ui::view,
+        (f64::from(w) as f32 * 2.0, f64::from(h) as f32 * 2.0),
+        rune::Env {
+            system_dark: true,
+            scale: 1.0,
+        },
+    );
+    runtime.frame(0.0);
+    assert!(
+        runtime.find("marker-1").is_some(),
+        "the marker layer did not render: the budget below would measure an empty window"
+    );
+    assert!(runtime.find("pane-4").is_some(), "four panes in the tree");
+
+    const FRAMES: u32 = 120;
+    let started = Instant::now();
+    for frame in 0..FRAMES {
+        let step = f64::from(frame) * 0.0004;
+        let moved = Camera::new((-6.108, 106.910 + step), 11.0);
+        // A pan on the FOCUSED pane only: the other three keep their cameras, which is the workload a
+        // tiled wall actually has while the operator works one pane.
+        let focused = runtime.state.layout.focused();
+        if let Some(pane) = runtime.state.pane_mut(focused) {
+            pane.camera = moved;
+            if let Some(frame) = pane.frame {
+                pane.frame = Some(arcons_cc::map::geometry::Rendered {
+                    camera: moved,
+                    ..frame
+                });
+            }
+        }
+        runtime.frame(1.0 / 60.0);
+    }
+    let per_frame_ms = started.elapsed().as_secs_f64() * 1000.0 / f64::from(FRAMES);
+    let factor = machine_factor();
+    let reference_ms = per_frame_ms / factor;
+    println!(
+        "INV-12: {per_frame_ms:.3} ms frame CPU for {PANES} panes at {w}x{h} with 200 markers each, one \
+         panning = {reference_ms:.3} ms on the reference machine (machine ×{factor:.2}; limit \
+         {PANES_LIMIT_MS} ms; focused pane at 4 Hz idle, unfocused at 1 Hz)"
+    );
+    assert!(
+        reference_ms < PANES_LIMIT_MS,
+        "INV-12: {PANES} panes at {w}x{h} with 200 markers each cost {reference_ms:.3} ms of frame CPU \
+         on the reference machine (×{factor:.2}), over the {PANES_LIMIT_MS} ms the tiled wall allows"
+    );
 }
 
 #[test]

@@ -123,6 +123,10 @@ pub struct State {
     pub resizing: Option<view::Border>,
     /// The pane a drag has lifted, and the drop it would make (#70). `None` when nothing is lifted.
     pub dragging: Option<PaneDrag>,
+    /// The focused pane the threads were last told about, so a focus change re-cadences them exactly
+    /// once (#71): the focused pane at 4 Hz, every other pane at 1 Hz. Only a wall has threads to tell.
+    #[cfg(feature = "map")]
+    cadenced: Option<ViewId>,
     /// Whether the first map frame's camera has been reported. One log line per process, so a wall showing
     /// the wrong sea leaves a trace rather than a screenshot to argue with (`#56`).
     pub camera_reported: bool,
@@ -219,6 +223,8 @@ impl Default for State {
             layout_dirty: false,
             resizing: None,
             dragging: None,
+            #[cfg(feature = "map")]
+            cadenced: None,
             live: None,
             backend: None,
             selected: None,
@@ -424,6 +430,54 @@ impl State {
         Some(id)
     }
 
+    /// How many frames each pane has drawn, in pane order (#71).
+    ///
+    /// The map thread's own counter, idle ticks included: a pane whose number has stopped is a pane that
+    /// is not drawing, which is not the same as a pane whose camera has not moved. Without the engine
+    /// there are no threads and no frames to count.
+    pub fn pane_frames(&self) -> Vec<u64> {
+        #[cfg(feature = "map")]
+        {
+            self.panes
+                .iter()
+                .map(|pane| pane.map.as_ref().map(|map| map.frames()).unwrap_or(0))
+                .collect()
+        }
+        #[cfg(not(feature = "map"))]
+        {
+            Vec::new()
+        }
+    }
+
+    /// Tell every pane's map thread how often to redraw: the focused pane at the wall's cadence, the
+    /// others at a quarter of it (#71).
+    #[cfg(feature = "map")]
+    pub fn apply_cadence(&self) {
+        let focused = self.layout.focused();
+        for pane in &self.panes {
+            if let Some(map) = &pane.map {
+                map.set_cadence(if pane.id == focused {
+                    crate::map::thread::IDLE_INTERVAL
+                } else {
+                    crate::map::thread::UNFOCUSED_INTERVAL
+                });
+            }
+        }
+    }
+
+    /// Close every pane's map thread, in order, before the process leaves (#71).
+    ///
+    /// **N panes are N contexts.** The engine asserts in `~RunLoop` when a process with a live map exits,
+    /// and each `MapThread`'s drop sends its stop and waits — so this is the place a wall with panes
+    /// shuts down, and the reason it is a named function rather than a hope about drop order.
+    pub fn close_maps(&mut self) {
+        #[cfg(feature = "map")]
+        for pane in &mut self.panes {
+            // Dropping the handle stops the thread and joins it.
+            pane.map = None;
+        }
+    }
+
     /// The pane a marker's press belongs to, for the card: the one whose frame projects the hull.
     pub fn pane_showing(&self, id_unit: i64) -> Option<ViewId> {
         self.pane_rects().into_iter().find_map(|(id, _)| {
@@ -548,6 +602,14 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
             1 => "1 unit".to_string(),
             n => format!("{n} units"),
         }
+    };
+    // The pane count is in the header as soon as there is more than one (#71): a tiled wall should say
+    // how many pictures it is showing, and "panes=3" next to "127 units" is the line a reader needs when
+    // one of them is not drawing.
+    let units = if state.panes.len() > 1 {
+        format!("{units} · panes={}", state.panes.len())
+    } else {
+        units
     };
     let (link, link_colour) = match &state.link {
         Link::Live => (
@@ -1583,6 +1645,10 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
             "terminating on SIGTERM/SIGINT after {} ms",
             crate::platform::since_start()
         );
+        // **Every pane's map thread is joined here, not by the drop of a `State` the runtime owns.**
+        // The engine asserts in `~RunLoop` when a process with a live map walks out, and with N panes
+        // there are N contexts to close (#71).
+        state.close_maps();
         tx.quit();
         return false;
     }
@@ -1627,6 +1693,14 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     changed |= drain_card_reads(state);
     changed |= tick_card_age(state);
 
+    // **The focused pane is the one that renders at the wall's cadence; the others are there, not
+    // live** (#71). Told to the threads when the focus changes, so a wall at rest does not send a
+    // message a frame.
+    #[cfg(feature = "map")]
+    if !state.headless && state.cadenced != Some(state.layout.focused()) {
+        state.cadenced = Some(state.layout.focused());
+        state.apply_cadence();
+    }
     // The frame each pane's map last handed over is what that pane's markers project against
     // (`INV-04`). Reading it here, rather than in the view, keeps the view a function of the state.
     #[cfg(feature = "map")]
@@ -1737,6 +1811,9 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
             registered = state.registered,
             pictures = state.image_urls.len(),
             link = ?state.link,
+            // One number per pane (#71): a tiled wall quietly drawing three of four panes is a line in a
+            // file rather than a report that ends in a relaunch (#28, #51).
+            pane_frames = ?state.pane_frames(),
             // A number or -1: a wall whose platform cannot say must say so, not invent a figure.
             rss_mb = crate::platform::rss_mb().map(|mb| mb.round() as i64).unwrap_or(-1),
             "socket"
@@ -2556,5 +2633,177 @@ mod tests {
             "a wall with one pane has nothing to pick up"
         );
         assert!(rt.find("pane-gap").is_none());
+    }
+
+    /// **N panes are N map contexts, and the wall closes all of them** (#71).
+    ///
+    /// Ignored because it opens the engine; run by hand:
+    ///
+    /// ```sh
+    /// cargo test --features map --lib -- --ignored --nocapture four_panes_close
+    /// ```
+    ///
+    /// The engine asserts in `~RunLoop` (`Failed to close loop`) when a process with a live map leaves,
+    /// so a wall with panes has to join every thread before it exits. The test's own success — the
+    /// process still running afterwards — is the assertion that no context was left behind.
+    #[cfg(feature = "map")]
+    #[test]
+    #[ignore = "map engine: needs a GPU and, when the cache is cold, a style load"]
+    fn four_panes_close_their_maps_without_an_abort() {
+        let mut state = State {
+            headless: false,
+            panel: Some((1280.0, 720.0)),
+            ..State::default()
+        };
+        let first = state.layout.ids()[0];
+        // The first pane's thread is the one `setup` starts on a wall; `split_pane` starts the others.
+        if let Some(pane) = state.pane_mut(first) {
+            pane.map = Some(crate::map::thread::MapThread::spawn(
+                Camera::START,
+                (640, 360),
+            ));
+        }
+        let mut ids = vec![first];
+        for index in 1..4 {
+            let from = ids[index - 1];
+            let id = state
+                .split_pane(from, Camera::START)
+                .expect("a split spawns a pane");
+            ids.push(id);
+        }
+        assert_eq!(
+            state.panes.iter().filter(|pane| pane.map.is_some()).count(),
+            4,
+            "four panes, four map threads"
+        );
+        // Wait for each pane to publish a frame, so this test is about closing live contexts.
+        let started = std::time::Instant::now();
+        while started.elapsed() < std::time::Duration::from_secs(60)
+            && state.panes.iter().any(|pane| {
+                pane.map
+                    .as_ref()
+                    .is_some_and(|map| map.rendered().is_none())
+            })
+        {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let drawn = state
+            .panes
+            .iter()
+            .filter(|pane| {
+                pane.map
+                    .as_ref()
+                    .is_some_and(|map| map.rendered().is_some())
+            })
+            .count();
+        println!("panes: {drawn}/4 panes published a frame before shutdown");
+        state.close_maps();
+        assert!(
+            state.panes.iter().all(|pane| pane.map.is_none()),
+            "close_maps leaves no map thread running"
+        );
+        println!("panes: all four map threads joined, and this process is still up");
+    }
+
+    /// **The cadence does what the header claims** (#71): the focused pane redraws at 4 Hz, the others at
+    /// 1 Hz, and the focused pane's pan is not slowed by the three that are idling.
+    ///
+    /// Ignored because it opens the engine and takes three seconds of wall time:
+    ///
+    /// ```sh
+    /// cargo test --features map --lib -- --ignored --nocapture cadence
+    /// ```
+    ///
+    /// Frame counts come from `Pane::frames`, which `poll` increments when a pane's frame changes — the
+    /// same number the log line prints, so this test and the wall cannot disagree about what "4 Hz" means.
+    #[cfg(feature = "map")]
+    #[test]
+    #[ignore = "map engine: needs a GPU; takes three seconds of real time"]
+    fn the_focused_pane_keeps_its_cadence_while_three_idle() {
+        use crate::map::thread::{IDLE_INTERVAL, MapThread, UNFOCUSED_INTERVAL};
+        use std::time::Duration;
+
+        let mut state = State {
+            headless: false,
+            panel: Some((1280.0, 720.0)),
+            ..State::default()
+        };
+        let first = state.layout.ids()[0];
+        if let Some(pane) = state.pane_mut(first) {
+            pane.map = Some(MapThread::spawn(Camera::START, (640, 360)));
+        }
+        let mut ids = vec![first];
+        for index in 1..4 {
+            let from = ids[index - 1];
+            ids.push(state.split_pane(from, Camera::START).expect("a split"));
+        }
+        state.layout.focus(ids[0]);
+        state.apply_cadence();
+        for pane in &state.panes {
+            let Some(map) = &pane.map else { continue };
+            assert_eq!(map.error(), None, "every pane's map started");
+        }
+
+        // Count the frames each pane publishes over a stretch of wall time, by reading the frames the
+        // threads hand over (the same counter `poll` keeps).
+        // Wait for every pane to have drawn once: four concurrent style loads on a cold cache take a
+        // couple of seconds on this laptop, and measuring the cadence during them would measure the
+        // load (the same reason `map_frame_cost` pumps before it times).
+        let waiting = std::time::Instant::now();
+        while waiting.elapsed() < Duration::from_secs(60)
+            && state.panes.iter().any(|pane| {
+                pane.map
+                    .as_ref()
+                    .is_some_and(|map| map.frames() == 0 && map.error().is_none())
+            })
+        {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        println!(
+            "panes: {} panes, {} with a map thread, first frames after {:?}",
+            state.panes.len(),
+            state.panes.iter().filter(|p| p.map.is_some()).count(),
+            waiting.elapsed()
+        );
+        let window = Duration::from_millis(3000);
+        let before = state.pane_frames();
+        std::thread::sleep(window);
+        let after = state.pane_frames();
+        let counted: Vec<u64> = after
+            .iter()
+            .zip(before.iter())
+            .map(|(after, before)| after.saturating_sub(*before))
+            .collect();
+        println!(
+            "panes: frames in {:?} — focused {:?} = {}, others {:?} = {:?} (cadences {:?} / {:?})",
+            window,
+            ids[0],
+            counted[0],
+            &ids[1..],
+            &counted[1..],
+            IDLE_INTERVAL,
+            UNFOCUSED_INTERVAL
+        );
+
+        // Roughly 4 Hz and 1 Hz, with room for a style-load hitch at the start: a 3 s window at 4 Hz is
+        // 12 frames and at 1 Hz is 3. The bounds are wide because this is a scheduler, not a clock —
+        // what it catches is a wall that forgets to slow the panes it is not showing.
+        let expected_focused = window.as_secs_f64() / IDLE_INTERVAL.as_secs_f64();
+        let expected_idle = window.as_secs_f64() / UNFOCUSED_INTERVAL.as_secs_f64();
+        assert!(
+            f64::from(counted[0] as u32) >= expected_focused * 0.5,
+            "the focused pane drew {} frames in {window:?}; {expected_focused:.0} is its cadence — a \
+             focused pane that idles like the others is a wall whose operator sees a still picture",
+            counted[0]
+        );
+        for (index, frames) in counted.iter().enumerate().skip(1) {
+            assert!(
+                f64::from(*frames as u32) <= expected_idle * 2.0,
+                "pane {} drew {frames} frames in {window:?} while unfocused; {expected_idle:.0} is its \
+                 cadence — an unfocused pane at the focused pane's rate is the budget #71 exists for",
+                ids[index]
+            );
+        }
+        state.close_maps();
     }
 }
