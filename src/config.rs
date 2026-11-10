@@ -17,6 +17,7 @@ use crate::ui::tokens;
 pub mod check;
 pub mod credential;
 pub mod file;
+pub mod settings;
 
 pub const USAGE: &str = "\
 arcons-cc — the live maritime picture on a wall
@@ -297,6 +298,11 @@ pub fn config_dir() -> PathBuf {
 /// The non-secret configuration: base URL, channel, window mode. Written by #8.
 pub fn config_file() -> PathBuf {
     config_dir().join("config.toml")
+}
+
+/// What the display itself remembers: the preferences someone changed on the wall (#82).
+pub fn settings_file() -> PathBuf {
+    settings::settings_file()
 }
 
 /// The credential. Read, never printed, never logged, never committed (`INV-08`).

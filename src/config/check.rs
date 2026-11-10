@@ -22,7 +22,7 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::config::{self, Args, Config, Env, Problem, Source};
+use crate::config::{self, Args, Config, Env, Problem, Source, settings};
 
 /// What a self-check can conclude, in the order the exit codes are numbered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,6 +147,18 @@ pub fn run(args: &Args, env: &Env, world: &dyn World, out: &mut dyn std::fmt::Wr
         },
         config.minos.kind(),
         config.credential_source.label()
+    );
+
+    // The display's own settings (#82): a line about **which file** and whether it was there, never a
+    // verdict — a wall with no settings file is a wall with the defaults, which is most walls.
+    let settings_path = settings::settings_file();
+    let (settings, note) = settings::Settings::read(&settings_path);
+    let _ = writeln!(
+        out,
+        "  {:<11} ok  {} (pane gap {} pt)",
+        "settings",
+        note.trim_start_matches("settings: "),
+        settings.pane_gap
     );
 
     match world.sign_in(&config) {

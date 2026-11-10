@@ -81,12 +81,17 @@ One line per check; the exit code is the **first** failure in that order. A heal
 arcons-cc 0.1.0 self-check
   config      ok  /home/wall/.config/arcons-cc/config.toml (file · minos from env)
   credentials ok  /home/wall/.config/arcons-cc/credentials.toml mode 0600 · refresh token (from file)
+  settings    ok  no /home/wall/.config/arcons-cc/settings.toml, using the defaults (pane gap 0 pt)
   login       ok  refresh token accepted, access token valid for 900 s
   picture     ok  127 hulls, 126 never reported
   socket      ok  subscribed to live-feed
   map seed    ok  /opt/arcons-cc/assets/tiles-cache.seed.sqlite
 ok
 ```
+
+`settings` is the display's own file, not the configuration: the wall writes it when someone changes a
+preference on screen (`settings.toml`, mode 0600, beside `config.toml`). A wall that has never had one is
+healthy — the line says which file it looked for and what it used instead.
 
 It never prints a token, a password, or a URL containing either. The token line states a *lifetime*
 and nothing else; the credential line states the file's *mode* and nothing else.

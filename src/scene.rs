@@ -211,10 +211,7 @@ fn panes_wall(state: &mut State, drag_the_border: bool) {
     }
     let viewport = state.pane_viewport();
     let middle = (viewport.w as f32 / 2.0, viewport.h as f32 / 2.0);
-    if let Some(border) = state
-        .layout
-        .border_at(viewport, middle, crate::ui::tokens::PANE_GRIP)
-    {
+    if let Some(border) = state.layout.border_at(viewport, middle, state.pane_grip()) {
         let pointer = border.start + border.span * PANES_DRAGGED;
         state.layout.set_ratio(&border, border.ratio_for(pointer));
     }
@@ -225,6 +222,26 @@ pub const PANES_DRAGGED: f32 = 0.58;
 
 /// Where the `pane-menu` scene right-clicks: the menu's own point, in the pane's points.
 pub const MENU_AT: (f32, f32) = (300.0, 220.0);
+
+/// The `panes-gaps` scene (#82): the same wall with **space between the panes** — the settings sheet's
+/// first setting, and the only one so far.
+///
+/// It exists because the gate must cover both looks and because a capture cannot read the operator's
+/// `settings.toml`: a scene sets the value in its own code, so two machines render the same picture
+/// (`INV-11`). The gap is `tokens::GAP` — the same 8 pt the toggle turns on, not a number invented here:
+/// a capture of a look the display cannot produce would be a lie about the wall.
+fn panes_gaps(state: &mut State) {
+    panes(state);
+    state.settings.pane_gap = crate::ui::tokens::GAP;
+}
+
+/// The `settings` scene (#82): a wall with its **settings sheet open**, which is the only picture of the
+/// one modal surface on a wall. It is a single pane so the sheet covers the picture rather than a tiling:
+/// what a reader needs to see is the sheet, where it sits and what it says.
+fn settings_sheet(state: &mut State) {
+    load(state);
+    state.settings_open = true;
+}
 
 /// The `panes-menu` scene (#81): **a tiled wall with its menu open**, which is the only wall that offers
 /// `Close pane`. The one-pane `pane-menu` is its control: one row there, two here, and the surface has to be
@@ -294,6 +311,8 @@ pub const SCENES: &[Scene] = &[
     ("panes-drag", panes_drag),
     ("panes-pan", panes_pan),
     ("panes-menu", panes_menu),
+    ("panes-gaps", panes_gaps),
+    ("settings", settings_sheet),
     ("pane-menu", pane_menu),
 ];
 
@@ -377,6 +396,8 @@ mod tests {
                 // gesture has (#80).
                 "panes-pan",
                 "panes-menu",
+                "panes-gaps",
+                "settings",
                 "pane-menu"
             ]
         );

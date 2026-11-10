@@ -118,7 +118,7 @@ into the cache: a capture then covers bytes → cache → marker, which is the r
 **The gate renders every scene the binary lists**, and the list comes from the binary:
 
 ```sh
-cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-drag · panes-pan · pane-menu
+cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-drag · panes-pan · panes-menu · panes-gaps · settings · pane-menu
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -140,6 +140,15 @@ invisible to every other kind of test: a gesture that reaches no handler, a pres
 element, a point measured in the element's coordinates when the layout asks in the viewport's (the bug: a
 press inside pane 2 was read as 2 pt from the *window's* left edge). With the drag dropped, the border
 returns to half and three assertions go red — measured, not assumed.
+
+`panes-gaps` is the same wall with **space between the panes** (#82): the settings sheet's first setting. The
+assertion finds the gutter the way an operator sees it — a run of the window's own background inside the
+panes' union — and measures it against `tokens::GAP`, so it is about the look and not about a copy of the
+number. Rendered with the gap removed, it is red: `no vertical gutter of 8 pt — measured []`.
+
+`settings` is the wall with its **settings sheet open** (#82): the one modal surface, over a picture that is
+dimmed and not reflowed (the scrim is *pinned* to the root, so opening it costs the picture nothing). The
+assertion measures the sheet's box against `tokens::SHEET_SIZE` and requires ink in its rows.
 
 `panes-menu` is the same wall with its menu **open** (#81), which is the only wall that offers `Close pane`. Its
 assertion samples each row of the menu from `tokens::MENU_ROW` rather than from the surface's declared size, so
