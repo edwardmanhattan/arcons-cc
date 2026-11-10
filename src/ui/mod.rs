@@ -85,6 +85,49 @@ impl Pane {
     }
 }
 
+/// The socket queue's patience: how long the fixes it delivered waited for a frame (#1).
+///
+/// v0.1's definition of done promises that a fix moves its marker **within 1 s of arrival**, so the wall
+/// measures what it promises: every fix's wait is recorded, a worst wait past the promise is a warning in
+/// the log, and the `socket` line carries the number. The fix is applied either way — a late marker is
+/// better than a vanished hull — but a wall that is quietly two seconds behind its own feed is a wall
+/// nobody can trust the picture of.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FixLatency {
+    last_ms: u64,
+    max_ms: u64,
+    late: u64,
+}
+
+/// The promise, in milliseconds: the DoD's "within 1 s of arrival", minus nothing.
+pub const FIX_LATENCY_LIMIT_MS: u64 = 1_000;
+
+impl FixLatency {
+    /// One fix's wait, recorded and bounded.
+    pub fn note(&mut self, waited: std::time::Duration) {
+        let ms = waited.as_millis() as u64;
+        self.last_ms = ms;
+        self.max_ms = self.max_ms.max(ms);
+        if ms > FIX_LATENCY_LIMIT_MS {
+            self.late += 1;
+        }
+    }
+
+    /// The worst wait so far, or `-1` before the first fix — a wall that has applied nothing has no number
+    /// to report and must not invent one.
+    pub fn max_ms(&self) -> i64 {
+        if self.last_ms == 0 && self.max_ms == 0 {
+            return -1;
+        }
+        self.max_ms as i64
+    }
+
+    /// How many fixes arrived more than a second before they were drawn.
+    pub fn late(&self) -> u64 {
+        self.late
+    }
+}
+
 /// A lifted pane (#70): which pane, and the drop its handle is currently over.
 ///
 /// The drop is recomputed from the pointer on every move, and the **preview layout** is derived from
@@ -206,6 +249,8 @@ pub struct State {
     /// How many fixes the socket has delivered **and the picture applied**, for the header's
     /// "is anything happening" question.
     pub fixes: u64,
+    /// How long fixes waited in the socket's queue before a frame applied them (#1).
+    pub fix_latency: FixLatency,
     /// A fix older than this draws as stale. From `config.toml`, so a deployment whose feed is slow
     /// says so in its own units instead of arguing with a constant (`#8`).
     pub stale_after: std::time::Duration,
@@ -298,6 +343,7 @@ impl Default for State {
             last_age: String::new(),
             link: Link::default(),
             fixes: 0,
+            fix_latency: FixLatency::default(),
             stale_after: config
                 .map(|config| config.stale_after)
                 .unwrap_or(crate::units::STALE_AFTER),
@@ -457,6 +503,18 @@ impl State {
     /// cells, pulled in by the gap the operator chose (#82).
     pub fn pane_rects(&self) -> Vec<(ViewId, Rect)> {
         view::panes_on(&self.layout, self.pane_viewport(), self.settings.pane_gap)
+    }
+
+    /// One fix's wait for a frame: recorded, and said out loud when it breaks v0.1's promise (#1).
+    pub fn note_fix_latency(&mut self, waited: std::time::Duration) {
+        self.fix_latency.note(waited);
+        if waited.as_millis() as u64 > FIX_LATENCY_LIMIT_MS {
+            tracing::warn!(
+                waited_ms = waited.as_millis() as u64,
+                fixes = self.fixes,
+                "a fix waited longer than a second for a frame (INV-05: the UI thread must not block)"
+            );
+        }
     }
 
     /// The preferences the display remembers (#82), read once when the wall opens.
@@ -2280,12 +2338,16 @@ fn apply_update(state: &mut State, update: crate::live::Update) {
             state.picture.replace_from_feed(&feed);
             state.link = Link::Live;
         }
-        Update::Fix(fix) => {
+        Update::Fix { fix, received } => {
             // **This is the wall.** A publication is the only thing that makes the picture newer than
             // the last REST read (#28): counting it and keeping the old position is a photograph with
             // a counter on it.
             state.picture.apply_fix(&fix);
             state.fixes += 1;
+            // How long the fix waited for a frame, as a number the log carries (#1): v0.1's definition of
+            // done promises a marker moves "within 1 s of arrival", and a promise with no measurement is a
+            // sentence. Late is applied — dropping a fix would be worse — and said out loud.
+            state.note_fix_latency(received.elapsed());
             // A card is a view of one unit, so it follows that unit's fix. Rebuilt here rather than
             // every frame: a fix for another hull does not change this card's numbers.
             if state.selected == Some(fix.id_unit) {
@@ -2538,6 +2600,8 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
             // One number per pane (#71): a tiled wall quietly drawing three of four panes is a line in a
             // file rather than a report that ends in a relaunch (#28, #51).
             pane_frames = ?state.pane_frames(),
+            // The socket queue's worst wait, in ms, since the last line: `-1` before the first fix.
+            fix_ms = state.fix_latency.max_ms(),
             // A number or -1: a wall whose platform cannot say must say so, not invent a figure.
             rss_mb = crate::platform::rss_mb().map(|mb| mb.round() as i64).unwrap_or(-1),
             "socket"
@@ -2943,6 +3007,73 @@ mod tests {
         assert_eq!(state.last_age, "6 s old");
     }
 
+    /// #1: the socket queue's patience is measured, and a wait past the promise is counted — the number
+    /// v0.1's definition of done is decided by, since "within 1 s of arrival" is otherwise a sentence.
+    #[test]
+    fn a_fix_s_latency_is_measured_and_a_late_one_is_counted() {
+        use std::time::Duration;
+
+        let mut state = state_with_two_hulls();
+        assert_eq!(
+            state.fix_latency.max_ms(),
+            -1,
+            "a wall that has applied nothing has no number, and invents none"
+        );
+
+        state.note_fix_latency(Duration::from_millis(12));
+        assert_eq!(state.fix_latency.max_ms(), 12);
+        assert_eq!(state.fix_latency.late(), 0);
+
+        // Worse, then better: the max is the worst, not the last.
+        state.note_fix_latency(Duration::from_millis(400));
+        state.note_fix_latency(Duration::from_millis(3));
+        assert_eq!(state.fix_latency.max_ms(), 400);
+
+        // Exactly at the promise is inside it; a millisecond past is not.
+        state.note_fix_latency(Duration::from_millis(FIX_LATENCY_LIMIT_MS));
+        assert_eq!(state.fix_latency.late(), 0, "1 s is within 1 s");
+        state.note_fix_latency(Duration::from_millis(FIX_LATENCY_LIMIT_MS + 1));
+        assert_eq!(state.fix_latency.late(), 1);
+        assert_eq!(
+            state.fix_latency.max_ms(),
+            (FIX_LATENCY_LIMIT_MS + 1) as i64
+        );
+    }
+
+    /// A fix applied through the wall's own path records its wait: the statistic is wired to the update, not
+    /// just to the struct.
+    #[test]
+    fn an_applied_fix_records_its_wait() {
+        let mut state = state_with_two_hulls();
+        let received = std::time::Instant::now() - std::time::Duration::from_millis(5);
+        apply_update(
+            &mut state,
+            crate::live::Update::Fix {
+                received,
+                fix: crate::live::wire::LiveFix {
+                    id_unit: 8,
+                    name: "KRI Abdul Halim Perdanakusuma".into(),
+                    hull_number: Some("KRI-355".into()),
+                    latitude: -6.20,
+                    longitude: 106.99,
+                    speed_kn: Some(12.0),
+                    speed_ms: Some(6.17),
+                    course_deg: Some(90.0),
+                    accuracy_m: Some(5.0),
+                    recorded_at: chrono::Utc::now(),
+                    received_at: chrono::Utc::now(),
+                    backfilled: false,
+                },
+            },
+        );
+        assert!(
+            state.fix_latency.max_ms() >= 5,
+            "the wait is measured from the socket's own instant, got {}",
+            state.fix_latency.max_ms()
+        );
+        assert_eq!(state.fix_latency.late(), 0, "five milliseconds is not late");
+    }
+
     /// A fix from the socket has to **move a hull**, not tick a counter.
     ///
     /// #28: `Update::Fix` counted the publication and kept the position from the last REST read, so
@@ -2956,20 +3087,23 @@ mod tests {
 
         apply_update(
             &mut state,
-            crate::live::Update::Fix(crate::live::wire::LiveFix {
-                id_unit: 8,
-                name: "KRI Abdul Halim Perdanakusuma".into(),
-                hull_number: Some("KRI-355".into()),
-                latitude: -6.20,
-                longitude: 106.99,
-                speed_kn: Some(12.0),
-                speed_ms: Some(6.17),
-                course_deg: Some(90.0),
-                accuracy_m: Some(5.0),
-                recorded_at: chrono::Utc::now(),
-                received_at: chrono::Utc::now(),
-                backfilled: false,
-            }),
+            crate::live::Update::Fix {
+                received: std::time::Instant::now(),
+                fix: crate::live::wire::LiveFix {
+                    id_unit: 8,
+                    name: "KRI Abdul Halim Perdanakusuma".into(),
+                    hull_number: Some("KRI-355".into()),
+                    latitude: -6.20,
+                    longitude: 106.99,
+                    speed_kn: Some(12.0),
+                    speed_ms: Some(6.17),
+                    course_deg: Some(90.0),
+                    accuracy_m: Some(5.0),
+                    recorded_at: chrono::Utc::now(),
+                    received_at: chrono::Utc::now(),
+                    backfilled: false,
+                },
+            },
         );
 
         assert_eq!(state.fixes, 1, "the header's count is the fix's");
@@ -2996,20 +3130,23 @@ mod tests {
 
         apply_update(
             &mut state,
-            crate::live::Update::Fix(crate::live::wire::LiveFix {
-                id_unit: 8,
-                name: "KRI Abdul Halim Perdanakusuma".into(),
-                hull_number: Some("KRI-355".into()),
-                latitude: -6.10,
-                longitude: 106.9,
-                speed_kn: Some(21.5),
-                speed_ms: None,
-                course_deg: None,
-                accuracy_m: None,
-                recorded_at: chrono::Utc::now(),
-                received_at: chrono::Utc::now(),
-                backfilled: false,
-            }),
+            crate::live::Update::Fix {
+                received: std::time::Instant::now(),
+                fix: crate::live::wire::LiveFix {
+                    id_unit: 8,
+                    name: "KRI Abdul Halim Perdanakusuma".into(),
+                    hull_number: Some("KRI-355".into()),
+                    latitude: -6.10,
+                    longitude: 106.9,
+                    speed_kn: Some(21.5),
+                    speed_ms: None,
+                    course_deg: None,
+                    accuracy_m: None,
+                    recorded_at: chrono::Utc::now(),
+                    received_at: chrono::Utc::now(),
+                    backfilled: false,
+                },
+            },
         );
 
         assert_eq!(

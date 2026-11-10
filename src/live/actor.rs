@@ -46,8 +46,16 @@ pub enum Update {
     /// The standing picture, re-read after a (re)connect. Until this lands, nothing on screen is
     /// current (`INV-09`).
     Picture(Vec<FeedPosition>),
-    /// One live fix. `backfilled` travels with it: it is real and did not just happen (`INV-03`).
-    Fix(LiveFix),
+    /// One live fix, and **when the socket thread took it** — a process-wide `Instant`, so the view loop can
+    /// say how long the fix waited in the queue before it reached the picture.
+    ///
+    /// The fix's own `received_at` is wall-clock and the view's clock is monotonic; comparing them would be
+    /// two clocks and a guess. `Instant` is one clock on both sides, and it is what "within 1 s of arrival"
+    /// in v0.1's definition of done has to be measured with (#1).
+    Fix {
+        fix: LiveFix,
+        received: std::time::Instant,
+    },
     /// A disconnect: whatever is on screen is from before the gap and must stop being presented as
     /// current until the next [`Update::Picture`].
     Untrusted,
@@ -173,16 +181,6 @@ async fn run(
     // and this flag is what makes the difference a fact in the code rather than a claim in a test.
     let mut forced = false;
     let mut sessions: u32 = 0;
-    let http = match sign_in(&minos).await {
-        Ok(http) => http,
-        Err(error) => {
-            let _ = updates.send(Update::Failed(format!(
-                "could not sign in for the socket: {error}"
-            )));
-            wake();
-            return;
-        }
-    };
 
     // The configured endpoint, not one derived here: a deployment may front the socket with a
     // different host or path from the REST API's.
@@ -190,6 +188,45 @@ async fn run(
     let backoff = Backoff::default();
     let mut attempt: u32 = 0;
     let mut roll = Roll::new();
+
+    // **Signing in waits for the network, it does not give up on it.** A wall starts at boot, and at boot
+    // the network is often not up yet: the first run of this on a wall with no route signed in once, said
+    // "could not reach Minos", and *returned* — a dead wall until somebody restarted it, which is the
+    // opposite of "runs unattended for hours" (v0.1's definition of done, and #94). So a transport failure
+    // is a retry with the same backoff the socket uses; a **refused credential** is still a human's, and
+    // still stops the actor.
+    let http = loop {
+        if stopped.try_recv().is_ok() {
+            return;
+        }
+        match sign_in(&minos).await {
+            Ok(http) => break http,
+            Err(error) if error.retryable() => {
+                attempt = attempt.saturating_add(1);
+                let delay = backoff.delay(attempt, roll.next());
+                tracing::warn!(
+                    attempt,
+                    delay_ms = delay.as_millis() as u64,
+                    "could not sign in for the socket yet: {error} — retrying"
+                );
+                let _ = updates.send(Update::Retrying { attempt, delay });
+                wake();
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {}
+                    _ = stopped.recv() => return,
+                }
+            }
+            Err(error) => {
+                let _ = updates.send(Update::Failed(format!(
+                    "could not sign in for the socket: {error}"
+                )));
+                wake();
+                return;
+            }
+        }
+    };
+    // A retried sign-in is a fresh start: the socket's own backoff begins at the first second again.
+    attempt = 0;
 
     loop {
         if stopped.try_recv().is_ok() {
@@ -348,7 +385,10 @@ async fn session(
                         .map(|trust| trust.accepts_publication())
                         .unwrap_or(false);
                     if trusted {
-                        let _ = updates.send(Update::Fix(fix));
+                        let _ = updates.send(Update::Fix {
+                            fix,
+                            received: std::time::Instant::now(),
+                        });
                         wake();
                     }
                     // Untrusted means a read is in flight or about to be: the publication is real but

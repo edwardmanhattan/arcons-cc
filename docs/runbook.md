@@ -204,6 +204,10 @@ RSS flat after warm-up (default: no more than +10 MB), the socket came back and 
 the log (`INV-08`), and a clean stop. It exits non-zero with the reason, so it is a release check and not
 a ceremony.
 
+The same soak decides v0.1's last measurable promise — **a fix moves its marker within 1 s of arrival** —
+from the `fix_ms=` field the `socket` line carries: the worst wait any fix had for a frame. `-1` means no fix
+has arrived yet, and is skipped rather than counted as zero.
+
 Every wall run now logs `alive uptime_ms=… rss_mb=…` every 30 s from the socket thread. That line is the
 point: it says the **process** is alive even when the compositor is not drawing, which is exactly the case
 a soak has to survive. `rss_mb=-1` means the platform will not say — better than an invented number.
