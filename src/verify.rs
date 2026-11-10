@@ -538,6 +538,61 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 ));
             }
         }
+        "panes-named" => {
+            // **A pane with a name draws its plate; a pane without one draws nothing** (#83). The probe is
+            // `view::name_probe` — the same rectangle the plate is placed against — and the test is its
+            // plate colour, so a marker that happens to sit in the corner cannot be mistaken for a name.
+            let Some((origin_x, origin_y, panel_w, panel_h)) =
+                image.find_panel_rect(ink(tokens::panel()))
+            else {
+                failures.push("panes-named: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let state = scene::state_for("panes-named");
+            let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
+            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let plate = ink(tokens::name_plate());
+            for (index, (id, rect)) in rects.iter().enumerate() {
+                let probe = crate::ui::view::name_probe(*rect);
+                let (px, py) = (origin_x + f64::from(probe.x), origin_y + f64::from(probe.y));
+                let mut hits = 0;
+                let mut samples = 0;
+                for dy in 0..probe.h as i32 {
+                    for dx in 0..probe.w as i32 {
+                        let (x, y) = ((px as i32 + dx) as u32, (py as i32 + dy) as u32);
+                        if x >= image.width || y >= image.height {
+                            continue;
+                        }
+                        samples += 1;
+                        if near(image.at(x, y), plate, 6) {
+                            hits += 1;
+                        }
+                    }
+                }
+                let named = state
+                    .pane(*id)
+                    .and_then(|pane| pane.name.clone())
+                    .and_then(|name| crate::ui::shown_name(&name))
+                    .is_some();
+                let drawn = samples > 0 && hits * 2 >= samples;
+                match (named, drawn) {
+                    (true, true) => lines.push(format!(
+                        "panes-named: pane {index} draws its name plate at ({px:.0}, {py:.0})"
+                    )),
+                    (false, false) => lines.push(format!(
+                        "panes-named: pane {index} is unnamed and draws no plate"
+                    )),
+                    (true, false) => failures.push(format!(
+                        "panes-named: pane {index} has a name and no plate at ({px:.0}, {py:.0}) — \
+                         {hits}/{samples} samples are a plate"
+                    )),
+                    (false, true) => failures.push(format!(
+                        "panes-named: pane {index} has no name and a plate at ({px:.0}, {py:.0}) — a \
+                         name nobody typed"
+                    )),
+                }
+            }
+        }
         "panes-gaps" => {
             // **The gutter is real, and it is the gap the setting says** (#82). The panes are the only
             // `panel()`-coloured ink, so their union box is the picture inset by half a gap; inside it, a
@@ -780,7 +835,9 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 .menu
                 .map(|menu| crate::ui::menu_items(&state, menu.pane).len())
                 .unwrap_or(0);
-            let expected = if scene == "panes-menu" { 2 } else { 1 };
+            // One pane: the menu grows the wall and names this pane, and cannot close it. A tiled wall adds
+            // `Close pane` (#81, #83).
+            let expected = if scene == "panes-menu" { 3 } else { 2 };
             if rows != expected {
                 failures.push(format!(
                     "{scene}: the menu offers {rows} items, and this wall is the case for {expected}"
@@ -1174,7 +1231,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     );
 
     match scene {
-        "panes" | "panes-drag" | "panes-pan" | "panes-gaps" => {
+        "panes" | "panes-drag" | "panes-pan" | "panes-gaps" | "panes-named" => {
             // One marker per hull with a fix **in every pane**: a pane that drew nothing, or drew the
             // same set twice, is not a view.
             let expected = state

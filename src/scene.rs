@@ -223,6 +223,27 @@ pub const PANES_DRAGGED: f32 = 0.58;
 /// Where the `pane-menu` scene right-clicks: the menu's own point, in the pane's points.
 pub const MENU_AT: (f32, f32) = (300.0, 220.0);
 
+/// The `panes-named` scene (#83): three panes, two of them **named** — one short enough to read and one long
+/// enough to be cut — and one unnamed, so the capture says both "a name is drawn" and "no name draws
+/// nothing". The names are set the way the sheet sets them, through `shown_name`, so a name the wall would
+/// trim is drawn trimmed here too.
+fn panes_named(state: &mut State) {
+    panes(state);
+    let ids: Vec<crate::ui::ViewId> = state.pane_rects().into_iter().map(|(id, _)| id).collect();
+    if let Some(id) = ids.first().copied()
+        && let Some(pane) = state.pane_mut(id)
+    {
+        pane.name = crate::ui::shown_name("Surabaya approaches");
+    }
+    if let Some(id) = ids.get(2).copied()
+        && let Some(pane) = state.pane_mut(id)
+    {
+        pane.name =
+            crate::ui::shown_name("the strait at first light, and the traffic separation scheme");
+    }
+    // The middle pane is deliberately left unnamed.
+}
+
 /// The `panes-gaps` scene (#82): the same wall with **space between the panes** — the settings sheet's
 /// first setting, and the only one so far.
 ///
@@ -312,6 +333,7 @@ pub const SCENES: &[Scene] = &[
     ("panes-pan", panes_pan),
     ("panes-menu", panes_menu),
     ("panes-gaps", panes_gaps),
+    ("panes-named", panes_named),
     ("settings", settings_sheet),
     ("pane-menu", pane_menu),
 ];
@@ -397,6 +419,7 @@ mod tests {
                 "panes-pan",
                 "panes-menu",
                 "panes-gaps",
+                "panes-named",
                 "settings",
                 "pane-menu"
             ]

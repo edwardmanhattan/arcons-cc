@@ -118,7 +118,8 @@ into the cache: a capture then covers bytes → cache → marker, which is the r
 **The gate renders every scene the binary lists**, and the list comes from the binary:
 
 ```sh
-cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-drag · panes-pan · panes-menu · panes-gaps · settings · pane-menu
+cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-drag · panes-pan
+                                 # panes-menu · panes-gaps · panes-named · settings · pane-menu
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -140,6 +141,12 @@ invisible to every other kind of test: a gesture that reaches no handler, a pres
 element, a point measured in the element's coordinates when the layout asks in the viewport's (the bug: a
 press inside pane 2 was read as 2 pt from the *window's* left edge). With the drag dropped, the border
 returns to half and three assertions go red — measured, not assumed.
+
+`panes-named` is the same wall with **two panes named and one not** (#83): a short name, a name long enough to
+be cut, and a pane somebody never named. The assertion probes `ui::view::name_probe` — the rectangle the plate
+is placed against — for the plate's own colour, so a hull that happens to sit in the corner is not mistaken for
+a name; the unnamed pane is asserted to have **no** plate, which is the half that says a name is something
+somebody typed.
 
 `panes-gaps` is the same wall with **space between the panes** (#82): the settings sheet's first setting. The
 assertion finds the gutter the way an operator sees it — a run of the window's own background inside the

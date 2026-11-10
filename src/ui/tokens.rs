@@ -65,6 +65,14 @@ pub const PANE_HANDLE: (f32, f32) = (28.0, 4.0);
 /// A pane menu's own size, in points. A context menu is a **surface with a known box** on this wall, not
 /// an intrinsic one: the drag of a menu's corner is not a gesture the operator has, and a known box is
 /// what lets the menu be clamped inside the pane it was asked on without measuring the text first (#77).
+/// A pane's name: the plate's height, and the width after which the name is cut short — a cap, not a size,
+/// so a long name never runs across the pane it names (#83).
+pub const NAME_H: f32 = 22.0;
+pub const NAME_MAX_W: f32 = 220.0;
+/// How many characters a name may show. Past this it is truncated with an ellipsis that is drawn, rather
+/// than clipped by the plate at whatever glyph happens to fit.
+pub const NAME_MAX_CHARS: usize = 28;
+
 /// The pane menu's width, and the height of **one row**. The surface is as tall as it has items (#81):
 /// a menu `size()`d to one row clips the second one, which is the kind of wrong no golden notices until
 /// someone opens it on a wall.
@@ -154,6 +162,13 @@ pub fn clear() -> Color {
 /// preference *about* the picture and hiding it would hide what they are choosing for (#82).
 pub fn scrim() -> Color {
     oklcha(0.05, 0.0, 250.0, 0.72)
+}
+
+/// A pane's name plate (#83): the panel's colour lifted a step, so a label reads as chrome sitting on the
+/// picture rather than as something the map drew. Neutral, like the handle and the focus ring — the accent
+/// means "this is happening now" and a name is not news.
+pub fn name_plate() -> Color {
+    oklch(0.24, 0.018, 250.0)
 }
 
 /// The focused pane's edge: a **neutral** line, not the accent (#68).
