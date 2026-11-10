@@ -300,7 +300,7 @@ fn panes_gaps(state: &mut State) {
 /// what a reader needs to see is the sheet, where it sits and what it says.
 fn settings_sheet(state: &mut State) {
     load(state);
-    state.settings_open = true;
+    state.begin(crate::ui::Begin::Settings);
 }
 
 /// The `settings-dismiss` scene (#98): the same sheet, and **a press outside it** — from
@@ -318,10 +318,8 @@ fn settings_dismiss(state: &mut State) {
 /// tall enough for both.
 fn panes_menu(state: &mut State) {
     panes(state);
-    state.menu = Some(crate::ui::Menu {
-        pane: state.layout.focused(),
-        at: MENU_AT,
-    });
+    let pane = state.layout.focused();
+    state.begin(crate::ui::Begin::Menu { pane, at: MENU_AT });
 }
 
 /// The `pane-menu` scene (#77): **a wall with one pane and its menu open**.
@@ -331,10 +329,8 @@ fn panes_menu(state: &mut State) {
 /// The capture is the witness the pointer-driven bug could not have: no test right-clicks.
 fn pane_menu(state: &mut State) {
     load(state);
-    state.menu = Some(crate::ui::Menu {
-        pane: state.layout.focused(),
-        at: MENU_AT,
-    });
+    let pane = state.layout.focused();
+    state.begin(crate::ui::Begin::Menu { pane, at: MENU_AT });
 }
 
 /// The `panes-drag` scene (#70): a pane lifted, and the gap it will land in.
@@ -361,10 +357,10 @@ fn panes_drag(state: &mut State) {
     // that slot is wider than it is tall.
     let at = (rect.x + rect.w / 2.0, rect.y + rect.h * 0.08);
     let drop = state.layout.drop_for(viewport, dragged, at);
-    state.dragging = Some(crate::ui::PaneDrag {
+    state.begin(crate::ui::Begin::Lift(crate::ui::PaneDrag {
         pane: dragged,
         drop,
-    });
+    }));
     // The pane being lifted is the one the operator picked up, so it is the focused one.
     if drop.is_some() {
         state.layout.focus(dragged);
