@@ -105,6 +105,9 @@ pub struct State {
     /// Set when a layout pass changed something the drawing depends on (the panel's size, a pane's
     /// frame), so `poll` redraws once instead of every frame.
     pub layout_dirty: bool,
+    /// The border a drag has hold of (#69). Set on the press, cleared on the release: a gesture that
+    /// starts on a border moves that border and never pans the map under it.
+    pub resizing: Option<view::Border>,
     /// Whether the first map frame's camera has been reported. One log line per process, so a wall showing
     /// the wrong sea leaves a trace rather than a screenshot to argue with (`#56`).
     pub camera_reported: bool,
@@ -199,6 +202,7 @@ impl Default for State {
             panel: None,
             menu: None,
             layout_dirty: false,
+            resizing: None,
             live: None,
             backend: None,
             selected: None,
@@ -679,7 +683,12 @@ fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
         .size(rect.w.max(1.0), rect.h.max(1.0))
         .on_layout(move |state: &mut State, [_, _, width, height]| {
             pane_laid_out(state, id, width, height, scale)
-        });
+        })
+        // One gesture handler for a tiled pane, because **where the press landed decides what the drag
+        // is**: within a grip of a border it resizes, anywhere else it pans the map. Two handlers
+        // (one on the map, one on the border) would put the decision in Rune's hit order instead of in
+        // the arithmetic the panes are laid out with.
+        .on_drag(move |state: &mut State, drag, _tx| drag_pane(state, id, drag, scale));
     // The ring means "the keys are here rather than there", so a wall with one pane has none: the
     // panel's own hairline is that pane's frame, and a second edge drawn on it is a line that says
     // nothing.
@@ -1050,6 +1059,77 @@ fn drag_map(state: &mut State, id: ViewId, drag: &mut rune::Drag) {
             // operator is looking at where it ended.
             if let Some(map) = state.pane(id).and_then(|pane| pane.map.as_ref()) {
                 map.render_now();
+            }
+        }
+    }
+}
+
+/// A drag on a tiled pane: a border grip resizes the split, anywhere else pans that pane's map (#69).
+#[cfg(feature = "map")]
+fn drag_pane(state: &mut State, id: ViewId, drag: &mut rune::Drag, scale: f32) {
+    let viewport = state.pane_viewport();
+    match drag.phase {
+        rune::Phase::Down => {
+            let at = (drag.start_x, drag.start_y);
+            state.resizing = state.layout.border_at(viewport, at, tokens::PANE_GRIP);
+            if state.resizing.is_none() {
+                drag_map(state, id, drag);
+            }
+        }
+        rune::Phase::Move => {
+            if let Some(border) = state.resizing {
+                // The pointer's coordinate along the border's own axis, in the viewport's points. A
+                // point, not a delta: the ratio follows the line the operator is holding, and a
+                // gesture that leaves the pane and comes back lands where the pointer is.
+                let pointer = match border.dir {
+                    Dir::Horizontal => drag.x,
+                    Dir::Vertical => drag.y,
+                };
+                if state.layout.set_ratio(&border, border.ratio_for(pointer)) {
+                    state.layout_dirty = true;
+                }
+                let _ = scale;
+            } else {
+                drag_map(state, id, drag);
+            }
+        }
+        rune::Phase::Up => {
+            if state.resizing.take().is_some() {
+                // Nothing to render: the panes are elements, not pixels. The redraw is the layout
+                // change, and `poll` will see `layout_dirty`.
+                state.layout_dirty = true;
+            } else {
+                drag_map(state, id, drag);
+            }
+        }
+    }
+}
+
+/// Without the engine there is still something to drag: the border between two panes (#69).
+#[cfg(not(feature = "map"))]
+fn drag_pane(state: &mut State, _id: ViewId, drag: &mut rune::Drag, _scale: f32) {
+    let viewport = state.pane_viewport();
+    match drag.phase {
+        rune::Phase::Down => {
+            state.resizing =
+                state
+                    .layout
+                    .border_at(viewport, (drag.start_x, drag.start_y), tokens::PANE_GRIP);
+        }
+        rune::Phase::Move => {
+            if let Some(border) = state.resizing {
+                let pointer = match border.dir {
+                    Dir::Horizontal => drag.x,
+                    Dir::Vertical => drag.y,
+                };
+                if state.layout.set_ratio(&border, border.ratio_for(pointer)) {
+                    state.layout_dirty = true;
+                }
+            }
+        }
+        rune::Phase::Up => {
+            if state.resizing.take().is_some() {
+                state.layout_dirty = true;
             }
         }
     }
