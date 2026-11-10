@@ -126,6 +126,9 @@ scripts/verify.sh                # renders and asserts each one
 rectangle, and the focused pane marked by its edge. Its assertion projects each hull against the pane
 it is drawn in, using the same `Layout::rects` the view lays the panes out with.
 
+A tiled wall also says so in its header (`40 units · panes=3`) and in its log (`pane_frames=[12, 3, 3]`): a
+wall quietly drawing three of four panes is a line in a file, not a report (#71).
+
 `panes-drag` is the same wall with a pane **lifted** (#70): one pane dimmed, and the gap it will land in
 drawn from `Layout::preview`. The assertion checks the gap's rectangle against that preview — the same
 function the release calls — so a preview that opened somewhere the pane does not land fails here.

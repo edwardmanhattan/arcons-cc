@@ -11,6 +11,7 @@
 //! - **Nothing renders that nobody looks at.** Idle re-renders run at 4 Hz so appearance changes
 //!   (labels settling, a tile arriving) still land, and a hidden window renders nothing at all.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -21,6 +22,14 @@ use crate::map::geometry::{Camera, Rendered};
 /// operator is still looking at it, slow enough that a wall left alone costs almost nothing.
 pub const IDLE_INTERVAL: Duration = Duration::from_millis(250);
 
+/// How often an **unfocused** pane re-renders: 1 Hz (#71).
+///
+/// A pane nobody is working in still needs the occasional frame — labels settle, a tile arrives — but it
+/// is a quarter of the focused pane's rate on purpose: four panes at 4 Hz each is four map renders a
+/// second, and `docs/research/multi-view.md` measured one at 30 ms. The operator's pane keeps its
+/// cadence; the others are a map that is *there*, not a map that is *live*.
+pub const UNFOCUSED_INTERVAL: Duration = Duration::from_secs(1);
+
 /// What the view loop asks the map thread for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Request {
@@ -30,6 +39,9 @@ pub enum Request {
     Resize(u32, u32),
     /// The window was occluded or shown. A hidden window renders nothing.
     Visible(bool),
+    /// How often to re-render when nothing is asked for: the focused pane's 4 Hz, the other panes' 1 Hz
+    /// (#71). Changing it does not render anything by itself.
+    Cadence(Duration),
     /// Stop the thread; used by the headless probe and by tests.
     Stop,
 }
@@ -43,6 +55,10 @@ pub struct MapThread {
     pixels: rune::Pixels,
     rendered: Arc<Mutex<Option<Rendered>>>,
     error: Arc<Mutex<Option<String>>>,
+    /// How many frames this thread has rendered, including the ones nobody asked for — the idle ticks.
+    /// The number a wall's log prints per pane (#71): a pane whose counter has stopped is a pane that is
+    /// not drawing, which is not the same thing as a pane whose camera has not moved.
+    frames: Arc<AtomicU64>,
 }
 
 impl MapThread {
@@ -59,6 +75,8 @@ impl MapThread {
         let thread_pixels = pixels.clone();
         let thread_rendered = Arc::clone(&rendered);
         let thread_error = Arc::clone(&error);
+        let frames = Arc::new(AtomicU64::new(0));
+        let thread_frames = Arc::clone(&frames);
         let join = std::thread::Builder::new()
             .name("arcons-map".to_string())
             .spawn(move || {
@@ -67,6 +85,7 @@ impl MapThread {
                     thread_pixels,
                     thread_rendered,
                     thread_error,
+                    thread_frames,
                     camera,
                     size,
                 )
@@ -79,12 +98,18 @@ impl MapThread {
             pixels,
             rendered,
             error,
+            frames,
         }
     }
 
     /// The pixels to draw with `El::pixels`.
     pub fn pixels(&self) -> &rune::Pixels {
         &self.pixels
+    }
+
+    /// How many frames this pane has drawn, idle ticks included (#71).
+    pub fn frames(&self) -> u64 {
+        self.frames.load(Ordering::SeqCst)
     }
 
     /// The camera and size of the frame currently on screen — what markers must project against
@@ -120,6 +145,12 @@ impl MapThread {
     pub fn render_now(&self) {
         let _ = self.requests.send(Request::Visible(true));
     }
+
+    /// Change how often this pane re-renders when nothing is asked of it (#71): the focused pane at
+    /// [`IDLE_INTERVAL`], the others at [`UNFOCUSED_INTERVAL`].
+    pub fn set_cadence(&self, interval: Duration) {
+        let _ = self.requests.send(Request::Cadence(interval));
+    }
 }
 
 impl Drop for MapThread {
@@ -140,6 +171,7 @@ fn run(
     pixels: rune::Pixels,
     rendered: Arc<Mutex<Option<Rendered>>>,
     error: Arc<Mutex<Option<String>>>,
+    frames: Arc<AtomicU64>,
     camera: Camera,
     size: (u32, u32),
 ) {
@@ -160,12 +192,13 @@ fn run(
     let mut camera = camera;
     let mut visible = true;
     let mut size = size;
+    let mut cadence = IDLE_INTERVAL;
 
     loop {
-        match requests.recv_timeout(IDLE_INTERVAL) {
+        match requests.recv_timeout(cadence) {
             Ok(Request::Stop) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
             Ok(first) => {
-                if !apply(first, &mut camera, &mut size, &mut visible) {
+                if !apply(first, &mut camera, &mut size, &mut visible, &mut cadence) {
                     return;
                 }
                 // Drain what accumulated while we were rendering: the newest camera wins, and the
@@ -173,7 +206,7 @@ fn run(
                 loop {
                     match requests.try_recv() {
                         Ok(next) => {
-                            if !apply(next, &mut camera, &mut size, &mut visible) {
+                            if !apply(next, &mut camera, &mut size, &mut visible, &mut cadence) {
                                 return;
                             }
                         }
@@ -204,6 +237,7 @@ fn run(
         }
         map.set_camera(camera);
         let rgba = map.frame_rgba();
+        frames.fetch_add(1, Ordering::SeqCst);
         let (width, height) = map.dims();
         if rgba.len() != (width as usize) * (height as usize) * 4 {
             *error.lock().expect("the error slot is not poisoned") = Some(format!(
@@ -223,11 +257,18 @@ fn run(
 }
 
 /// Apply one request. Returns `false` when the thread should stop.
-fn apply(request: Request, camera: &mut Camera, size: &mut (u32, u32), visible: &mut bool) -> bool {
+fn apply(
+    request: Request,
+    camera: &mut Camera,
+    size: &mut (u32, u32),
+    visible: &mut bool,
+    cadence: &mut Duration,
+) -> bool {
     match request {
         Request::Camera(next) => *camera = next,
         Request::Resize(width, height) => *size = (width.max(1), height.max(1)),
         Request::Visible(next) => *visible = next,
+        Request::Cadence(interval) => *cadence = interval.max(Duration::from_millis(20)),
         Request::Stop => return false,
     }
     true
@@ -246,8 +287,9 @@ mod tests {
             let mut camera = Camera::START;
             let mut size = (10, 10);
             let mut visible = true;
+            let mut cadence = IDLE_INTERVAL;
             match incoming.recv_timeout(Duration::from_secs(2)) {
-                Ok(request) => apply(request, &mut camera, &mut size, &mut visible),
+                Ok(request) => apply(request, &mut camera, &mut size, &mut visible, &mut cadence),
                 Err(_) => false,
             }
         });
@@ -263,12 +305,14 @@ mod tests {
     fn the_last_wins_when_requests_queue_up() {
         // Coalescing: a drag sends one camera per frame, and the map must render the newest.
         let (mut camera, mut size, mut visible) = (Camera::START, (800, 600), true);
+        let mut cadence = IDLE_INTERVAL;
         for zoom in 11..=18 {
             assert!(apply(
                 Request::Camera(Camera::new((0.0, 0.0), f64::from(zoom))),
                 &mut camera,
                 &mut size,
-                &mut visible
+                &mut visible,
+                &mut cadence
             ));
         }
         assert_eq!(
@@ -279,11 +323,41 @@ mod tests {
             Request::Visible(false),
             &mut camera,
             &mut size,
-            &mut visible
+            &mut visible,
+            &mut cadence
         ));
         assert!(!visible, "a hidden window renders nothing");
+        // A pane that loses focus slows down rather than stopping (#71), and can speed back up.
+        assert!(apply(
+            Request::Cadence(UNFOCUSED_INTERVAL),
+            &mut camera,
+            &mut size,
+            &mut visible,
+            &mut cadence
+        ));
+        assert_eq!(
+            cadence, UNFOCUSED_INTERVAL,
+            "an unfocused pane idles at 1 Hz"
+        );
+        assert!(apply(
+            Request::Cadence(Duration::ZERO),
+            &mut camera,
+            &mut size,
+            &mut visible,
+            &mut cadence
+        ));
         assert!(
-            !apply(Request::Stop, &mut camera, &mut size, &mut visible),
+            cadence >= Duration::from_millis(20),
+            "a cadence of zero is a spin loop, so the floor is a frame"
+        );
+        assert!(
+            !apply(
+                Request::Stop,
+                &mut camera,
+                &mut size,
+                &mut visible,
+                &mut cadence
+            ),
             "stop stops"
         );
     }

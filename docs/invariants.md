@@ -19,7 +19,7 @@ tickets and commits quote these. Retiring one keeps its number and says `retired
 | **INV-09** | After a reconnect, no marker is trusted until a picture read completes. | #4 | model-based actor test over disconnect sequences |
 | **INV-10** | One card, one selection; the card stays inside the window. | #7 | headless scene + assertion |
 | **INV-11** | Same fixtures + same scene + same virtual clock ⇒ byte-identical PNG. | #9 | render twice, compare bytes |
-| **INV-12** | Camera pan/zoom stays within the frame-CPU budget at 1080p with 200 units. | #6, #9 | budget test, fails with the measured number |
+| **INV-12** | Camera pan/zoom stays within the frame-CPU budget at 1080p with 200 units — and a tiled wall's four panes, with their cadence, stay under the frame clock. | #6, #9, #71 | budget tests, each failing with the measured number |
 
 ## The detail behind each
 
@@ -95,6 +95,13 @@ Fixtures in, virtual clock, same scene, same bytes. Without this, goldens are no
 
 The number lives in one place (`ui/tokens.rs` or `tests/budget.rs`), and the failure prints the measured
 value next to the limit.
+
+**Multi View (#71) restates it for a tiled wall:** four panes at 960×540 with 200 markers each, one of them
+panning, are **10.2 ms** on the reference machine (one pane: 3.7 ms) against a limit of **14 ms** — a third
+above the measurement and under the 16.6 ms frame clock, because a budget that allows a missed frame is not
+one. The cadence the test names is the wall's: the focused pane's map idles at 4 Hz, every other pane's at
+1 Hz. A tiled wall rebuilds every pane's marker layer when any pane's frame changes, which is why four panes
+cost ~2.7× one and not 4×.
 
 The frame-CPU number is the **reference machine's** (this laptop), and the test says so by measuring a fixed
 reference workload in the same run and dividing: 8 ms is the wall's budget, and how slow the machine running
