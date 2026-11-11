@@ -845,6 +845,62 @@ fn pane_tree_zoom(state: &mut State) {
     }
 }
 
+/// The water the `installations` scene looks at: the same recorded operational map the objects scene
+/// uses, so the two layers can be read against the same coast.
+pub const INSTALLATIONS_CENTRE: (f64, f64) = (-5.9835, 106.6636);
+/// Two zooms on that water, so a mark drawn from the wall's camera instead of its pane's lands tens of
+/// pixels away in the neighbour — the falsifier #109 names.
+pub const INSTALLATIONS_ZOOMS: (f64, f64) = (9.6, 8.5);
+/// The facility the scene selects in its focused pane: the naval base.
+pub const INSTALLATIONS_BASE: i64 = 2;
+
+/// `fixtures/scenes/installations.json` — the scene's facilities, wire-shaped. Derived from the
+/// schema and the recorded operational map's water: a pier, a base, a radar station, and **one row
+/// with no position**, which the layer must leave off the map. The recorded `/installations` list is
+/// empty, so there is no recording to reuse.
+pub fn installation_scene_fixture() -> Result<Vec<Installation>, String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/scenes/installations.json");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let envelope: Envelope<Vec<Installation>> = serde_json::from_str(&text).map_err(|error| {
+        format!(
+            "{} is not the installations envelope: {error}",
+            path.display()
+        )
+    })?;
+    Ok(envelope.data)
+}
+
+/// The `installations` scene (#109): **a pier, a base and a radar station on the map**, on two panes
+/// at two zooms, with the base selected in the focused pane.
+///
+/// The types and the rows arrive through the replies a wall takes (`ui::apply_reply`), so the capture
+/// covers wire data → cache → mark. The selection is made with `installations::press`, the same
+/// function a mark's press calls, so the card is the one a hand would open.
+fn installations_layer(state: &mut State) {
+    load(state);
+    if let Ok(types) = installation_types_fixture() {
+        crate::ui::apply_reply(state, &crate::data::Reply::InstallationTypes(Ok(types)));
+    }
+    match installation_scene_fixture() {
+        Ok(rows) => {
+            crate::ui::apply_reply(state, &crate::data::Reply::Installations(Ok(rows)));
+        }
+        Err(error) => {
+            eprintln!("arcons-cc: scene: {error}");
+            return;
+        }
+    }
+    let first = state.layout.focused();
+    state.set_camera(Camera::new(INSTALLATIONS_CENTRE, INSTALLATIONS_ZOOMS.0));
+    state.split_pane(
+        first,
+        Camera::new(INSTALLATIONS_CENTRE, INSTALLATIONS_ZOOMS.1),
+    );
+    state.layout.focus(first);
+    crate::ui::installations::press(state, first, INSTALLATIONS_BASE);
+}
+
 /// The scene registry, handed to `AppSpec::scenes`.
 pub const SCENES: &[Scene] = &[
     ("empty", empty),
@@ -869,6 +925,9 @@ pub const SCENES: &[Scene] = &[
     // The per-pane filter (#112): two panes on the same water, one hiding a domain — and the panel
     // that lists the backend's own vocabulary.
     ("panes-filter", panes_filter),
+    // The places, not the hulls (#109): a pier, a base and a radar station on two panes at two zooms,
+    // with a facility card open in the focused pane.
+    ("installations", installations_layer),
     ("settings", settings_sheet),
     ("settings-dismiss", settings_dismiss),
     ("pane-menu", pane_menu),
@@ -979,6 +1038,8 @@ mod tests {
                 "objects",
                 // The per-pane filter (#112): the same water in two panes, one hiding a domain.
                 "panes-filter",
+                // The places, not the hulls (#109): one mark per located facility, with a card.
+                "installations",
                 "settings",
                 // The one scene whose point is that something is **not** there: the sheet, after a press
                 // outside it (#98).
@@ -1172,6 +1233,67 @@ mod tests {
                 "one zoom in both panes"
             );
         }
+
+        // **The places, not the hulls** (#109): four facilities in the cache, one of them unlocated,
+        // three marks per pane, and the base's card in the focused pane only. Two panes at two zooms,
+        // so a mark drawn from the wall's camera is out in the neighbour.
+        let facilities = state_for("installations");
+        assert_eq!(facilities.installations.len(), 4, "the scene's facilities");
+        assert_eq!(
+            facilities.installation_types.len(),
+            5,
+            "the recorded facility vocabulary"
+        );
+        assert!(
+            facilities
+                .installations
+                .iter()
+                .any(|row| row.coordinates().is_none()),
+            "one row has no position, which is a real state and not a mark"
+        );
+        assert_eq!(facilities.panes.len(), 2, "two zooms on one water");
+        let located = facilities
+            .installations
+            .iter()
+            .filter(|row| row.coordinates().is_some())
+            .count();
+        for (id, rect) in facilities.pane_rects() {
+            let pane = facilities.pane(id).expect("the pane");
+            let frame = crate::ui::view::synthetic_frame(pane.camera, rect, 1.0);
+            let placed = crate::ui::installations::place(
+                &facilities.installations,
+                &facilities.installation_types,
+                &facilities.manifest,
+                &frame,
+                &pane.view.filter,
+            );
+            assert_eq!(
+                placed.len(),
+                located,
+                "one mark per located facility in pane {id}"
+            );
+            assert!(
+                placed.iter().all(|mark| mark.x != 0.0 || mark.y != 0.0),
+                "no facility is drawn at the origin"
+            );
+        }
+        let first = facilities.layout.focused();
+        let second = facilities
+            .pane_rects()
+            .into_iter()
+            .map(|(id, _)| id)
+            .find(|id| *id != first)
+            .expect("a neighbour");
+        assert_eq!(
+            facilities.installation_in(first),
+            Some(INSTALLATIONS_BASE),
+            "the scene selects the base in the focused pane"
+        );
+        assert_eq!(
+            facilities.installation_in(second),
+            None,
+            "and no facility in its neighbour"
+        );
 
         // The chain of command (#116): a tree pane beside a map pane, one structure's forest under the
         // supreme command. The forest is a forest — two roots — and the supreme command is vacant on

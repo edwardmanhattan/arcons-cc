@@ -21,6 +21,7 @@ up in the wrong ocean. This file defines the vocabulary; the code uses it exactl
 | **Pane** | One rectangle of the wall. It is a **map** (its own camera, map thread and frame) or a **tree** (the chain of command, which has its own camera but no frame and projects nothing). | "window", "viewport", "split" |
 | **Pane view** | What *that* pane is looking at: its selection, its card, its symbol-or-picture range, and its filter. `PaneView`. | the wall's selection — there is no such thing |
 | **Tree camera** | Where a tree pane's own points land in the pane: `pane = tree * zoom + pan`, and whether a hand has taken it (until it has, a resize re-fits). | the map's camera |
+| **Installation** | A facility — a posko, a base, a dock, a radar station — at one coordinate. Not a Unit: no hull number, no class, no fix chain, no staleness judgement. | "unit", "vessel", "ship" |
 | **Post** | One box of a standing structure: what the structure calls it (`name`), the position that runs it (`position_title`), and the person appointed (`commander`, absent when vacant). A post with an `id_unit` **is** a hull. | "node" in the domain, "unit" when it has no hull |
 
 ## The distinctions that decide code

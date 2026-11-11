@@ -627,6 +627,148 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 expected.len()
             ));
         }
+        "installations" => {
+            // **The places, not the hulls** (#109). Two panes on the same water at two zooms, so a mark
+            // drawn from the wall's camera instead of its pane's is tens of pixels out in the
+            // neighbour; one mark per **located** facility, in the facility's own ink (not a hull's
+            // accent, not an object's diamond); the selected facility ringed in the focused pane only.
+            let Some((origin_x, origin_y, panel_w, panel_h)) =
+                image.find_panel_rect(ink(tokens::panel()))
+            else {
+                failures.push("installations: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let state = scene::state_for("installations");
+            let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
+            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            if rects.len() != 2 {
+                failures.push(format!(
+                    "installations: {} panes for a two-pane scene",
+                    rects.len()
+                ));
+                return Err(failures);
+            }
+            let located: Vec<crate::data::types::Installation> = state
+                .installations
+                .iter()
+                .filter(|row| row.coordinates().is_some())
+                .cloned()
+                .collect();
+            let unlocated = state.installations.len() - located.len();
+            let facility = ink(tokens::facility_ink());
+            let selected = state.installation_in(state.layout.focused());
+            for (index, (id, rect)) in rects.iter().enumerate() {
+                let Some(pane) = state.pane(*id) else {
+                    failures.push(format!("installations: pane {id} has no state"));
+                    continue;
+                };
+                let frame = crate::ui::view::synthetic_frame(pane.camera, *rect, 1.0);
+                let placed = crate::ui::installations::place(
+                    &state.installations,
+                    &state.installation_types,
+                    &state.manifest,
+                    &frame,
+                    &pane.view.filter,
+                );
+                if placed.len() != located.len() {
+                    failures.push(format!(
+                        "installations: pane {index} draws {} marks for {} located facilities (and \
+                         {unlocated} with no position, which is no mark)",
+                        placed.len(),
+                        located.len()
+                    ));
+                    continue;
+                }
+                for mark in &placed {
+                    let x = origin_x + f64::from(rect.x) + mark.x;
+                    let y = origin_y + f64::from(rect.y) + mark.y;
+                    match image.nearest_colour(x, y, facility, 6.0) {
+                        Some(distance) => lines.push(format!(
+                            "installations: pane {index}'s {} within {distance:.1} px of its \
+                             projection",
+                            mark.name
+                        )),
+                        None => failures.push(format!(
+                            "installations: no facility ink within 6 px of ({x:.0}, {y:.0}) for {} — \
+                             a facility drawn as a hull symbol, from the wall's camera (INV-04), or not \
+                             at all",
+                            mark.name
+                        )),
+                    }
+                }
+                // **The selection is the pane's** (#109): the focused pane rings its facility, and the
+                // neighbour rings nothing. A wall-wide ring would be #99's bug on a third card.
+                let ring = ink(tokens::focus_edge());
+                let focused = state.layout.focused() == *id;
+                for mark in &placed {
+                    let x = origin_x + f64::from(rect.x) + mark.x;
+                    let y = origin_y + f64::from(rect.y) + mark.y;
+                    let edge = x - f64::from(crate::ui::installations::MARK) / 2.0 + 1.0;
+                    let ringed = image.nearest_colour(edge, y, ring, 8.0).is_some();
+                    if focused && selected == Some(mark.id) {
+                        if !ringed {
+                            failures.push(format!(
+                                "installations: the selected facility {} is not ringed at \
+                                 ({edge:.0}, {y:.0}) in pane {index}",
+                                mark.name
+                            ));
+                        }
+                    } else if !focused && ringed {
+                        failures.push(format!(
+                            "installations: pane {index} rings {} and nothing there is selected — \
+                             the selection is the pane's",
+                            mark.name
+                        ));
+                    }
+                }
+            }
+            // **The card** (#109): the selected facility's name, in the card's own top-left, where
+            // `card_placement` puts it. In this scene that region is water when no card is drawn.
+            if let Some(selected) = selected
+                && let Some((id, rect)) = rects.first()
+                && let Some(mark) = crate::ui::installations::place(
+                    &state.installations,
+                    &state.installation_types,
+                    &state.manifest,
+                    &crate::ui::view::synthetic_frame(
+                        state.pane(*id).expect("the focused pane").camera,
+                        *rect,
+                        1.0,
+                    ),
+                    &state.pane(*id).expect("the focused pane").view.filter,
+                )
+                .into_iter()
+                .find(|mark| mark.id == selected)
+            {
+                let placement = crate::ui::installations::card_placement(
+                    (mark.x, mark.y),
+                    (f64::from(rect.w), f64::from(rect.h)),
+                );
+                let probe = crate::ui::Rect {
+                    x: origin_x as f32 + rect.x + placement.x as f32 + tokens::PAD,
+                    y: origin_y as f32 + rect.y + placement.y as f32 + tokens::PAD,
+                    w: crate::units::card::WIDTH as f32 - tokens::PAD * 2.0,
+                    h: tokens::TITLE.size + tokens::PAD,
+                };
+                if !rect_has(image, probe, ink(tokens::ink()), 40) {
+                    failures.push(format!(
+                        "installations: no name ink in the facility card at ({:.0}, {:.0}) — a \
+                         selected facility draws what the row carries",
+                        probe.x, probe.y
+                    ));
+                } else {
+                    lines.push(
+                        "installations: the selected facility's card draws its name".to_string(),
+                    );
+                }
+            }
+            lines.push(format!(
+                "installations: {} located facilities marked in two panes, {unlocated} unlocated and \
+                 unmarked, {} selected in one",
+                located.len(),
+                usize::from(selected.is_some())
+            ));
+        }
         "panes-filter" => {
             // **The filter is the pane's** (#112). Two panes hold the same camera, so the *only*
             // difference their pictures may show is the filter: pane A hides the buoy's domain and pane
@@ -2766,6 +2908,72 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
         if failures.is_empty() {
             lines.push(format!(
                 "objects: {expected} placements in {} panes",
+                rects.len()
+            ));
+        }
+    }
+
+    // **The places, not the hulls** (#109), in the structure as well as in the pixels: one mark per
+    // located facility in each pane, the unlocated row absent, and the facility selection in the
+    // focused pane only.
+    if scene == "installations" {
+        let located = state
+            .installations
+            .iter()
+            .filter(|row| row.coordinates().is_some())
+            .count();
+        let rects = crate::ui::view::panes_on(
+            &state.layout,
+            state.pane_viewport(),
+            state.settings.pane_gap,
+        );
+        if rects.len() != 2 {
+            failures.push(format!(
+                "installations: {} panes for a scene that is the case for two",
+                rects.len()
+            ));
+        }
+        for (id, rect) in &rects {
+            let Some(pane) = state.pane(*id) else {
+                continue;
+            };
+            let frame = crate::ui::view::synthetic_frame(pane.camera, *rect, 1.0);
+            let placed = crate::ui::installations::place(
+                &state.installations,
+                &state.installation_types,
+                &state.manifest,
+                &frame,
+                &pane.view.filter,
+            );
+            if placed.len() != located {
+                failures.push(format!(
+                    "installations: pane {id} draws {} marks for {located} located facilities",
+                    placed.len()
+                ));
+            }
+        }
+        let focused = state.layout.focused();
+        let neighbour = state
+            .pane_rects()
+            .into_iter()
+            .map(|(id, _)| id)
+            .find(|id| *id != focused);
+        if state.installation_in(focused).is_none() {
+            failures.push(
+                "installations: the focused pane has no facility selected, and the scene selects one"
+                    .to_string(),
+            );
+        }
+        if neighbour.is_some_and(|id| state.installation_in(id).is_some()) {
+            failures.push(
+                "installations: a facility is selected in the neighbour too — the selection is the \
+                 pane's (#99), and a card in every pane is the wall-wide bug in a new costume"
+                    .to_string(),
+            );
+        }
+        if failures.is_empty() {
+            lines.push(format!(
+                "installations: {located} located facilities marked in {} panes, one selected",
                 rects.len()
             ));
         }
