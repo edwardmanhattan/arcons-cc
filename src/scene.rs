@@ -359,6 +359,20 @@ fn panes_gaps(state: &mut State) {
     state.settings.pane_gap = crate::ui::tokens::GAP;
 }
 
+/// The `panes-gap-resize` scene (#114): the gapped wall left at **half**, and the border dragged to
+/// `PANES_DRAGGED` by a pointer that lands in the gutter.
+///
+/// This is the proof `panes-gaps` cannot make. There the split is set in code, so the picture is right
+/// whether or not anything is grabbable; here `fixtures/scripts/panes-gap-resize.json` presses the middle
+/// of the gap and drags it to 58%, and the capture must show the split `panes-gaps` draws — same gap, same
+/// wall. If the gutter is drawn under the panes, or not at all, the press reaches nothing and the capture
+/// stays at 50/50.
+fn panes_gap_resize(state: &mut State) {
+    // **No border drag in code**: the pointer is the only thing that may move the split here.
+    panes_wall(state, false);
+    state.settings.pane_gap = crate::ui::tokens::GAP;
+}
+
 /// The `settings` scene (#82): a wall with its **settings sheet open**, which is the only picture of the
 /// one modal surface on a wall. It is a single pane so the sheet covers the picture rather than a tiling:
 /// what a reader needs to see is the sheet, where it sits and what it says.
@@ -446,6 +460,7 @@ pub const SCENES: &[Scene] = &[
     ("panes-pan", panes_pan),
     ("panes-menu", panes_menu),
     ("panes-gaps", panes_gaps),
+    ("panes-gap-resize", panes_gap_resize),
     ("panes-named", panes_named),
     ("panes-max", panes_max),
     ("panes-cards", panes_cards),
@@ -536,6 +551,9 @@ mod tests {
                 "panes-pan",
                 "panes-menu",
                 "panes-gaps",
+                // The gapped wall moved by a **pointer in the gutter**, so the gap is the handle and
+                // not just the look (#114).
+                "panes-gap-resize",
                 "panes-named",
                 "panes-max",
                 "panes-cards",

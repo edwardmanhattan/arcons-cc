@@ -1454,6 +1454,11 @@ fn picture(state: &State, scale: f32) -> El {
         }
         body
     };
+    // **The gutters go over the panes and under everything held** (#114): a press in the space between
+    // two panes is the resize it looks like, while a pane in the air, a full-size pane and a menu keep
+    // the top of the picture — a drag in the air is still a lift, and a menu still dismisses on the
+    // press that starts the next thing.
+    body = gutters(state, body);
     // The pane in the air and the context menu are drawn last, over every pane — **and over the one-pane wall too**:
     // "Focus on new pane" lives in that menu, and a wall with one pane is exactly the wall that needs it
     // to get a second one. Drawing the menu only once there were panes made the first split impossible
@@ -1461,6 +1466,46 @@ fn picture(state: &State, scale: f32) -> El {
     body = ghost(state, scale, body);
     body = maximised(state, scale, body);
     body = menu_view(state, scale, body);
+    body
+}
+
+/// One element per border, over the space the panes leave between them (#114).
+///
+/// The gutter is not a pane's, so no pane's `on_drag` can reach it: with a gap, `panes_on` insets every
+/// pane and the middle of the gap belongs to the picture element, which has no handler. These elements are
+/// that handler, and their geometry is [`view::Border::gutter`] — the same `at`, `span` and split extent
+/// the press and the ratio use, so what the eye sees between two panes is what the hand grabs.
+///
+/// **Nothing is drawn**: the gutter's colour is the picture's own background, and a fill here would be a
+/// second copy of the look. The element exists to be hit, and its cursor says it is grabbable.
+fn gutters(state: &State, body: El) -> El {
+    let gap = state.settings.pane_gap;
+    // At gap 0 the panes meet: the gutter has no width and the in-pane grip is the target, which is the
+    // wall every golden before #82 renders. Adding zero-area elements there would only shadow panes.
+    if gap <= 0.0 {
+        return body;
+    }
+    let mut body = body;
+    for border in state.layout.borders(state.pane_viewport()) {
+        let rect = border.gutter(gap);
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            continue;
+        }
+        let cursor = match border.dir {
+            Dir::Horizontal => rune::Cursor::ResizeColumn,
+            Dir::Vertical => rune::Cursor::ResizeRow,
+        };
+        body = body.child(
+            el()
+                // The pair names the split exactly, and a split's gutter is one element.
+                .key(format!("gutter-{}-{}", border.a, border.b))
+                .absolute(rect.x, rect.y)
+                .size(rect.w, rect.h)
+                .fill(tokens::clear())
+                .cursor(cursor)
+                .on_drag(move |state: &mut State, drag, _tx| drag_gutter(state, rect, drag)),
+        );
+    }
     body
 }
 
@@ -2345,6 +2390,41 @@ fn begin_resize(state: &mut State, viewport: crate::map::geometry::Viewport, at:
     state.begin(Begin::Resize(border));
 }
 
+/// A drag that began **in the gutter** (#114): the same `begin_resize` / `set_ratio` / `end` the pane's
+/// own border grip uses (#69), reached from an element that exists only because the gap does.
+///
+/// `rect` is the gutter element's rectangle, and its origin is the offset from the pointer's own points
+/// to the viewport's — the same conversion `drag_pane` makes for a pane (#80). Every question the layout
+/// answers (`border_at`, `ratio_for`) is asked in the viewport's points.
+fn drag_gutter(state: &mut State, rect: Rect, drag: &mut rune::Drag) {
+    let viewport = state.pane_viewport();
+    match drag.phase {
+        rune::Phase::Down => {
+            let at = view::viewport_point(rect, (drag.start_x, drag.start_y));
+            begin_resize(state, viewport, at);
+        }
+        rune::Phase::Move => {
+            let Some(border) = state.resizing() else {
+                return;
+            };
+            // A point, not a delta: the ratio follows the line the operator is holding, and a gesture
+            // that leaves the gutter and comes back lands where the pointer is.
+            let pointer = view::viewport_point(rect, (drag.x, drag.y));
+            if state
+                .layout
+                .set_ratio(&border, border.ratio_for(border.axis_of(pointer)))
+            {
+                state.layout_dirty = true;
+            }
+        }
+        rune::Phase::Up => {
+            if state.resizing().is_some() {
+                state.end();
+            }
+        }
+    }
+}
+
 /// Without the engine there is still something to drag: the border between two panes (#69).
 #[cfg(not(feature = "map"))]
 fn drag_pane(state: &mut State, _id: ViewId, rect: Rect, drag: &mut rune::Drag, _scale: f32) {
@@ -2376,9 +2456,9 @@ fn drag_pane(state: &mut State, _id: ViewId, rect: Rect, drag: &mut rune::Drag, 
 
 /// How the window opens: sized from the command line, or covering the primary output.
 ///
-/// Rune at this rev exposes no fullscreen API, so `--fullscreen` is the closest honest thing —
-/// borderless, at the primary output's own size and position. #8 revisits it once the wall's output
-/// is chosen, and records what it decided.
+/// Rune exposes fullscreen as a runtime toggle (`Tx::toggle_full_screen`), not as a startup option,
+/// so `--fullscreen` is still the closest honest thing — borderless, at the primary output's own
+/// size and position. #8 decides when the wall toggles the real one, and records what it decided.
 fn window_options(window: config::Window, displays: &[rune::Display]) -> rune::WindowOptions {
     let options = rune::WindowOptions {
         min_size: Some(tokens::MIN_WINDOW),
