@@ -989,9 +989,11 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             }
         }
         "panes-named" => {
-            // **A pane with a name draws its plate; a pane without one draws nothing** (#83). The probe is
-            // `view::name_probe` — the same rectangle the plate is placed against — and the test is its
-            // plate colour, so a marker that happens to sit in the corner cannot be mistaken for a name.
+            // **Every pane has a title** (#113). The probe is `view::name_probe` — the same rectangle the
+            // plate is placed against — and the test is its plate colour, so a marker that happens to sit
+            // in the corner cannot be mistaken for a title. #83's claim survives in what the plate says: a
+            // pane nobody named shows its own number (`pane-NN`, from its id), and a named pane shows the
+            // name somebody typed. A default title is not a name.
             let Some((origin_x, origin_y, panel_w, panel_h)) =
                 image.find_panel_rect(ink(tokens::panel()))
             else {
@@ -1019,26 +1021,36 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                         }
                     }
                 }
-                let named = state
-                    .pane(*id)
-                    .and_then(|pane| pane.name.clone())
-                    .and_then(|name| crate::ui::shown_name(&name))
-                    .is_some();
+                let Some(pane) = state.pane(*id) else {
+                    failures.push(format!("panes-named: pane {index} has no state"));
+                    continue;
+                };
                 let drawn = samples > 0 && hits * 2 >= samples;
-                match (named, drawn) {
-                    (true, true) => lines.push(format!(
-                        "panes-named: pane {index} draws its name plate at ({px:.0}, {py:.0})"
+                if !drawn {
+                    failures.push(format!(
+                        "panes-named: pane {index} has no title plate at ({px:.0}, {py:.0}) — every \
+                         pane has a title, and the plate is what types a new one (#113)"
+                    ));
+                    continue;
+                }
+                let title = pane.title();
+                let shown =
+                    crate::ui::shown_name(&title).unwrap_or_else(|| crate::ui::default_title(*id));
+                match pane.name.as_deref().and_then(crate::ui::shown_name) {
+                    Some(name) if shown == name => lines.push(format!(
+                        "panes-named: pane {index} shows its name {shown:?} at ({px:.0}, {py:.0})"
                     )),
-                    (false, false) => lines.push(format!(
-                        "panes-named: pane {index} is unnamed and draws no plate"
+                    Some(name) => failures.push(format!(
+                        "panes-named: pane {index} has the name {name:?} and its plate says \
+                         {shown:?} — a named pane shows the name somebody typed"
                     )),
-                    (true, false) => failures.push(format!(
-                        "panes-named: pane {index} has a name and no plate at ({px:.0}, {py:.0}) — \
-                         {hits}/{samples} samples are a plate"
+                    None if shown == crate::ui::default_title(*id) => lines.push(format!(
+                        "panes-named: pane {index} is unnamed and shows {shown} at ({px:.0}, {py:.0})"
                     )),
-                    (false, true) => failures.push(format!(
-                        "panes-named: pane {index} has no name and a plate at ({px:.0}, {py:.0}) — a \
-                         name nobody typed"
+                    None => failures.push(format!(
+                        "panes-named: pane {index} is unnamed and its plate says {shown:?}, not its \
+                         own number {:?} — the default comes from the pane's id (#113)",
+                        crate::ui::default_title(*id)
                     )),
                 }
             }

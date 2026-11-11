@@ -179,11 +179,12 @@ the pane in its slot and the assertion finds no full-size picture. The tiling be
 the window's size and back — is an `#[ignore]`d test, `a_pane_resizes_to_full_size_and_back`, run with
 `cargo test --features map --lib -- --ignored`.
 
-`panes-named` is the same wall with **two panes named and one not** (#83): a short name, a name long enough to
-be cut, and a pane somebody never named. The assertion probes `ui::view::name_probe` — the rectangle the plate
-is placed against — for the plate's own colour, so a hull that happens to sit in the corner is not mistaken for
-a name; the unnamed pane is asserted to have **no** plate, which is the half that says a name is something
-somebody typed.
+`panes-named` is the same wall with **two panes named and one not** (#83, #113): a short name, a name long
+enough to be cut, and a pane somebody never named. **Every pane has a title**, so the assertion probes
+`ui::view::name_probe` — the rectangle the plate is placed against — for the plate's own colour on all three
+panes, so a hull that happens to sit in the corner is not mistaken for a title. What the plate says keeps #83's
+rule: the unnamed pane shows its own number (`pane-03`, from its id and not its position) and the named panes
+show their names, because a name is something somebody typed and a title is not.
 
 `panes-gaps` is the same wall with **space between the panes** (#82): the settings sheet's first setting. The
 assertion finds the gutter the way an operator sees it — a run of the window's own background inside the
