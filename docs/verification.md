@@ -131,7 +131,8 @@ into the cache: a capture then covers bytes → cache → marker, which is the r
 
 ```sh
 cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-drag · panes-pan
-                                 # panes-menu · panes-gaps · panes-named · panes-max · settings · pane-menu
+                                 # panes-menu · panes-gaps · panes-gap-resize · panes-named · panes-max
+                                 # settings · pane-menu
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -171,6 +172,14 @@ somebody typed.
 assertion finds the gutter the way an operator sees it — a run of the window's own background inside the
 panes' union — and measures it against `tokens::GAP`, so it is about the look and not about a copy of the
 number. Rendered with the gap removed, it is red: `no vertical gutter of 8 pt — measured []`.
+
+`panes-gap-resize` is the gapped wall with the **gutter as the handle** (#114): the wall is left at half and
+`fixtures/scripts/panes-gap-resize.json` presses the middle of the gap and drags it to 58%. The expected
+layout is the one `panes-gaps` draws — same split, same space — so a press that reaches no element leaves the
+wall at 50/50 and both the golden and the assertion say so. The assertion finds the gutter's own column and compares
+its centre with `PANES_DRAGGED` of the panel (within 2 pt), then projects each pane's hull against the 58/42
+layout. Drawing the gutter elements *under* the panes is the other falsifier: the press then falls through to a
+pane's map drag, which pans a camera instead of moving the line.
 
 `settings` is the wall with its **settings sheet open** (#82): the one modal surface, over a picture that is
 dimmed and not reflowed (the scrim is *pinned* to the root, so opening it costs the picture nothing). The
