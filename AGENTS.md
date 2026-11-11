@@ -58,6 +58,8 @@ cargo run -- --snap out/frame.png   # Rune's headless snapshot; #9 wraps this in
   tests.
 - **Colours and sizes live in `src/ui/tokens.rs`.** Nothing outside it names one; `tests/scaffold.rs`
   fails when something does. Assert against tokens, never literals.
+- **An icon comes from Rune's catalogue** (`rune::Icon` / `El::icon`), and its meaning is also in words
+  where there is room. A glyph nobody can name is a button nobody presses (#111).
 - **Fixtures come from the wire**, pinned to `docs/spec/` or recorded traffic — never generated from
   our own types. Goldens change only via `--update-goldens`, by a human.
 - **Never edit `docs/spec/`.** Re-vendor it with a new commit hash and say what changed.

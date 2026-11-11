@@ -1,6 +1,6 @@
 //! **The interaction table, checked as a table** (#101).
 //!
-//! `docs/adr/0003-interaction-state.md` says which of the wall's states may follow which, and
+//! `docs/adr/0004-interaction-state.md` says which of the wall's states may follow which, and
 //! `Begin::allowed_from` is that prose in code. This file is the third copy — deliberately, because a claim
 //! written in one place and executed in another is a claim nobody has checked: the matrix below is
 //! **exhaustive over both enums**, so a new state or a new request fails here until it has a row, and the
@@ -43,6 +43,7 @@ fn every_state() -> Vec<(&'static str, Interaction)> {
                 at: (4.0, 4.0),
             },
         ),
+        ("Filtering", Interaction::Filtering { pane: 1 }),
         ("Renaming", Interaction::Renaming(Rename::new(1, None))),
         ("Settings", Interaction::Settings),
     ]
@@ -76,6 +77,7 @@ fn every_begin() -> Vec<(&'static str, Begin)> {
                 at: (4.0, 4.0),
             },
         ),
+        ("Filter", Begin::Filter { pane: 1 }),
         ("Rename", Begin::Rename(Rename::new(1, None))),
         ("Settings", Begin::Settings),
     ]
@@ -122,9 +124,9 @@ fn every_request_from_every_state_is_decided() {
             ));
         }
     }
-    // Six states and five requests: the matrix is exhaustive over both enums, so this number moves when a
+    // Seven states and six requests: the matrix is exhaustive over both enums, so this number moves when a
     // variant is added — which is a prompt to write its row in the ADR, not an annoyance.
-    assert_eq!(rows.len(), 30, "six states × five requests");
+    assert_eq!(rows.len(), 42, "seven states × six requests");
 }
 
 /// A state's name, for the failures a reader has to act on.
@@ -134,6 +136,7 @@ fn name_of(state: &Interaction) -> &'static str {
         Interaction::Lifted(_) => "Lifted",
         Interaction::Resizing(_) => "Resizing",
         Interaction::Menu { .. } => "Menu",
+        Interaction::Filtering { .. } => "Filtering",
         Interaction::Renaming(_) => "Renaming",
         Interaction::Settings => "Settings",
     }
@@ -150,6 +153,7 @@ fn target_of(begin: &str) -> &'static str {
         "Lift" => "Lifted",
         "Resize" => "Resizing",
         "Menu" => "Menu",
+        "Filter" => "Filtering",
         "Rename" => "Renaming",
         "Settings" => "Settings",
         other => panic!("a request with no state: {other}"),
@@ -202,6 +206,23 @@ fn a_hold_cannot_be_started_over_another_hold() {
         !Begin::Settings.allowed_from(&Interaction::Renaming(Rename::new(1, None))),
         "not a sheet behind a sheet"
     );
+    // The filter panel holds the pointer while it is open, so a lift or a border cannot start behind it —
+    // and the panel cannot start behind a lifted pane or a held border either.
+    let filtering = Interaction::Filtering { pane: 1 };
+    assert!(
+        !lift().allowed_from(&filtering) && !resize().allowed_from(&filtering),
+        "the filter panel holds the pointer"
+    );
+    assert!(
+        !Begin::Filter { pane: 1 }.allowed_from(&held)
+            && !Begin::Filter { pane: 1 }.allowed_from(&holding),
+        "not a filter panel on a pointer a gesture already holds"
+    );
+    assert!(
+        !Begin::Filter { pane: 1 }.allowed_from(&Interaction::Renaming(Rename::new(1, None)))
+            && !Begin::Filter { pane: 1 }.allowed_from(&Interaction::Settings),
+        "not a filter panel behind a sheet"
+    );
 }
 
 /// The two transitions the operator's own reports turn on: **`Name this pane…` works from the menu** (the
@@ -220,6 +241,10 @@ fn a_menu_gives_way_to_the_sheet_it_opens() {
     assert!(
         Begin::Settings.allowed_from(&menu),
         "the header's control opens the settings sheet"
+    );
+    assert!(
+        Begin::Filter { pane: 1 }.allowed_from(&menu),
+        "a pane's filter toggle closes a passive menu and opens its panel"
     );
     // And no sheet holds a gesture: the pointer belongs to the sheet while it is up.
     assert!(

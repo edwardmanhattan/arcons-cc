@@ -163,6 +163,35 @@ pub fn name_probe(rect: Rect) -> Rect {
     }
 }
 
+/// Where a pane's chrome buttons sit: the filter toggle and the maximise toggle, in that order, inside
+/// the pane's top-right corner (#111).
+///
+/// One function, used by the picture (`ui::pane_chrome` places the row at the same offsets) and by
+/// `verify`, for the reason [`name_probe`] exists: a capture and its assertion that compute a rectangle
+/// twice come to disagree about it — and here the disagreement would be a press the operator cannot land.
+pub fn chrome_buttons(rect: Rect) -> (Rect, Rect) {
+    let size = crate::ui::tokens::PANE_BUTTON;
+    let edge = crate::ui::tokens::GAP / 2.0;
+    let gap = crate::ui::tokens::GAP / 2.0;
+    let y = rect.y + edge;
+    let maximise_x = rect.x + rect.w - edge - size;
+    let filter_x = maximise_x - gap - size;
+    (
+        Rect {
+            x: filter_x,
+            y,
+            w: size,
+            h: size,
+        },
+        Rect {
+            x: maximise_x,
+            y,
+            w: size,
+            h: size,
+        },
+    )
+}
+
 /// A rectangle pulled in by `by` on every side: the **plate** a lifted pane is drawn on, narrower than the
 /// pane so the target's own hulls stay visible around it while a drag is in the air (#70, #84).
 /// Where a sheet sits: centred in the panel it is a modal over.
@@ -1239,6 +1268,32 @@ mod tests {
             (at.1 - (rect.y + tokens::GAP / 2.0 + h / 2.0)).abs() < 0.001,
             "{at:?}"
         );
+    }
+
+    /// #111: the two chrome controls sit inside the pane's top-right corner, a touch target each, with a
+    /// gap between them and the pane's edge — the rectangle `verify` samples and the script's press point
+    /// are both derived from here.
+    #[test]
+    fn the_chrome_buttons_sit_in_the_pane_corner() {
+        let rect = Rect {
+            x: 120.0,
+            y: 80.0,
+            w: 400.0,
+            h: 300.0,
+        };
+        let (filter, maximise) = chrome_buttons(rect);
+        let size = tokens::PANE_BUTTON;
+        let edge = tokens::GAP / 2.0;
+        assert_eq!((filter.w, filter.h), (size, size));
+        assert_eq!((maximise.w, maximise.h), (size, size));
+        assert!((filter.y - (rect.y + edge)).abs() < 0.001);
+        assert!((maximise.y - filter.y).abs() < 0.001);
+        assert!((maximise.x - (filter.x + size + edge)).abs() < 0.001);
+        assert!(
+            (maximise.x + size - (rect.x + rect.w - edge)).abs() < 0.001,
+            "the last control ends half a gap inside the pane's right edge"
+        );
+        assert!(filter.x >= rect.x && filter.y >= rect.y && maximise.x + size <= rect.x + rect.w);
     }
 
     /// #70: the middle of a pane swaps, an edge re-tiles against that edge, and a release over the
