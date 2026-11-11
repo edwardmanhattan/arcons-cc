@@ -32,7 +32,12 @@ pub fn card(card: &Card, placement: Placement, now: Instant) -> El {
         text(card.unit.name.clone())
             .key("card-name")
             .font(tokens::TITLE)
-            .color(tokens::ink()),
+            .color(tokens::ink())
+            // The one multi-paragraph, feed-supplied text on the wall: each paragraph in the
+            // direction of its own words, as a browser lays out `unicode-bidi: plaintext`. A Latin
+            // name is one text and lays out exactly as before; a right-to-left one no longer leans
+            // on the wall's own direction.
+            .dir_by_paragraph(),
     );
 
     // The hull number is absent for some hulls, and an absent row is better than an empty one.
