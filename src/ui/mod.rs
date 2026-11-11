@@ -23,6 +23,7 @@ pub mod markers;
 pub mod objects;
 pub mod symbol;
 pub mod tokens;
+pub mod tree;
 pub mod unitcard;
 pub mod view;
 mod viewpoint;
@@ -41,12 +42,42 @@ use crate::units::Picture;
 /// The window title, and the wordmark's text.
 pub const TITLE: &str = "Arcons Command Center";
 
+/// **What a pane is** (#116): a map, or a chain of command.
+///
+/// A pane used to *be* a map — a camera, a map thread, a frame — and this ticket's tree has none of
+/// those. The kind is a value on the pane rather than a second pane type, because layout, grip, name,
+/// chrome and filter are the pane's: a tree pane is a pane, and every one of those keeps working.
+///
+/// The distinction is load-bearing for `INV-04`: a tree pane has **no frame**, so there is nothing for
+/// a marker to be projected against, and it draws nothing that projects.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum PaneContent {
+    /// A camera, a map thread, a frame, and everything that projects.
+    #[default]
+    Map,
+    /// The chain of command. `organisation` names the structure the pane is about; `None` is **every
+    /// structure the wall knows**, which is the chain of command as a whole — the supreme command above
+    /// each branch root, because `/tni-commander` is one post shared by every branch.
+    Tree { organisation: Option<i64> },
+}
+
+impl PaneContent {
+    /// Whether this pane draws a map. The one question every caller that used to take a pane for
+    /// granted asks.
+    pub fn is_map(&self) -> bool {
+        matches!(self, PaneContent::Map)
+    }
+}
+
 /// One pane: a camera, the map thread that renders it, and the frame it last drew.
 ///
 /// The `Option`s are the two build modes: without `--features map` there is no thread (and no frame
 /// but a scene's synthetic one), and a thread that is starting has not drawn yet.
 pub struct Pane {
     pub id: ViewId,
+    /// **What this pane is** (#116). A map pane holds a camera, a thread and a frame; a tree pane holds
+    /// none of them and draws a structure instead.
+    pub content: PaneContent,
     /// The camera this pane is holding. Its map thread renders that; markers project against the
     /// camera of the frame on screen instead (`INV-04`), which is not the same number mid-gesture.
     pub camera: Camera,
@@ -90,6 +121,7 @@ impl Pane {
     pub fn new(id: ViewId, camera: Camera) -> Self {
         Self {
             id,
+            content: PaneContent::Map,
             camera,
             #[cfg(feature = "map")]
             map: None,
@@ -100,6 +132,14 @@ impl Pane {
             name: None,
             #[cfg(feature = "map")]
             drag_origin: None,
+        }
+    }
+
+    /// A pane that is not a map (#116): no thread, no frame, and a structure to draw.
+    pub fn tree(id: ViewId, camera: Camera, organisation: Option<i64>) -> Self {
+        Self {
+            content: PaneContent::Tree { organisation },
+            ..Self::new(id, camera)
         }
     }
 }
@@ -418,6 +458,19 @@ pub struct State {
     /// How many hulls the fleet register returned, across every page it took. The heartbeat repeats it so a
     /// truncated register is visible on a wall (`#52`) — `registered=25` next to `units=127` is the alarm.
     pub registered: usize,
+    /// **The standing orders of battle** (#116): the structures the wall knows, the forests it has read,
+    /// and the supreme command above them. Read on demand — a wall with no tree pane asks for none of it.
+    pub organisations: Vec<crate::data::types::UnitOrganisation>,
+    pub organisation_trees:
+        std::collections::HashMap<i64, crate::data::types::UnitOrganisationDetail>,
+    /// `GET /tni-commander`: one post shared by every branch, and `commander` is `None` when it is
+    /// vacant — a real state, not a missing read.
+    pub tni_command: Option<crate::data::types::TniCommandPost>,
+    /// The structure reads a tree pane has already asked for, so a failed read is one log line rather
+    /// than a request every frame.
+    asked_organisations: std::collections::HashSet<i64>,
+    asked_organisations_list: bool,
+    asked_tni: bool,
 }
 
 impl Default for State {
@@ -479,6 +532,12 @@ impl Default for State {
             register_retry_at: None,
             image_retries: std::collections::HashMap::new(),
             registered: 0,
+            organisations: Vec::new(),
+            organisation_trees: std::collections::HashMap::new(),
+            tni_command: None,
+            asked_organisations: std::collections::HashSet::new(),
+            asked_organisations_list: false,
+            asked_tni: false,
         }
     }
 }
@@ -766,6 +825,17 @@ impl State {
     /// Split a pane and give the new one a camera. The wall gets a map thread for it; a scene gets a
     /// frame from its own layout (`view::pane_laid_out`), because a capture has no engine.
     pub fn split_pane(&mut self, target: ViewId, camera: Camera) -> Option<ViewId> {
+        self.split_pane_as(target, camera, PaneContent::Map)
+    }
+
+    /// Split a pane and say **what the new one is** (#116). A tree pane gets no map thread: a pane that
+    /// is not a map has nothing to render and no frame to project against.
+    pub fn split_pane_as(
+        &mut self,
+        target: ViewId,
+        camera: Camera,
+        content: PaneContent,
+    ) -> Option<ViewId> {
         let rect = self
             .layout
             .rect_of(self.pane_viewport(), target)
@@ -776,9 +846,14 @@ impl State {
                 h: self.pane_viewport().h as f32,
             });
         let id = self.layout.split(target, rect.longer_edge())?;
-        self.panes.push(Pane::new(id, camera));
         #[cfg(feature = "map")]
-        if !self.headless {
+        let is_map = content.is_map();
+        self.panes.push(match content {
+            PaneContent::Map => Pane::new(id, camera),
+            PaneContent::Tree { organisation } => Pane::tree(id, camera, organisation),
+        });
+        #[cfg(feature = "map")]
+        if !self.headless && is_map {
             // The new pane's own thread, at its share of the panel: the same path the first pane takes,
             // so a pane is not a special case of a pane (`#68`).
             let viewport = self.pane_viewport();
@@ -1164,9 +1239,19 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .font(tokens::LABEL)
                 .color(link_colour),
         )
-        // The one piece of chrome on the wall that is a control: everything else is the picture. It is a
-        // word because there is room for one here, and a word needs no catalogue to read (#82). The pane
+        // **The header's controls, in words** — everything else on the wall is the picture. A word,
+        // because there is room for one here and a word needs no catalogue to read (#82); the pane
         // chrome's icons say their meaning in help text for the same reason (#111).
+        //
+        // The tree control sits beside `settings` and **splits the layout** the way `Focus on new pane`
+        // does (#116): one press opens the chain of command in a pane of its own.
+        .child(
+            text(TREE_LABEL)
+                .key("tree-open")
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim())
+                .on_press(|state: &mut State| open_tree_pane(state)),
+        )
         .child(
             text(SETTINGS_LABEL)
                 .key("settings-open")
@@ -1214,6 +1299,70 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
 /// What the header's one control says. A word, because there is room for one and a word needs no catalogue
 /// to read (#82); the pane chrome's icons carry their meaning in help text (#111).
 pub const SETTINGS_LABEL: &str = "settings";
+
+/// What the header's tree control says (#116): a word, for the same reason the control beside it is one.
+pub const TREE_LABEL: &str = "chain of command";
+
+/// The header's tree control (#116): **the chain of command in a pane of its own**.
+///
+/// It splits the layout the way `Focus on new pane` does — the tree takes a pane beside the one the
+/// operator was working in — and the new pane is focused, because the operator just asked for it.
+///
+/// The pane's subject is `None`: **every structure the wall knows**, which is the chain of command as a
+/// whole. `/tni-commander` is one post shared by every branch, so the supreme command is the single root
+/// and TNI AL, TNI AD and TNI AU are siblings under it, never children of one another.
+pub(crate) fn open_tree_pane(state: &mut State) {
+    let target = state.layout.focused();
+    let camera = state.camera_of(target);
+    let content = PaneContent::Tree { organisation: None };
+    if state.split_pane_as(target, camera, content).is_some() {
+        ask_tree_reads(state);
+    }
+    state.layout_dirty = true;
+}
+
+/// Ask for the reads a tree pane needs — the list of structures, each structure's forest, and the
+/// supreme command — **once each**, off the UI thread.
+///
+/// Nothing here waits: the commands go on the reads thread's channel and the answers arrive as replies
+/// between frames. A read that fails is one log line and no second ask, the rule the tactical-object
+/// manifest keeps: a refresh is deliberate, not per frame.
+fn ask_tree_reads(state: &mut State) {
+    let mut wanted = Vec::new();
+    let mut any_tree = false;
+    for pane in &state.panes {
+        if let PaneContent::Tree { organisation } = &pane.content {
+            any_tree = true;
+            match organisation {
+                Some(id) => wanted.push(*id),
+                None => wanted.extend(state.organisations.iter().map(|row| row.id)),
+            }
+        }
+    }
+    if !any_tree {
+        return;
+    }
+    let mut commands = Vec::new();
+    // The list first: `None` means "every structure the wall knows", and it knows none until this read.
+    if state.organisations.is_empty() && !state.asked_organisations_list {
+        state.asked_organisations_list = true;
+        commands.push(crate::data::Command::UnitOrganisations);
+    }
+    if state.tni_command.is_none() && !state.asked_tni {
+        state.asked_tni = true;
+        commands.push(crate::data::Command::TniCommander);
+    }
+    for id in wanted {
+        if !state.organisation_trees.contains_key(&id) && state.asked_organisations.insert(id) {
+            commands.push(crate::data::Command::UnitOrganisation(id));
+        }
+    }
+    if let Some(backend) = &state.backend {
+        for command in commands {
+            backend.request(command);
+        }
+    }
+}
 
 /// What the settings sheet calls its one setting, and what the row says when it is on and off.
 pub const SETTING_GAPS: &str = "Gaps between panes";
@@ -1564,48 +1713,32 @@ fn maximised(state: &State, scale: f32, body: El) -> El {
                 open_menu(state, id, &event, scale)
             });
     }
-    // On a wall the sheet shows the pane's own pixels, live: not a snapshot, not a second thread. A scene
-    // has no map and draws the markers on the panel, which is the same picture minus the sea.
-    #[cfg(feature = "map")]
-    if let Some(map) = pane.map.as_ref()
-        && map.error().is_none()
-    {
-        sheet = sheet.child(
-            rune::el()
-                .key("max-map")
-                .w_full()
-                .h_full()
-                .pixels(map.pixels()),
-        );
+    // **A full-size tree pane is the tree, at the window's size** (#116): no map, no markers, and no
+    // synthetic frame — the same content the pane draws in its slot, over a bigger rectangle.
+    if pane.content.is_map() {
+        // On a wall the sheet shows the pane's own pixels, live: not a snapshot, not a second thread. A
+        // scene has no map and draws the markers on the panel, which is the same picture minus the sea.
+        #[cfg(feature = "map")]
+        if let Some(map) = pane.map.as_ref()
+            && map.error().is_none()
+        {
+            sheet = sheet.child(
+                rune::el()
+                    .key("max-map")
+                    .w_full()
+                    .h_full()
+                    .pixels(map.pixels()),
+            );
+        }
+        sheet = sheet.child(projections(state, id, &frame, scale));
+    } else if let Some(tree) = tree::tree_for(state, id) {
+        sheet = sheet.child(tree::content(state, id, rect, &tree));
     }
-    sheet = sheet.child(projections(state, id, &frame, scale));
     sheet = sheet.child(name_plate(pane));
     // The same chrome row, and the maximise toggle says "back to the wall" because that is what the
     // press will do (#111). It is the pane's own toggle, not a second control invented for this shape.
     sheet = sheet.child(pane_chrome(state, id, rect));
-    // The way back in words, below the icons: a wall has no title bar to close, and a word beside an
-    // arrow is the meaning the arrow cannot say on its own.
-    sheet = sheet.child(
-        text(MAX_CLOSE)
-            .key("max-close")
-            .font(tokens::LABEL)
-            .color(tokens::ink())
-            // **Anchored to the top-right**, so the words fit whatever they say: an absolute x derived from
-            // the label's own width is a plate that clips itself the first time the words change. Below the
-            // chrome row, because the icons own the corner.
-            .pin(
-                None,
-                Some(tokens::GAP / 2.0 + tokens::PANE_BUTTON + tokens::GAP / 2.0),
-                Some(tokens::GAP),
-                None,
-            )
-            .h(tokens::NAME_H)
-            .px(tokens::GAP)
-            .radius(tokens::NAME_H / 2.0)
-            .fill(tokens::name_plate())
-            .border(tokens::HAIRLINE, tokens::focus_edge())
-            .on_press(|state: &mut State| restore_full_size(state)),
-    );
+    sheet = sheet.child(close_plate());
     // The wall behind, dimmed but still there: the other panes keep their cameras and their cadence, and
     // a reader can see what the full-size pane is one of.
     body.child(
@@ -1614,6 +1747,31 @@ fn maximised(state: &State, scale: f32, body: El) -> El {
             .fill(tokens::scrim())
             .child(sheet),
     )
+}
+
+/// The way back from a full-size pane, in words (#85, #111): a wall has no title bar to close, and a
+/// word beside an arrow is the meaning the arrow cannot say on its own.
+///
+/// **Anchored to the top-right**, so the words fit whatever they say: an absolute x derived from the
+/// label's own width is a plate that clips itself the first time the words change. Below the chrome
+/// row, because the icons own the corner.
+fn close_plate() -> El {
+    text(MAX_CLOSE)
+        .key("max-close")
+        .font(tokens::LABEL)
+        .color(tokens::ink())
+        .pin(
+            None,
+            Some(tokens::GAP / 2.0 + tokens::PANE_BUTTON + tokens::GAP / 2.0),
+            Some(tokens::GAP),
+            None,
+        )
+        .h(tokens::NAME_H)
+        .px(tokens::GAP)
+        .radius(tokens::NAME_H / 2.0)
+        .fill(tokens::name_plate())
+        .border(tokens::HAIRLINE, tokens::focus_edge())
+        .on_press(|state: &mut State| restore_full_size(state))
 }
 
 fn picture(state: &State, scale: f32) -> El {
@@ -1703,7 +1861,7 @@ fn gutters(state: &State, body: El) -> El {
 
 /// One pane filling the panel: the whole wall, exactly as it was before Multi View.
 fn single_pane(state: &State, id: ViewId, rect: Rect, scale: f32, body: El) -> El {
-    let body = picture_content(state, id, rect, scale, true, body);
+    let body = pane_content(state, id, rect, scale, true, body);
     let Some(pane) = state.pane(id) else {
         return body;
     };
@@ -1770,11 +1928,12 @@ fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
             },
         );
 
-    body = picture_content(state, id, rect, scale, false, body);
+    body = pane_content(state, id, rect, scale, false, body);
     // Without the map engine the pane itself is the surface under the pointer, so the pane carries the
-    // gesture. With it, the map does — and a second handler here would be unreachable.
+    // gesture. With it, the map does — and a second handler here would be unreachable. A tree pane has
+    // no camera to pan, so it carries no drag at all (#116).
     #[cfg(not(feature = "map"))]
-    {
+    if state.pane(id).is_some_and(|pane| pane.content.is_map()) {
         body = body
             .on_drag(move |state: &mut State, drag, _tx| drag_pane(state, id, rect, drag, scale));
     }
@@ -2069,6 +2228,24 @@ fn name_plate(pane: &Pane) -> El {
         )
 }
 
+/// **One pane's content, whatever the pane is** (#116): the map's picture, or the chain of command.
+///
+/// One function, because the single-pane wall, a tiled pane and a maximised pane all draw the same
+/// pane — a second copy of "what a pane draws" is how a tree pane would appear in one of the three and
+/// not the others.
+fn pane_content(state: &State, id: ViewId, rect: Rect, scale: f32, single: bool, body: El) -> El {
+    let is_map = state.pane(id).is_none_or(|pane| pane.content.is_map());
+    if is_map {
+        return picture_content(state, id, rect, scale, single, body);
+    }
+    match tree::tree_for(state, id) {
+        Some(tree) => body.child(tree::content(state, id, rect, &tree)),
+        // A tree pane whose structure has not been read yet draws an empty pane: no placeholder words,
+        // and above all no map. The reads are asked for on the frame this pane was opened.
+        None => body,
+    }
+}
+
 /// One pane's picture: the map's pixels, its failure, or the placeholder.
 #[cfg(feature = "map")]
 fn picture_content(
@@ -2188,7 +2365,13 @@ fn panel_laid_out(state: &mut State, width: f32, height: f32) {
 /// which is what makes a `panes` capture a picture of three pans at three cameras rather than one
 /// frame stretched three ways. The one-pane case keeps the window-sized frame it has always had: those
 /// goldens are the wall as it was, and `#71`'s golden pass unifies the two.
-fn pane_laid_out(state: &mut State, id: ViewId, width: f32, height: f32, scale: f32) {
+pub(crate) fn pane_laid_out(state: &mut State, id: ViewId, width: f32, height: f32, scale: f32) {
+    // **A tree pane has no frame** (#116): there is no map thread to resize and no frame to project
+    // against, so the layout pass has nothing to say to it. `INV-04` holds literally — no frame, and
+    // therefore no marker anywhere in it.
+    if state.pane(id).is_some_and(|pane| !pane.content.is_map()) {
+        return;
+    }
     let scale = if scale > 0.0 { scale } else { 1.0 };
     state.scale = scale;
     let points = Rect {
@@ -2966,6 +3149,60 @@ pub(crate) fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool
         crate::data::Reply::Viewpoint(result) => {
             changed |= viewpoint::apply(state, result);
         }
+        // **The standing orders of battle** (#116). The list names the structures; each structure's
+        // forest is its own read, asked for by the tree pane that draws it. Nothing is defaulted: a read
+        // that fails is one log line and a branch missing from the chain of command, never an empty
+        // structure drawn as though the server had said so.
+        crate::data::Reply::UnitOrganisations(Ok(list)) => {
+            tracing::info!(
+                structures = list.len(),
+                "the standing orders of battle were read"
+            );
+            state.organisations.clone_from(list);
+            changed = true;
+        }
+        crate::data::Reply::UnitOrganisations(Err(error)) => {
+            tracing::warn!(
+                endpoint = "GET /unit-organisations",
+                error = %error,
+                "the orders of battle did not read: a chain-of-command pane has no structures to draw"
+            );
+        }
+        crate::data::Reply::UnitOrganisation(id, Ok(detail)) => {
+            tracing::info!(
+                organisation = id,
+                roots = detail.nodes.len(),
+                "a standing structure was read"
+            );
+            state.organisation_trees.insert(*id, (**detail).clone());
+            changed = true;
+        }
+        crate::data::Reply::UnitOrganisation(id, Err(error)) => {
+            tracing::warn!(
+                organisation = id,
+                endpoint = "GET /unit-organisations/{id}",
+                error = %error,
+                "the structure did not read: its branch is missing from the chain of command"
+            );
+        }
+        crate::data::Reply::TniCommander(Ok(post)) => {
+            // **A vacant post is not a missing read** (#116): `commander` is absent when nobody is
+            // appointed, and the post is drawn without a name rather than with one invented here.
+            tracing::info!(
+                post = %post.position_title,
+                vacant = post.commander.is_none(),
+                "the supreme command was read"
+            );
+            state.tni_command = Some((**post).clone());
+            changed = true;
+        }
+        crate::data::Reply::TniCommander(Err(error)) => {
+            tracing::warn!(
+                endpoint = "GET /tni-commander",
+                error = %error,
+                "the supreme command did not read: the chain of command is drawn without its root"
+            );
+        }
         _ => {}
     }
     changed
@@ -3393,6 +3630,10 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
             asked += 1;
         }
     }
+
+    // **A tree pane's reads** (#116): the structures, their forests and the supreme command, asked once
+    // each and only when a tree pane exists. Nothing here waits — the answers arrive between frames.
+    ask_tree_reads(state);
 
     // A picture still decoding is a reason to draw the next frame, and the frame a decode *lands* on is a
     // reason to draw one more. Both matter, and the second is the one that was missing (`#51`): a decode

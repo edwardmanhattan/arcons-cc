@@ -133,7 +133,7 @@ into the cache: a capture then covers bytes → cache → marker, which is the r
 cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-chrome
                                  # panes-drag · panes-pan · panes-menu · panes-gaps · panes-gap-resize
                                  # panes-named · panes-max · panes-cards · panes-range · objects
-                                 # settings · settings-dismiss · pane-menu
+                                 # settings · settings-dismiss · pane-menu · pane-tree
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -156,6 +156,21 @@ pane at `PHOTO_ZOOM`, where a ship is its photograph, and its neighbour at a cha
 symbol. Both panes hold the decoded bytes — the cache is the wall's — so the capture is about the *latch*:
 the assertion requires picture ink in one pane and symbol ink in the other, and a wall-wide range draws one
 representation in both.
+
+`pane-tree` is the **chain of command** (#116): a tree pane beside a map pane, one structure's forest under
+the supreme command. The data is #107's — `GET /unit-organisations/{id}` returns `nodes` as the roots of a
+**forest** (more than one root is normal, and each root nests its own subtree), and `GET /tni-commander` is
+one post shared by every branch, so it is drawn as a **single root** with a connector to each branch root:
+TNI AL, TNI AD and TNI AU are siblings under it, never children of one another. The scene reads the recorded
+structure through the same replies a wall takes (`ui::apply_reply`), so the capture covers wire data → pane →
+plate. The assertion counts the plates from the wire — one node per post, so a dropped root is a red line —
+samples each connector's **elbow** for the connector's own ink (a diagonal, or a run that never turned, has
+nothing there), and counts accent pixels inside the tree pane: **none**, because a tree pane has no frame and
+so draws nothing that projects (`INV-04` holds literally) — while the map pane beside it still draws its
+markers, so the tree did not take the wall. `cargo test ui::tree` holds the shape claims a capture cannot: a
+forest renders as a forest (two roots, not one, and the flattened tree is the falsifier), a connector leaves
+the parent's **bottom edge** rather than its centre, a post with an `id_unit` selects that hull **in that
+pane only**, and a layout pass gives a tree pane no frame while the map beside it gets one.
 
 A tiled wall also says so in its header (`40 units · panes=3`) and in its log (`pane_frames=[12, 3, 3]`): a
 wall quietly drawing three of four panes is a line in a file, not a report (#71).

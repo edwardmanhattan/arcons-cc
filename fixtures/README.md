@@ -84,6 +84,13 @@ labels filled in ("North Cardinal 3", "Green cone 7") and the cone's bearing set
 mark keeps the recording's `"label": ""`, which is the unlabelled case the capture asserts. Everything
 else — the envelope, every embedded symbol, every other key — is the recorded wire shape.
 
+`scenes/chain-of-command.json` is the `pane-tree` scene's structure (#116): **derived from
+`rest/unit-organisation-1.json`** by moving the recorded node 3 (Irjenal) out of Wakasal's subtree and making
+it a root — the key a root does not have, `parent_id`, is gone. That is the one thing the recording cannot
+show and the forest claim needs: `nodes` is a **forest**, and more than one root is normal. Every field value
+is the wire's; nothing was invented. The supreme command is the recorded `rest/tni-commander.json`, vacant,
+so the capture also proves a vacant post draws its title and no name.
+
 `scenes/buoy.png`, `scenes/cone.png` and `scenes/light.png` are **stand-ins for the presigned SVG
 artwork**: the recorded `asset_url` points at object storage, and a scene may not open a socket
 (`INV-11`). Each is a 32 × 32 shape in one exact colour, so the assertion can find the decoded bytes at

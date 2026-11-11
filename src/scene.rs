@@ -16,7 +16,8 @@
 use std::path::PathBuf;
 
 use crate::data::types::{
-    Envelope, FeedPosition, Pages, TacticalObjectManifest, TacticalObjectPlacement,
+    Envelope, FeedPosition, Pages, TacticalObjectManifest, TacticalObjectPlacement, TniCommandPost,
+    UnitOrganisationDetail,
 };
 use crate::map::geometry::Camera;
 use crate::ui::State;
@@ -587,6 +588,85 @@ fn panes_drag(state: &mut State) {
 /// One scene: a name and the function that builds its state.
 pub type Scene = (&'static str, fn(&mut State));
 
+/// The organisation the `pane-tree` scene draws: the Navy's structure — the one the recording carries a
+/// forest for. `GET /unit-organisations` names four; the scene is about one of them (#116).
+pub const TREE_ORGANISATION: i64 = 1;
+
+/// The share of the panel the `pane-tree` scene leaves to the **map**. A forest is wide, so the tree
+/// takes the larger share: the capture must show every post rather than the first two.
+pub const TREE_MAP_SHARE: f32 = 0.34;
+
+/// `fixtures/scenes/chain-of-command.json` — the Navy's structure, wire-shaped. **Derived** from
+/// `fixtures/rest/unit-organisation-1.json` by moving the recorded node 3 out of Wakasal's subtree and
+/// making it a root (the key a root does not have, `parent_id`, is gone). That is the one thing the
+/// recording cannot show and the forest claim needs: `nodes` is a **forest**, and more than one root is
+/// normal. Every field value is the wire's; nothing was invented.
+pub fn chain_of_command_fixture() -> Result<UnitOrganisationDetail, String> {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/scenes/chain-of-command.json");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let envelope: Envelope<UnitOrganisationDetail> = serde_json::from_str(&text)
+        .map_err(|error| format!("{} is not the structure envelope: {error}", path.display()))?;
+    Ok(envelope.data)
+}
+
+/// The recorded supreme command: one post shared by every branch, **vacant** on this deployment.
+fn supreme_fixture() -> Result<TniCommandPost, String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/rest/tni-commander.json");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let envelope: Envelope<TniCommandPost> = serde_json::from_str(&text)
+        .map_err(|error| format!("{} is not the post envelope: {error}", path.display()))?;
+    Ok(envelope.data)
+}
+
+/// The `pane-tree` scene (#116): **a tree pane beside a map pane** — one structure's forest under the
+/// supreme command, and the wall's own map beside it.
+///
+/// The tree pane comes from the same call the header's control makes (`State::split_pane_as`), and its
+/// reads arrive as the replies a wall takes (`apply_reply`), not as a shortcut into the state. So the
+/// capture covers wire data → pane → plate, and the assertion can ask the pane what it drew.
+fn pane_tree(state: &mut State) {
+    load(state);
+    let map = state.layout.focused();
+    let camera = state.camera_of(map);
+    let Some(tree) = state.split_pane_as(
+        map,
+        camera,
+        crate::ui::PaneContent::Tree {
+            organisation: Some(TREE_ORGANISATION),
+        },
+    ) else {
+        return;
+    };
+    // The split is the wall's own: the border between the two panes is found the way a press finds it,
+    // and the ratio is the share the map keeps. A scene that positioned panes itself would be a second
+    // layout function.
+    let viewport = state.pane_viewport();
+    let middle = (viewport.w as f32 / 2.0, viewport.h as f32 / 2.0);
+    if let Some(border) = state.layout.border_at(viewport, middle, state.pane_grip()) {
+        state.layout.set_ratio(&border, TREE_MAP_SHARE);
+    }
+    state.layout.focus(tree);
+    // The two reads the pane needs, through the replies the reads thread would send.
+    match chain_of_command_fixture() {
+        Ok(detail) => {
+            crate::ui::apply_reply(
+                state,
+                &crate::data::Reply::UnitOrganisation(TREE_ORGANISATION, Ok(Box::new(detail))),
+            );
+        }
+        Err(error) => eprintln!("arcons-cc: scene: {error}"),
+    }
+    match supreme_fixture() {
+        Ok(post) => {
+            crate::ui::apply_reply(state, &crate::data::Reply::TniCommander(Ok(Box::new(post))));
+        }
+        Err(error) => eprintln!("arcons-cc: scene: {error}"),
+    }
+}
+
 /// The scene registry, handed to `AppSpec::scenes`.
 pub const SCENES: &[Scene] = &[
     ("empty", empty),
@@ -611,6 +691,9 @@ pub const SCENES: &[Scene] = &[
     ("settings", settings_sheet),
     ("settings-dismiss", settings_dismiss),
     ("pane-menu", pane_menu),
+    // The chain of command (#116): a tree pane beside a map pane. A forest is a forest, the supreme
+    // command is the root above it, and the tree draws nothing that projects.
+    ("pane-tree", pane_tree),
 ];
 
 /// Look a scene up by the name `scripts/capture.sh` was given.
@@ -711,7 +794,9 @@ mod tests {
                 // The one scene whose point is that something is **not** there: the sheet, after a press
                 // outside it (#98).
                 "settings-dismiss",
-                "pane-menu"
+                "pane-menu",
+                // The chain of command (#116): a tree pane beside a map pane.
+                "pane-tree"
             ]
         );
         for name in names() {
@@ -823,6 +908,51 @@ mod tests {
                 pane.camera.center
             );
         }
+
+        // The chain of command (#116): a tree pane beside a map pane, one structure's forest under the
+        // supreme command. The forest is a forest — two roots — and the supreme command is vacant on
+        // this deployment, which draws its post and no invented name.
+        let command = state_for("pane-tree");
+        assert_eq!(command.panes.len(), 2, "a tree pane beside a map pane");
+        let ids = command.layout.ids();
+        let tree = ids[1];
+        assert!(
+            matches!(
+                command.pane(tree).map(|pane| &pane.content),
+                Some(crate::ui::PaneContent::Tree {
+                    organisation: Some(TREE_ORGANISATION)
+                })
+            ),
+            "the second pane is the chain of command"
+        );
+        assert!(
+            command
+                .pane(ids[0])
+                .is_some_and(|pane| pane.content.is_map()),
+            "the first pane is still the map"
+        );
+        assert_eq!(command.layout.focused(), tree, "the new pane has the keys");
+        let detail = command
+            .organisation_trees
+            .get(&TREE_ORGANISATION)
+            .expect("the structure was read through the reply path");
+        assert_eq!(detail.nodes.len(), 2, "the derived fixture is a forest");
+        let post = command.tni_command.as_ref().expect("the supreme command");
+        assert!(
+            post.commander.is_none(),
+            "INV-01: the recorded post is vacant, and the scene invents nobody"
+        );
+        let drawn = crate::ui::tree::tree_for(&command, tree).expect("the pane draws a tree");
+        assert_eq!(
+            drawn.nodes.len(),
+            8,
+            "seven recorded posts and the supreme command above them"
+        );
+        assert_eq!(
+            drawn.links.len(),
+            7,
+            "one connector per parent-to-child run"
+        );
     }
 
     #[test]
