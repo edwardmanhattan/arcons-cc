@@ -132,14 +132,24 @@ into the cache: a capture then covers bytes → cache → marker, which is the r
 ```sh
 cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-chrome
                                  # panes-drag · panes-pan · panes-menu · panes-gaps · panes-gap-resize
-                                 # panes-named · panes-max · panes-cards · panes-range · settings
-                                 # settings-dismiss · pane-menu
+                                 # panes-named · panes-max · panes-cards · panes-range · objects
+                                 # settings · settings-dismiss · pane-menu
 scripts/verify.sh                # renders and asserts each one
 ```
 
 `panes` is the Multi View witness (#68): three panes at three cameras, each pane's frame its own
 rectangle, and the focused pane marked by its edge. Its assertion projects each hull against the pane
 it is drawn in, using the same `Layout::rects` the view lays the panes out with.
+
+`objects` is the **operational layer** (#110): a buoy, a cone and one unlabelled light, on two panes at two
+zooms on the same water. The manifest and the placements arrive through the replies a wall takes, and the
+stand-in artwork through `Reply::TacticalAsset` — so the capture covers wire data → decoded cache → mark,
+not a shortcut. The assertion projects each placement against **its pane's** frame, which is the point:
+a layer drawn from the wall's camera agrees with the focused pane and lands tens of pixels away in its
+neighbour. It also probes the label plate's left padding for the plate's fill: the two labelled marks have
+one, the unlabelled one has none — an empty label is not a label (`INV-01`), and defaulting `""` to a drawn
+plate is red. The three PNGs under `fixtures/scenes/` are stand-ins for the presigned SVG artwork, because a
+scene may not open a socket (`INV-11`).
 
 `panes-range` is the same wall stripped to **two panes at two zooms on the same hull** (#115): the focused
 pane at `PHOTO_ZOOM`, where a ship is its photograph, and its neighbour at a chart zoom, where it is a
