@@ -7,7 +7,7 @@
 //! Why a current-thread runtime rather than `reqwest`'s blocking client: the socket actor (#4) wants
 //! async anyway, both live on threads of their own, and one runtime per thread is the shape that
 //! keeps blocking work out of a shared executor. The cost — no work stealing — is irrelevant for
-//! two routes and their retries.
+//! a handful of routes and their retries.
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, channel};
@@ -17,7 +17,11 @@ use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use crate::config::Minos;
 use crate::data::Error;
 use crate::data::http::Http;
-use crate::data::types::{FeedPosition, UnitCommander, UnitDetail};
+use crate::data::types::{
+    FeedPosition, Installation, InstallationType, Pages, TacticalObject, TacticalObjectFacets,
+    TacticalObjectManifest, TacticalObjectPlacement, TniCommandPost, TniCommander, UnitCommander,
+    UnitDetail, UnitOrganisation, UnitOrganisationDetail, Viewpoint,
+};
 
 /// What the view loop asks for. One variant per read the display performs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,6 +38,28 @@ pub enum Command {
     Units,
     /// One hull's picture, by the presigned URL the register gave.
     Image(i64, String),
+    /// Where the map opens, or an unset viewpoint.
+    Viewpoint,
+    /// The facility vocabulary.
+    InstallationTypes,
+    /// The facilities, operational only.
+    Installations,
+    /// The symbol library, every page.
+    TacticalObjects,
+    /// The whole active library, for offline caching.
+    TacticalObjectManifest,
+    /// The picker's filter rows and their counts.
+    TacticalObjectFacets,
+    /// The operational map's marks, every page.
+    TacticalObjectPlacements,
+    /// The standing orders of battle.
+    UnitOrganisations,
+    /// One standing structure and its forest.
+    UnitOrganisation(i64),
+    /// The supreme command.
+    TniCommander,
+    /// The supreme command's appointments, newest first.
+    TniCommanderHistory,
 }
 
 /// What comes back. It carries typed values or an [`Error`] — never a status code, and never a token.
@@ -53,6 +79,28 @@ pub enum Reply {
         i64,
         Result<Vec<crate::data::types::UnitSpecification>, Error>,
     ),
+    /// Where the map opens. `Ok(Viewpoint { None, None })` is a deployment that has not chosen one.
+    Viewpoint(Result<Viewpoint, Error>),
+    /// The facility vocabulary, in picker order.
+    InstallationTypes(Result<Vec<InstallationType>, Error>),
+    /// The facilities, operational only.
+    Installations(Result<Vec<Installation>, Error>),
+    /// The symbol library and what the read cost. Paged to the end like the register.
+    TacticalObjects(Result<Pages<TacticalObject>, Error>),
+    /// The whole active library, unpaginated so it can be cached.
+    TacticalObjectManifest(Result<Box<TacticalObjectManifest>, Error>),
+    /// The picker's filter rows and their counts.
+    TacticalObjectFacets(Result<TacticalObjectFacets, Error>),
+    /// The operational map's marks. Each embeds its symbol.
+    TacticalObjectPlacements(Result<Pages<TacticalObjectPlacement>, Error>),
+    /// The standing orders of battle.
+    UnitOrganisations(Result<Vec<UnitOrganisation>, Error>),
+    /// One standing structure and its forest.
+    UnitOrganisation(i64, Result<Box<UnitOrganisationDetail>, Error>),
+    /// The supreme command; `commander` is `None` when the post is vacant.
+    TniCommander(Result<Box<TniCommandPost>, Error>),
+    /// The supreme command's appointments, newest first.
+    TniCommanderHistory(Result<Vec<TniCommander>, Error>),
     /// The backend could not start, or could not sign in. The view loop surfaces it once.
     Failed(String),
 }
@@ -146,6 +194,27 @@ async fn perform(http: &Http, command: Command) -> Reply {
         Command::Specifications(id_unit) => {
             Reply::Specifications(id_unit, http.specifications(id_unit).await)
         }
+        Command::Viewpoint => Reply::Viewpoint(http.viewpoint().await),
+        Command::InstallationTypes => Reply::InstallationTypes(http.installation_types().await),
+        Command::Installations => Reply::Installations(http.installations().await),
+        Command::TacticalObjects => Reply::TacticalObjects(http.tactical_objects().await),
+        Command::TacticalObjectManifest => {
+            Reply::TacticalObjectManifest(http.tactical_object_manifest().await.map(Box::new))
+        }
+        Command::TacticalObjectFacets => {
+            Reply::TacticalObjectFacets(http.tactical_object_facets().await)
+        }
+        Command::TacticalObjectPlacements => {
+            Reply::TacticalObjectPlacements(http.tactical_object_placements().await)
+        }
+        Command::UnitOrganisations => Reply::UnitOrganisations(http.unit_organisations().await),
+        Command::UnitOrganisation(id) => {
+            Reply::UnitOrganisation(id, http.unit_organisation(id).await.map(Box::new))
+        }
+        Command::TniCommander => Reply::TniCommander(http.tni_commander().await.map(Box::new)),
+        Command::TniCommanderHistory => {
+            Reply::TniCommanderHistory(http.tni_commander_history().await)
+        }
     }
 }
 
@@ -218,6 +287,42 @@ mod tests {
                 );
             }
             other => panic!("expected a picture, got {other:?}"),
+        }
+    }
+
+    /// An operational read takes the same route as the picture (#107): a `Command` on the channel,
+    /// the HTTP call on the backend thread, a typed `Reply` drained between frames. Nothing here
+    /// awaits on the view loop's thread, which is `INV-05`'s rule for a read.
+    #[test]
+    fn an_operational_read_arrives_without_the_ui_thread_waiting() {
+        const VIEWPOINT: &str = r#"{"status_code":200,"message":"Successfull","data":{}}"#;
+        let (base, _stub) = stub_minos(VIEWPOINT);
+        let minos = Minos::new(
+            base,
+            crate::config::Credential::Password {
+                identifier: "wall".into(),
+                password: crate::config::Secret::new("not-a-real-password"),
+            },
+        );
+        let backend = Backend::spawn(minos).expect("the backend thread starts");
+        backend.request(Command::Viewpoint);
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut reply = None;
+        while Instant::now() < deadline {
+            if let Some(got) = backend.try_recv() {
+                reply = Some(got);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        match reply {
+            Some(Reply::Viewpoint(Ok(viewpoint))) => assert_eq!(
+                viewpoint.coordinates(),
+                None,
+                "an unset viewpoint is absent, not 0,0"
+            ),
+            other => panic!("expected a viewpoint, got {other:?}"),
         }
     }
 }

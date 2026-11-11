@@ -1,0 +1,12 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": {
+    "id": 1,
+    "id_unit_hierarchy": 7,
+    "echelon_name": "Commander",
+    "echelon_rank": 7,
+    "position_title": "Panglima TNI",
+    "note": "The supreme command, shared by every service branch. Seeded by 000106; renaming it keeps the post and its history."
+  }
+}

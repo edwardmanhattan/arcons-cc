@@ -1,4 +1,4 @@
-//! `--self-check`: six questions, six exit codes, one line each.
+//! `--self-check`: six outcomes, six exit codes, and one line per read.
 //!
 //! ```text
 //! 0 ok · 1 config unusable · 2 credentials refused · 3 login failed
@@ -9,6 +9,11 @@
 //! `arcons-cc --self-check; echo $?` and get one answer rather than a paragraph. Every check still
 //! runs and prints: a self-check that stops at the first problem hides the second one, and a wall
 //! operator then fixes one thing per session.
+//!
+//! Since #107 the operational resources each get a line of their own (`viewpoint`, `inst types`,
+//! `facilities`, `symbols`, `manifest`, `facets`, `placements`, `orgs`, `org`, `tni command`,
+//! `tni history`). They are reads with their own `/system/...` subjects, so one refused read is named
+//! rather than left as "the map is empty"; a refusal is exit 4 like any other failed read.
 //!
 //! **Nothing here prints a credential** (`INV-08`). The checks describe what the server *said*
 //! (`900 s left`, `127 hulls`, `subscribed to live-feed`), and the one thing taken from the file — its
@@ -72,6 +77,11 @@ pub trait World {
     /// Read the fleet register: the hulls and their picture URLs. A different subject from the feed, so a
     /// wall account can pass everything above and still draw no pictures (#53).
     fn register(&self, config: &Config) -> Result<String, String>;
+    /// Every operational resource this build reads, one row each (#107): what the read returned, or
+    /// which read was refused. The default is no rows, for a fake that only answers the older checks.
+    fn resources(&self, _config: &Config) -> Vec<crate::data::ResourceCheck> {
+        Vec::new()
+    }
     /// Subscribe to the live feed, with the connect frame's `data` token.
     fn subscribe(&self, config: &Config) -> Result<String, String>;
     /// The offline map seed, without which the first frame waits on a network that may not be there.
@@ -185,6 +195,19 @@ pub fn run(args: &Args, env: &Env, world: &dyn World, out: &mut dyn std::fmt::Wr
                     fail(Outcome::ReadFailed, &mut verdict);
                 }
             }
+            // One line per operational resource, each attempted on its own: a refused read names
+            // itself instead of leaving "the map is empty" as the only symptom (#107).
+            for check in world.resources(&config) {
+                match check.detail {
+                    Ok(detail) => {
+                        let _ = writeln!(out, "  {:<11} ok  {detail}", check.name);
+                    }
+                    Err(error) => {
+                        let _ = writeln!(out, "  {:<11} FAILED  {error}", check.name);
+                        fail(Outcome::ReadFailed, &mut verdict);
+                    }
+                }
+            }
         }
         Err(error) => {
             // The read cannot be honest without a session, so it is skipped rather than reported as
@@ -192,6 +215,7 @@ pub fn run(args: &Args, env: &Env, world: &dyn World, out: &mut dyn std::fmt::Wr
             let _ = writeln!(out, "  {:<11} FAILED  {error}", "login");
             let _ = writeln!(out, "  {:<11} skipped  (no session)", "picture");
             let _ = writeln!(out, "  {:<11} skipped  (no session)", "register");
+            let _ = writeln!(out, "  {:<11} skipped  (no session)", "resources");
             fail(Outcome::LoginFailed, &mut verdict);
         }
     }
@@ -324,6 +348,39 @@ impl World for Live {
         Ok(format!("{} hulls, {} with a picture", check.0, check.1))
     }
 
+    fn resources(&self, config: &Config) -> Vec<crate::data::ResourceCheck> {
+        let mut held = match self.session.lock() {
+            Ok(held) => held,
+            Err(_) => {
+                return vec![crate::data::ResourceCheck {
+                    name: "resources",
+                    detail: Err(crate::data::Error::Transport(
+                        "the session lock was poisoned".to_string(),
+                    )),
+                }];
+            }
+        };
+        let session = match held.as_mut() {
+            Some(session) => session,
+            None => {
+                // No session means the login check was skipped, which only happens in a fake.
+                let mut session = match crate::data::Session::start(&config.minos) {
+                    Ok(session) => session,
+                    Err(error) => {
+                        return vec![crate::data::ResourceCheck {
+                            name: "resources",
+                            detail: Err(error),
+                        }];
+                    }
+                };
+                let rows = session.resources();
+                *held = Some(session);
+                return rows;
+            }
+        };
+        session.resources()
+    }
+
     fn subscribe(&self, config: &Config) -> Result<String, String> {
         let probe = crate::live::actor::probe_url(&config.minos, &config.socket_url)?;
         if probe.connected && probe.subscribed {
@@ -393,6 +450,7 @@ mod tests {
         register: Result<String, String>,
         socket: Result<String, String>,
         seed: bool,
+        resources: Vec<crate::data::ResourceCheck>,
     }
 
     impl Scripted {
@@ -403,6 +461,16 @@ mod tests {
                 register: Ok("127 hulls, 62 with a picture".into()),
                 socket: Ok("subscribed to live-feed".into()),
                 seed: true,
+                resources: vec![
+                    crate::data::ResourceCheck {
+                        name: "viewpoint",
+                        detail: Ok("no default view (unset, not 0,0)".into()),
+                    },
+                    crate::data::ResourceCheck {
+                        name: "symbols",
+                        detail: Ok("56 symbols in 1 page(s)".into()),
+                    },
+                ],
             }
         }
     }
@@ -416,6 +484,9 @@ mod tests {
         }
         fn register(&self, _: &Config) -> Result<String, String> {
             self.register.clone()
+        }
+        fn resources(&self, _: &Config) -> Vec<crate::data::ResourceCheck> {
+            self.resources.clone()
         }
         fn subscribe(&self, _: &Config) -> Result<String, String> {
             self.socket.clone()
@@ -600,9 +671,48 @@ mod tests {
             "picture",
             "socket",
             "map seed",
+            "viewpoint",
+            "symbols",
         ] {
             assert!(out.contains(line), "{line:?} has no line:\n{out}");
         }
+    }
+
+    /// **A refused operational read names itself and does not hide the others** (#107). Every
+    /// resource needs `read` on its own subject; an account missing one must see which, and a wall
+    /// that cannot draw placements still draws the facilities it can read.
+    #[test]
+    fn a_refused_operational_read_names_itself_and_exits_four() {
+        let sandbox = Sandbox::new("resource-refused");
+        let mut scripted = Scripted::good();
+        scripted.resources = vec![
+            crate::data::ResourceCheck {
+                name: "viewpoint",
+                detail: Ok("no default view (unset, not 0,0)".into()),
+            },
+            crate::data::ResourceCheck {
+                name: "placements",
+                detail: Err(crate::data::Error::Forbidden {
+                    message: "the account may not read /system/tactical-object-placements".into(),
+                }),
+            },
+            crate::data::ResourceCheck {
+                name: "tni command",
+                detail: Ok("Panglima TNI, rank 7, vacant".into()),
+            },
+        ];
+        let mut out = String::new();
+        let outcome = run(&sandbox.args("t"), &Env::default(), &scripted, &mut out);
+        assert_eq!(outcome, Outcome::ReadFailed, "{out}");
+        assert_eq!(outcome.code(), 4);
+        assert!(
+            out.contains("/system/tactical-object-placements"),
+            "the refused subject must be named:\n{out}"
+        );
+        assert!(
+            out.contains("tni command") && out.contains("vacant"),
+            "a failure must not stop the rows after it:\n{out}"
+        );
     }
 
     #[test]

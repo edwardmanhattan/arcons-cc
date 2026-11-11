@@ -1,0 +1,87 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": {
+    "id": 1,
+    "id_service_branch": 1,
+    "name": "TNI Angkatan Laut",
+    "id_name": "TNI Angkatan Laut",
+    "description_en": "-",
+    "note": "-",
+    "is_system": false,
+    "nodes": [
+      {
+        "id": 1,
+        "id_organisation": 1,
+        "name": "Muhammad Ali",
+        "position_title": "Kepala Staf Angkatan Laut (Kasal)",
+        "icon": "",
+        "note": "",
+        "children": [
+          {
+            "id": 2,
+            "id_organisation": 1,
+            "parent_id": 1,
+            "name": "Edwin Rajo Mangunkuto",
+            "position_title": "Wakil Kepala Staf Angkatan Laut (Wakasal)",
+            "icon": "",
+            "note": "",
+            "children": [
+              {
+                "id": 4,
+                "id_organisation": 1,
+                "parent_id": 2,
+                "name": "Laksdya TNI Denih Hendrata",
+                "position_title": "Pangkoarmada RI",
+                "icon": "",
+                "note": "",
+                "children": [
+                  {
+                    "id": 7,
+                    "id_organisation": 1,
+                    "parent_id": 4,
+                    "name": "Laksda TNI Dato Rusman Sutan Nurdin",
+                    "position_title": "KOARMADA III",
+                    "icon": "",
+                    "note": "",
+                    "children": []
+                  },
+                  {
+                    "id": 5,
+                    "id_organisation": 1,
+                    "parent_id": 4,
+                    "name": "Laksda TNI Haris Bima Bayuseto",
+                    "position_title": "KOARMADA I",
+                    "icon": "",
+                    "note": "",
+                    "children": []
+                  },
+                  {
+                    "id": 6,
+                    "id_organisation": 1,
+                    "parent_id": 4,
+                    "name": "Laksda TNI I Gung Putu Alit Jaya",
+                    "position_title": "KOARMADA II",
+                    "icon": "",
+                    "note": "",
+                    "children": []
+                  }
+                ]
+              },
+              {
+                "id": 3,
+                "id_organisation": 1,
+                "parent_id": 2,
+                "name": "Letjen TNI (Mar) Nur Alamsyah",
+                "position_title": "Inspektur Jenderal Angkatan Laut (Irjenal)",
+                "icon": "",
+                "note": "",
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

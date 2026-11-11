@@ -1,4 +1,4 @@
-//! The Minos REST client: the standing picture, one hull, and the identity a card needs.
+//! The Minos REST client: the standing picture, the fleet register, and the operational resources.
 //!
 //! **Nothing here runs on the UI thread.** [`thread::Backend`] owns a current-thread Tokio runtime
 //! and this module's client on a thread of its own; the view loop sends a [`thread::Command`] and
@@ -11,12 +11,24 @@
 //! | one hull | `GET /live-feed/positions/{id}` |
 //! | identity | `GET /units/{id}` |
 //! | who commands it | `GET /units/{id}/commander` — newest first; the current one has no `to_at` |
+//! | where the map opens | `GET /viewpoint` — authentication only; `{}` when unset |
+//! | the facility vocabulary | `GET /installation-types` — `symbol_code` is a code, not an id |
+//! | the facilities | `GET /installations?active_only=true` |
+//! | the symbol library | `GET /tactical-objects?active=true`, paged to the end |
+//! | the offline cache | `GET /tactical-objects/manifest` — unpaginated on purpose |
+//! | the picker's counts | `GET /tactical-objects/facets` |
+//! | the operational marks | `GET /tactical-object-placements`, paged to the end |
+//! | the standing orders of battle | `GET /unit-organisations`, `GET /unit-organisations/{id}` |
+//! | the supreme command | `GET /tni-commander`, `GET /tni-commander/history` |
 //! | sign in, refresh | `POST /auth/login` (`return_refresh_token: true`), `POST /auth/refresh` |
 //!
-//! Permissions, from the pinned spec and **confirmed against the dev server on 2026-11-06**: the
+//! Permissions, from the pinned spec and **confirmed against the dev server on 2026-11-10**: the
 //! picture needs the `read` action on `/system/live-feed`, and `/units/…` (identity, commander) needs
-//! `read` on `/system/units`. A read-only wall account therefore holds two `read` actions and nothing
-//! else — it never posts a fix, an order or a message.
+//! `read` on `/system/units`. The operational resources each have their own subject —
+//! `/system/installations`, `/system/tactical-objects`, `/system/tactical-object-placements`,
+//! `/system/unit-organisations` and `/system/tni-command` — except `/viewpoint`, which is
+//! authentication only. A read-only wall account therefore holds those `read` actions and nothing
+//! else: it never posts a fix, an order, a placement or a message.
 //!
 //! Facts the code must not re-derive per call site, because they are the traps:
 //!
@@ -27,6 +39,9 @@
 //! - `live-feed` has no history: after a reconnect, re-read before trusting anything (`INV-09`).
 //! - Unknown JSON fields must parse: the server adds fields without ceremony.
 //! - Age comes from the server (`age_seconds`), never from this machine's clock against a timestamp.
+//! - The library is **not** the map: a placement embeds its symbol, so drawing needs no second read.
+//! - `unit-organisations/{id}.nodes` is a **forest**; more than one root is normal.
+//! - A vacant supreme command is a real state, not an error: `commander` is absent.
 //!
 //! `401`/`403` are failures to surface, not to retry; `429` is real and backs off. A second `401`
 //! after a successful refresh is [`Error::Unauthorized`] — the account is disabled, or the token is
@@ -134,6 +149,40 @@ pub struct LiveCheck {
     pub token_remaining: Option<std::time::Duration>,
 }
 
+/// One operational resource, as `--self-check` reports it: the name of the row, and either what the
+/// read returned or why it was refused.
+///
+/// **A refusal is not a crash.** Every row is attempted even when an earlier one failed, so an
+/// account missing one `read` names the resource it cannot see instead of hiding the rest behind it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceCheck {
+    pub name: &'static str,
+    pub detail: Result<String, Error>,
+}
+
+/// One resource row: run the read, describe the value on success, keep the error on failure.
+async fn resource<T, F>(
+    name: &'static str,
+    read: impl std::future::Future<Output = Result<T, Error>>,
+    describe: F,
+) -> ResourceCheck
+where
+    F: FnOnce(T) -> String,
+{
+    ResourceCheck {
+        name,
+        detail: read.await.map(describe),
+    }
+}
+
+/// How many posts a forest holds, roots included.
+fn count_nodes(nodes: &[types::UnitOrganisationNode]) -> usize {
+    nodes
+        .iter()
+        .map(|node| 1 + count_nodes(&node.children))
+        .sum()
+}
+
 /// A signed-in session, kept open for the CLI paths that ask two questions of one wall.
 ///
 /// `start` is the login check and `read` is the read check, deliberately separate: "the credential is
@@ -215,6 +264,173 @@ impl Session {
         })?;
         let _ = token_remaining.token_remaining;
         Ok(token_remaining)
+    }
+
+    /// **One row per operational resource** (`#107`), each naming what it read.
+    ///
+    /// Every route needs `read` on its own `/system/...` subject, and an account can hold some and not
+    /// others. The rows are attempted independently for that reason: "the map is empty" is not a
+    /// diagnosis, and a wall operator needs the name of the read that was refused.
+    ///
+    /// The structure detail needs an id, so it reads the list first and asks about the first
+    /// structure the server named. An empty list is a valid answer — a deployment with no structures —
+    /// and is reported as such rather than as a failure.
+    pub fn resources(&mut self) -> Vec<ResourceCheck> {
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                return vec![ResourceCheck {
+                    name: "resources",
+                    detail: Err(Error::Transport(format!(
+                        "could not start a runtime: {error}"
+                    ))),
+                }];
+            }
+        };
+        runtime.block_on(async {
+            let mut rows = Vec::new();
+
+            rows.push(
+                resource(
+                    "viewpoint",
+                    self.http.viewpoint(),
+                    |viewpoint| match viewpoint.coordinates() {
+                        Some((latitude, longitude)) => {
+                            format!("view at {latitude:.4}, {longitude:.4}")
+                        }
+                        None => "no default view (unset, not 0,0)".to_string(),
+                    },
+                )
+                .await,
+            );
+            rows.push(
+                resource("inst types", self.http.installation_types(), |kinds| {
+                    format!("{} kinds", kinds.len())
+                })
+                .await,
+            );
+            rows.push(
+                resource("facilities", self.http.installations(), |places| {
+                    format!("{} active facilities", places.len())
+                })
+                .await,
+            );
+            rows.push(
+                resource("symbols", self.http.tactical_objects(), |library| {
+                    format!(
+                        "{} symbols in {} page(s){}",
+                        library.rows.len(),
+                        library.pages,
+                        if library.truncated { ", truncated" } else { "" }
+                    )
+                })
+                .await,
+            );
+            rows.push(
+                resource(
+                    "manifest",
+                    self.http.tactical_object_manifest(),
+                    |manifest| {
+                        format!(
+                            "{} symbols, version {}",
+                            manifest.symbols.len(),
+                            manifest.version
+                        )
+                    },
+                )
+                .await,
+            );
+            rows.push(
+                resource("facets", self.http.tactical_object_facets(), |facets| {
+                    format!(
+                        "{} active symbols, {} domains, {} categories",
+                        facets.total,
+                        facets.domains.len(),
+                        facets.categories.len()
+                    )
+                })
+                .await,
+            );
+            rows.push(
+                resource(
+                    "placements",
+                    self.http.tactical_object_placements(),
+                    |marks| {
+                        format!(
+                            "{} marks in {} page(s){}",
+                            marks.rows.len(),
+                            marks.pages,
+                            if marks.truncated { ", truncated" } else { "" }
+                        )
+                    },
+                )
+                .await,
+            );
+
+            let organisations = self.http.unit_organisations().await;
+            let detail = match &organisations {
+                Ok(list) => match list.first() {
+                    Some(first) => {
+                        resource("org", self.http.unit_organisation(first.id), |detail| {
+                            format!(
+                                "{} (id {}): {} nodes, {} root(s)",
+                                detail.organisation.name,
+                                detail.organisation.id,
+                                count_nodes(&detail.nodes),
+                                detail.nodes.len()
+                            )
+                        })
+                        .await
+                    }
+                    None => ResourceCheck {
+                        name: "org",
+                        detail: Ok("no structure to read".to_string()),
+                    },
+                },
+                Err(error) => ResourceCheck {
+                    name: "org",
+                    detail: Err(error.clone()),
+                },
+            };
+            rows.push(
+                resource("orgs", async { organisations }, |list| {
+                    format!("{} structures", list.len())
+                })
+                .await,
+            );
+            rows.push(detail);
+
+            rows.push(
+                resource(
+                    "tni command",
+                    self.http.tni_commander(),
+                    |post| match post.commander {
+                        Some(commander) => format!(
+                            "{}, rank {}, held by {}",
+                            post.position_title, post.echelon_rank, commander.name
+                        ),
+                        None => format!(
+                            "{}, rank {}, vacant",
+                            post.position_title, post.echelon_rank
+                        ),
+                    },
+                )
+                .await,
+            );
+            rows.push(
+                resource(
+                    "tni history",
+                    self.http.tni_commander_history(),
+                    |appointments| format!("{} appointments", appointments.len()),
+                )
+                .await,
+            );
+
+            rows
+        })
     }
 }
 
@@ -386,5 +602,285 @@ mod tests {
         let not_found: ErrorResponse =
             serde_json::from_str(&fixture("error-404.json")).expect("error decodes");
         assert_eq!(not_found.status_code, 404);
+    }
+
+    // -- the operational resources (#107) -------------------------------------------------------
+
+    /// **An unset viewpoint is absent, and absence is not `0,0`.** The deployment answers `{}`:
+    /// both coordinates gone together, and a map that defaulted the pair to the origin would draw a
+    /// chosen view in the Gulf of Guinea (`INV-01`).
+    #[test]
+    fn an_unset_viewpoint_is_absent_and_not_zero_zero() {
+        let envelope: Envelope<Viewpoint> =
+            serde_json::from_str(&fixture("viewpoint.json")).expect("viewpoint decodes");
+        assert_eq!(envelope.status_code, 200);
+        assert_eq!(envelope.data.latitude, None, "absent is not 0.0");
+        assert_eq!(envelope.data.longitude, None);
+        assert_eq!(
+            envelope.data.coordinates(),
+            None,
+            "half a viewpoint is not a viewpoint"
+        );
+    }
+
+    /// The facility vocabulary decodes in picker order, and `symbol_code` — a **code**, not an id —
+    /// is absent on this deployment rather than invented.
+    #[test]
+    fn the_facility_vocabulary_decodes_with_an_absent_symbol_code() {
+        let envelope: Envelope<Vec<InstallationType>> =
+            serde_json::from_str(&fixture("installation-types.json")).expect("types decode");
+        assert_eq!(envelope.data.len(), 5, "five kinds were recorded");
+        let orders: Vec<i32> = envelope.data.iter().map(|kind| kind.sort_order).collect();
+        let mut sorted = orders.clone();
+        sorted.sort_unstable();
+        assert_eq!(orders, sorted, "the picker's order, not the file's");
+        assert_eq!(
+            envelope.data[0].symbol_code, None,
+            "an absent symbol_code is not an empty one, and not a made-up code"
+        );
+        assert_eq!(envelope.data[0].is_system, Some(true));
+    }
+
+    /// **An empty facility register is a valid answer**: the dev instance has registered no
+    /// facilities. "Draw none" is not "the read failed", and the wall must not fall back to
+    /// pretending it could not ask.
+    #[test]
+    fn an_empty_installation_list_is_a_valid_answer() {
+        let envelope: Envelope<Vec<Installation>> =
+            serde_json::from_str(&fixture("installations.json")).expect("installations decode");
+        assert_eq!(envelope.status_code, 200);
+        assert!(envelope.data.is_empty());
+    }
+
+    /// A facility's position is optional but indivisible: a row without one has no coordinates,
+    /// and `0,0` is a place rather than "unknown".
+    #[test]
+    fn an_unlocated_facility_has_no_coordinates() {
+        let body = r#"{"status_code":200,"message":"Successfull","data":[
+            {"id":1,"id_installation_type":3,"type_name":"Pangkalan","id_service_branch":1,"name":"A","is_active":true},
+            {"id":2,"id_installation_type":3,"type_name":"Pangkalan","id_service_branch":1,"name":"B","latitude":-6.1,"longitude":106.8,"is_active":true}]}"#;
+        let envelope: Envelope<Vec<Installation>> = serde_json::from_str(body).expect("decodes");
+        assert_eq!(
+            envelope.data[0].coordinates(),
+            None,
+            "an unlocated facility is not at the origin"
+        );
+        assert_eq!(envelope.data[0].latitude, None);
+        assert_eq!(
+            envelope.data[1].coordinates(),
+            Some((-6.1, 106.8)),
+            "a located facility keeps both coordinates"
+        );
+    }
+
+    /// The symbol library is the recorded page, with its `metadata` intact: one page of 56 of 56.
+    #[test]
+    fn the_symbol_library_is_one_recorded_page_with_its_metadata() {
+        let envelope: Envelope<Vec<TacticalObject>> =
+            serde_json::from_str(&fixture("tactical-objects.json")).expect("library decodes");
+        assert_eq!(envelope.data.len(), 56, "the recorded catalogue");
+        let metadata = envelope.metadata.expect("a paged route reports metadata");
+        assert_eq!(metadata.total_records, 56);
+        assert_eq!(metadata.total_pages, 1);
+        assert!(!metadata.has_next_page, "one page and no more");
+
+        let first = &envelope.data[0];
+        assert_eq!(first.code, "BOYCAR_N");
+        assert_eq!(
+            first.category.domain.name, "Maritime",
+            "the category carries its domain so the picker needs no second call"
+        );
+        let url = first
+            .asset_url
+            .as_deref()
+            .expect("the recording signed a URL");
+        assert!(
+            url.starts_with("https://objects.example.test/"),
+            "a presigned URL's host and query are redacted in the fixture, got {url}"
+        );
+        assert!(
+            !url.contains("X-Amz-Credential") && !url.contains("X-Amz-Signature"),
+            "INV-08: a fixture must not carry a presigned credential, got {url}"
+        );
+    }
+
+    /// **The manifest is unpaginated and carries an entry for every symbol**, because a page of a
+    /// cache manifest is an incomplete cache. A missing `asset_url` would be a missing picture, not a
+    /// missing symbol.
+    #[test]
+    fn the_manifest_is_unpaginated_and_every_entry_carries_its_key() {
+        let envelope: Envelope<TacticalObjectManifest> =
+            serde_json::from_str(&fixture("tactical-objects-manifest.json"))
+                .expect("manifest decodes");
+        let manifest = envelope.data;
+        assert_eq!(manifest.version, 1);
+        assert_eq!(manifest.symbols.len(), 56);
+        assert!(
+            envelope.metadata.is_none(),
+            "the manifest has no metadata: it is not paged"
+        );
+        for entry in &manifest.symbols {
+            assert!(
+                !entry.asset_key.is_empty(),
+                "{} has no asset_key, so a client cannot recognise its artwork",
+                entry.code
+            );
+        }
+        let first = &manifest.symbols[0];
+        assert_eq!(first.code, "BOYCAR_N");
+        assert_eq!(first.category, "Kenavigasian");
+        assert_eq!(first.domain, "Maritime");
+    }
+
+    /// The facets are the picker's two rows: the counts agree with each other and with the total, and
+    /// a category with no symbols is returned with `count: 0` rather than omitted.
+    #[test]
+    fn the_facet_counts_agree_and_zero_count_rows_survive() {
+        let envelope: Envelope<TacticalObjectFacets> =
+            serde_json::from_str(&fixture("tactical-objects-facets.json")).expect("facets decode");
+        let facets = envelope.data;
+        assert_eq!(facets.total, 56);
+        let by_domain: u64 = facets.domains.iter().map(|domain| domain.count).sum();
+        let by_category: u64 = facets
+            .categories
+            .iter()
+            .map(|category| category.count)
+            .sum();
+        assert_eq!(
+            by_domain, facets.total,
+            "a domain's count is the sum of its categories'"
+        );
+        assert_eq!(by_category, facets.total);
+        assert!(
+            facets.domains.iter().any(|domain| domain.count == 0),
+            "the vocabulary is complete even where the catalogue is not: a zero row must survive"
+        );
+        for category in &facets.categories {
+            assert!(
+                facets
+                    .domains
+                    .iter()
+                    .any(|domain| domain.id == category.id_domain),
+                "category {} names a domain the response does not carry",
+                category.name
+            );
+        }
+    }
+
+    /// A placement **embeds** its whole symbol, so drawing never needs a second lookup — and a mark
+    /// with no label and no rotation decodes as `None`, not as `""` or `0.0` (`INV-01`).
+    #[test]
+    fn a_placement_embeds_its_symbol_and_an_absent_label_is_none() {
+        let envelope: Envelope<Vec<TacticalObjectPlacement>> =
+            serde_json::from_str(&fixture("tactical-object-placements.json"))
+                .expect("placements decode");
+        assert_eq!(envelope.data.len(), 3);
+        let first = &envelope.data[0];
+        assert_eq!(first.symbol.code, "LIGHTS_FIX");
+        assert!(
+            first.symbol.category.domain.name == "Maritime",
+            "the embedded symbol carries its category and domain"
+        );
+        assert_eq!(
+            first.label.as_deref(),
+            Some(""),
+            "the recording sent an empty label, which is a value the operator typed as empty"
+        );
+
+        // The absence case: the same recorded rows with `label` and `rotation_deg` removed, the shape
+        // the API sends when neither is set.
+        let absent = fixture("tactical-object-placements.json")
+            .replace("\"label\": \"\",\n", "")
+            .replace("\"rotation_deg\": 0,\n", "");
+        let envelope: Envelope<Vec<TacticalObjectPlacement>> =
+            serde_json::from_str(&absent).expect("the absence case decodes");
+        for mark in &envelope.data {
+            assert_eq!(mark.label, None, "an absent label is not an empty string");
+            assert_eq!(
+                mark.rotation_deg, None,
+                "an absent rotation is not 0 degrees"
+            );
+        }
+    }
+
+    /// `nodes` is a **forest**: more than one root is normal, `children` is always an array, and a
+    /// post with no level has no `echelon_rank` — never a rank of 0.
+    #[test]
+    fn the_standing_structure_is_a_forest_with_children_always_an_array() {
+        let list: Envelope<Vec<UnitOrganisation>> =
+            serde_json::from_str(&fixture("unit-organisations.json")).expect("list decodes");
+        assert_eq!(list.data.len(), 4, "one structure per service branch");
+        let navy = list
+            .data
+            .iter()
+            .find(|organisation| organisation.id == 1)
+            .expect("the recorded detail is for id 1");
+
+        let detail: Envelope<UnitOrganisationDetail> =
+            serde_json::from_str(&fixture("unit-organisation-1.json")).expect("detail decodes");
+        assert_eq!(detail.data.organisation.id, navy.id);
+        assert_eq!(detail.data.organisation.name, navy.name);
+        assert_eq!(detail.data.nodes.len(), 1, "this structure has one root");
+
+        let root = &detail.data.nodes[0];
+        assert_eq!(root.parent_id, None, "a root has no parent");
+        assert_eq!(
+            root.echelon_rank, None,
+            "a post with no level is not a post at rank 0"
+        );
+        assert_eq!(
+            root.commander, None,
+            "nobody is appointed to this recorded post"
+        );
+        assert!(
+            root.position_title.is_some(),
+            "the recorded root has a position title"
+        );
+        fn count(nodes: &[UnitOrganisationNode]) -> usize {
+            nodes.iter().map(|node| 1 + count(&node.children)).sum()
+        }
+        assert_eq!(count(&detail.data.nodes), 7, "the recorded structure");
+        assert_eq!(root.children.len(), 1, "the recorded root has one child");
+        assert_eq!(
+            root.children[0].children.len(),
+            2,
+            "the recorded second level has two children"
+        );
+        let leaf = root.children[0].children[0]
+            .children
+            .iter()
+            .find(|node| node.id == 7)
+            .expect("the recorded deepest post");
+        assert!(
+            leaf.children.is_empty(),
+            "a leaf's children is an empty array, not null"
+        );
+    }
+
+    /// **A vacant supreme command is not an error.** The post is shared by every branch and its
+    /// incumbent is absent; the history is an empty list, which is a valid answer.
+    #[test]
+    fn a_vacant_supreme_command_is_not_an_error() {
+        let envelope: Envelope<TniCommandPost> =
+            serde_json::from_str(&fixture("tni-commander.json")).expect("the post decodes");
+        let post = envelope.data;
+        assert_eq!(post.position_title, "Panglima TNI");
+        assert_eq!(post.echelon_rank, 7, "the top of the vocabulary");
+        assert_eq!(
+            post.commander, None,
+            "a vacant post has no incumbent, and that is a real state"
+        );
+        assert!(
+            post.echelon_name.is_some(),
+            "the recorded post names its echelon"
+        );
+
+        let history: Envelope<Vec<TniCommander>> =
+            serde_json::from_str(&fixture("tni-commander-history.json")).expect("history decodes");
+        assert_eq!(history.status_code, 200);
+        assert!(
+            history.data.is_empty(),
+            "nobody has been appointed on this deployment"
+        );
     }
 }

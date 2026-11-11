@@ -1,0 +1,77 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": {
+    "total": 56,
+    "domains": [
+      {
+        "id": 1,
+        "name": "Land",
+        "id_name": "Darat",
+        "sort_order": 1,
+        "count": 0
+      },
+      {
+        "id": 2,
+        "name": "Maritime",
+        "id_name": "Maritim",
+        "sort_order": 2,
+        "count": 51
+      },
+      {
+        "id": 3,
+        "name": "Air",
+        "id_name": "Udara",
+        "sort_order": 3,
+        "count": 5
+      },
+      {
+        "id": 4,
+        "name": "Space",
+        "id_name": "Antariksa",
+        "sort_order": 4,
+        "count": 0
+      },
+      {
+        "id": 5,
+        "name": "Cyber",
+        "id_name": "Siber",
+        "sort_order": 5,
+        "count": 0
+      },
+      {
+        "id": 6,
+        "name": "Other",
+        "id_name": "Lainnya",
+        "sort_order": 6,
+        "count": 0
+      }
+    ],
+    "categories": [
+      {
+        "id": 2,
+        "id_domain": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "count": 39
+      },
+      {
+        "id": 1,
+        "id_domain": 2,
+        "name": "Unsur Laut Statis",
+        "id_name": "Unsur Laut Statis",
+        "sort_order": 2,
+        "count": 12
+      },
+      {
+        "id": 3,
+        "id_domain": 3,
+        "name": "Unsur Udara Statis",
+        "id_name": "Unsur Udara Statis",
+        "sort_order": 1,
+        "count": 5
+      }
+    ]
+  }
+}

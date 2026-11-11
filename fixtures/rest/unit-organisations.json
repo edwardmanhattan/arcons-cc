@@ -1,0 +1,42 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": [
+    {
+      "id": 1,
+      "id_service_branch": 1,
+      "name": "TNI Angkatan Laut",
+      "id_name": "TNI Angkatan Laut",
+      "description_en": "-",
+      "note": "-",
+      "is_system": false
+    },
+    {
+      "id": 2,
+      "id_service_branch": 2,
+      "name": "Army",
+      "id_name": "TNI Angkatan Darat",
+      "description_en": "-",
+      "note": "-",
+      "is_system": false
+    },
+    {
+      "id": 3,
+      "id_service_branch": 3,
+      "name": "Air Force",
+      "id_name": "TNI Angkatan Udara",
+      "description_en": "-",
+      "note": "-",
+      "is_system": false
+    },
+    {
+      "id": 4,
+      "id_service_branch": 4,
+      "name": "Others",
+      "id_name": "Lainnya",
+      "description_en": "-",
+      "note": "-",
+      "is_system": false
+    }
+  ]
+}

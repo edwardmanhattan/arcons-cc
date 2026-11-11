@@ -139,6 +139,33 @@ class Handler(BaseHTTPRequestHandler):
             if str(json.loads(fixture("unit.json")).get("id")) == unit or unit == "1":
                 return self.reply(fixture("unit.json"))
             return self.reply(fixture("unit.json"))
+        # The operational resources (#107), from the recorded fixtures. The exact routes come before
+        # the prefixed ones so `/tactical-objects/manifest` is not read as one library entry.
+        if path == "/viewpoint":
+            return self.reply(fixture("viewpoint.json"))
+        if path == "/installation-types":
+            return self.reply(fixture("installation-types.json"))
+        if path == "/installations":
+            return self.reply(fixture("installations.json"))
+        if path == "/tactical-objects":
+            return self.reply(fixture("tactical-objects.json"))
+        if path == "/tactical-objects/manifest":
+            return self.reply(fixture("tactical-objects-manifest.json"))
+        if path == "/tactical-objects/facets":
+            return self.reply(fixture("tactical-objects-facets.json"))
+        if path == "/tactical-object-placements":
+            return self.reply(fixture("tactical-object-placements.json"))
+        if path == "/unit-organisations":
+            return self.reply(fixture("unit-organisations.json"))
+        if path.startswith("/unit-organisations/"):
+            ident = path.rsplit("/", 1)[-1]
+            if ident == "1":
+                return self.reply(fixture("unit-organisation-1.json"))
+            return self.reply(fixture("error-404.json"), 404)
+        if path == "/tni-commander":
+            return self.reply(fixture("tni-commander.json"))
+        if path == "/tni-commander/history":
+            return self.reply(fixture("tni-commander-history.json"))
         self.reply(fixture("error-404.json"), 404)
 
     # -- the socket ---------------------------------------------------------------------------------
