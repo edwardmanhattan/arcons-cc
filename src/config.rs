@@ -34,10 +34,11 @@ OPTIONS:
     --log-file PATH     also write the log there (stderr always gets it)
     --assert SCENE      check a capture's pixels and tree (scripts/assert.sh calls this)
     --image PATH        the capture --assert reads, and the candidate --compare compares
-    --compare PATH      compare --image against this golden, within --tolerance/--budget, and exit 1
-                        if the difference is a change rather than a rounding difference
-    --tolerance N       how far one channel may differ, in 255ths (default 2)
-    --budget N          how many pixels may differ at all (default 200)
+    --compare PATH      compare --image against this golden, within the scene's golden bounds, and
+                        exit 1 if the difference is a change rather than a rounding difference
+    --tolerance N       how far one channel may differ, in 255ths (default: the scene's bound, 2)
+    --budget N          how many pixels may change by more than one step (default: the scene's, 200)
+    --rounding N        how many pixels may differ by exactly one step (default: the scene's, 600)
     --tree PATH         the element tree to check too
     --reconnect-after S drop the socket once, S seconds after connecting (the soak's deliberate gap)
     --self-check        check config, credential, login, REST, socket and map seed, and exit
@@ -117,9 +118,10 @@ pub struct Args {
     /// `--compare`: the golden to compare `--image` against.
     pub compare_with: Option<PathBuf>,
     /// How far any one channel may differ, in steps of 255, before it is a different picture.
-    pub tolerance: u8,
+    pub tolerance: Option<u8>,
     /// How many pixels may differ at all before it is a different picture.
-    pub budget: usize,
+    pub budget: Option<usize>,
+    pub rounding: Option<usize>,
     /// `--reconnect-after`: drop the socket once, this many seconds after connecting. A soak aid: the
     /// reconnect path is otherwise only exercised by a network that happens to blink.
     pub reconnect_after: Option<std::time::Duration>,
@@ -151,8 +153,9 @@ impl Args {
             // pixels of 921,600 differ, by at most 1/255. Ten times that is still far below a real
             // change, and it leaves room for another driver's rounding. `tests/verify.rs` pins the
             // behaviour, and `docs/verification.md` says why the numbers are these.
-            tolerance: 2,
-            budget: 200,
+            tolerance: None,
+            budget: None,
+            rounding: None,
             reconnect_after: None,
             tree: None,
             passthrough: Vec::new(),
@@ -179,15 +182,27 @@ impl Args {
                 }
                 "--tolerance" => {
                     let value = argv.next().ok_or("--tolerance needs a number")?;
-                    args.tolerance = value
-                        .parse()
-                        .map_err(|_| "--tolerance is a number of 255ths, 0 to 255")?;
+                    args.tolerance = Some(
+                        value
+                            .parse()
+                            .map_err(|_| "--tolerance is a number of 255ths, 0 to 255")?,
+                    );
                 }
                 "--budget" => {
                     let value = argv.next().ok_or("--budget needs a number")?;
-                    args.budget = value
-                        .parse()
-                        .map_err(|_| "--budget is a number of pixels")?;
+                    args.budget = Some(
+                        value
+                            .parse()
+                            .map_err(|_| "--budget is a number of pixels")?,
+                    );
+                }
+                "--rounding" => {
+                    let value = argv.next().ok_or("--rounding needs a number")?;
+                    args.rounding = Some(
+                        value
+                            .parse()
+                            .map_err(|_| "--rounding is a number of pixels")?,
+                    );
                 }
                 "--reconnect-after" => {
                     let value = argv.next().ok_or("--reconnect-after needs seconds")?;

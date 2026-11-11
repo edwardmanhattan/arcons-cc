@@ -3105,6 +3105,11 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
 pub struct Difference {
     /// Pixels with any channel differing, alpha included.
     pub differing: usize,
+    /// Pixels whose largest channel difference is **exactly one step**: a rasteriser's rounding.
+    pub rounding: usize,
+    /// Pixels whose largest channel difference is **more than one step**: a different colour, or ink
+    /// where the golden has water — the pixels a moved label or a shifted edge makes.
+    pub changed: usize,
     /// The largest single-channel difference, 0–255.
     pub max_delta: u8,
 }
@@ -3113,11 +3118,70 @@ impl Difference {
     /// Identical, which is what two renders of one scene must be on one machine.
     pub const NONE: Difference = Difference {
         differing: 0,
+        rounding: 0,
+        changed: 0,
         max_delta: 0,
     };
 
     pub fn is_identical(self) -> bool {
         self.differing == 0
+    }
+}
+
+/// The bounds one golden is compared within (#130).
+///
+/// **Two counts, because one count cannot tell noise from content.** A rasteriser that rounds a glyph
+/// edge differently changes hundreds of pixels by **one step** — that is the same picture. A label that
+/// moved, an edge that shifted, or a token colour that changed moves pixels by **more than one step** —
+/// that is a different picture. One budget for both made CI red for a year of text-heavy scenes (373
+/// rounding pixels against a bound of 200) while a moved label could hide behind the number that had to
+/// grow to accept it.
+///
+/// `rounding` is still **bounded**, not ignored: a whole panel one step off is tens of thousands of
+/// rounding pixels and fails, which is the falsifier the original budget existed for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bounds {
+    /// The farthest one channel may differ, in 255ths. Two is a rounding step; scaled text on lavapipe
+    /// was measured at six, so the two scenes with scaled text allow eight.
+    pub tolerance: u8,
+    /// Pixels that differ by **more than one step**: a moved glyph, a shifted edge, a new colour.
+    pub changed: usize,
+    /// Pixels that differ by exactly one step. Generous enough for a rasteriser's text, still small
+    /// enough that a panel-sized shift fails.
+    pub rounding: usize,
+}
+
+impl Bounds {
+    pub const fn new(tolerance: u8, changed: usize, rounding: usize) -> Bounds {
+        Bounds {
+            tolerance,
+            changed,
+            rounding,
+        }
+    }
+}
+
+/// The bounds every golden is compared with unless its scene measured differently.
+pub const DEFAULT_BOUNDS: Bounds = Bounds::new(2, 200, 600);
+
+/// The bounds for one scene: the defaults, except where a measurement on CI said otherwise.
+///
+/// The numbers are **measured, then given a margin**, and printed on every run. A scene added later
+/// gets the defaults; a scene whose text is scaled by a transform — where two rasterisers put glyph
+/// coverage on different subpixel phases — is the case that needs a stated exception.
+pub fn golden_bounds(scene: &str) -> Bounds {
+    match scene {
+        // **Scaled text** (#127): the tree canvas draws 12 pt text at a transform, and lavapipe was
+        // measured at a channel difference of 6 on 207–224 pixels. The tolerance keeps the colour
+        // contract for the other scenes.
+        "pane-tree" | "pane-tree-pan" => Bounds::new(8, 350, 400),
+        // **Hundreds of one-step pixels** (#110, #112, #127): labels, the filter panel's rows, and a
+        // zoomed tree. Measured 252–373; the change budget is the ordinary 200, because these are
+        // rounding, not moved glyphs.
+        "objects" => Bounds::new(2, 200, 450),
+        "panes-filter" => Bounds::new(2, 200, 400),
+        "pane-tree-zoom" => Bounds::new(2, 200, 500),
+        _ => DEFAULT_BOUNDS,
     }
 }
 
@@ -3131,6 +3195,8 @@ pub fn difference(a: &Image, b: &Image) -> Result<Difference, String> {
         ));
     }
     let mut differing = 0;
+    let mut rounding = 0;
+    let mut changed = 0;
     let mut max_delta = 0u8;
     for (pa, pb) in a
         .pixels
@@ -3147,33 +3213,48 @@ pub fn difference(a: &Image, b: &Image) -> Result<Difference, String> {
             .unwrap_or(0);
         if delta > 0 {
             differing += 1;
+            // One step is a rasteriser's rounding; anything further is ink or colour that moved.
+            if delta == 1 {
+                rounding += 1;
+            } else {
+                changed += 1;
+            }
             max_delta = max_delta.max(delta);
         }
     }
     Ok(Difference {
         differing,
+        rounding,
+        changed,
         max_delta,
     })
 }
 
-/// Whether a difference is within the stated bounds: no channel further than `tolerance`, and no more
-/// than `budget` pixels differing at all.
+/// Whether a difference is within the stated bounds: no channel further than `tolerance`, no more than
+/// `changed` pixels off by more than a step, and no more than `rounding` pixels off by exactly one.
 ///
-/// **Both bounds are needed**, and this is the whole argument for the pair. `budget` alone lets a change
-/// to a couple of hundred pixels of *text* through; `tolerance` alone lets a whole panel shift by a
-/// rounding step. Together they say "the picture is the same picture, rendered by a slightly different
-/// machine" — and nothing more.
-pub fn within(diff: Difference, tolerance: u8, budget: usize) -> Result<(), String> {
-    if diff.max_delta > tolerance {
+/// **All three are needed**, and this is the whole argument. `tolerance` alone lets a whole panel shift
+/// by a rounding step; a single budget lets a moved label hide behind the number that had to grow to
+/// accept a rasteriser's text; and an unbounded rounding allowance would never notice a panel one step
+/// off. Together they say "the picture is the same picture, rendered by a slightly different machine" —
+/// and nothing more.
+pub fn within(diff: Difference, bounds: Bounds) -> Result<(), String> {
+    if diff.max_delta > bounds.tolerance {
         return Err(format!(
-            "a channel differs by {} (tolerance {tolerance}): {} pixels differ in total",
-            diff.max_delta, diff.differing
+            "a channel differs by {} (tolerance {}): {} pixels differ in total",
+            diff.max_delta, bounds.tolerance, diff.differing
         ));
     }
-    if diff.differing > budget {
+    if diff.changed > bounds.changed {
         return Err(format!(
-            "{} pixels differ (budget {budget}), the largest difference {} /255",
-            diff.differing, diff.max_delta
+            "{} pixels changed by more than one step (budget {}): {} pixels differ in total, the              largest by {} /255",
+            diff.changed, bounds.changed, diff.differing, diff.max_delta
+        ));
+    }
+    if diff.rounding > bounds.rounding {
+        return Err(format!(
+            "{} pixels differ by one step (budget {}): {} pixels differ in total",
+            diff.rounding, bounds.rounding, diff.differing
         ));
     }
     Ok(())
@@ -3317,7 +3398,7 @@ mod tests {
             assert_eq!(diff, Difference::NONE);
             assert!(diff.is_identical());
             assert!(
-                within(diff, 0, 0).is_ok(),
+                within(diff, Bounds::new(0, 0, 0)).is_ok(),
                 "identical passes even with no room"
             );
         }
@@ -3336,12 +3417,17 @@ mod tests {
                 diff,
                 Difference {
                     differing: 23,
+                    rounding: 23,
+                    changed: 0,
                     max_delta: 1
                 }
             );
-            assert!(within(diff, 2, 200).is_ok(), "within the stated bounds");
             assert!(
-                within(diff, 0, 0).is_err(),
+                within(diff, DEFAULT_BOUNDS).is_ok(),
+                "within the stated bounds"
+            );
+            assert!(
+                within(diff, Bounds::new(0, 0, 0)).is_err(),
                 "and not byte-identical, which is what `ARCONS_GOLDENS=exact` asks for"
             );
         }
@@ -3355,7 +3441,7 @@ mod tests {
             let diff = difference(&a, &b).expect("same size");
             assert_eq!(diff.differing, 1);
             assert_eq!(diff.max_delta, 170);
-            let reason = within(diff, 2, 200).expect_err("a channel moved 170 steps");
+            let reason = within(diff, DEFAULT_BOUNDS).expect_err("a channel moved 170 steps");
             assert!(reason.contains("170"), "{reason}");
         }
 
@@ -3373,12 +3459,72 @@ mod tests {
             let diff = difference(&a, &b).expect("same size");
             assert_eq!(diff.max_delta, 1);
             assert_eq!(diff.differing, 1600);
-            let reason = within(diff, 2, 200).expect_err("1600 pixels is more than the budget");
+            let reason = within(diff, DEFAULT_BOUNDS)
+                .expect_err("1600 rounding pixels is more than the rounding budget");
             assert!(reason.contains("1600"), "{reason}");
             assert!(
-                within(diff, 2, 2000).is_ok(),
-                "and a budget of 2000 would allow it"
+                within(diff, Bounds::new(2, 200, 2000)).is_ok(),
+                "and a rounding budget of 2000 would allow it"
             );
+        }
+
+        /// **The falsifier the budget exists for** (#130): a label that moved. Its pixels are ink
+        /// where the golden has water and water where it had ink, so they differ by far more than a
+        /// rounding step — the change budget catches a text-sized block moved by a visible amount, even
+        /// though the rounding allowance is three times the old budget.
+        #[test]
+        fn a_moved_label_fails_the_change_budget_though_rounding_is_generous() {
+            let mut a = image(320, 80, [10, 20, 30, 255]);
+            let mut b = image(320, 80, [10, 20, 30, 255]);
+            // A label-sized block of ink at x=20, and the same block eight pixels to the right.
+            for y in 20..36 {
+                for x in 20..220 {
+                    a.set(x, y, [240, 240, 235, 255]);
+                }
+                for x in 28..228 {
+                    b.set(x, y, [240, 240, 235, 255]);
+                }
+            }
+            // A rasteriser's own noise on top: 200 pixels one step off, which is not a change.
+            for i in 0..200 {
+                b.set(i % 320, 60 + i / 320, [11, 20, 30, 255]);
+            }
+            let diff = difference(&a, &b).expect("same size");
+            assert!(
+                diff.changed > DEFAULT_BOUNDS.changed,
+                "a moved label is {} changed pixels, over the {} budget",
+                diff.changed,
+                DEFAULT_BOUNDS.changed
+            );
+            assert!(
+                diff.rounding <= DEFAULT_BOUNDS.rounding,
+                "the rounding is inside its own allowance: {}",
+                diff.rounding
+            );
+            // A real golden would also fail the tolerance (the moved ink is a different colour); the
+            // point here is that the **count** catches it even when the tolerance is generous.
+            let reason = within(
+                diff,
+                Bounds::new(255, DEFAULT_BOUNDS.changed, DEFAULT_BOUNDS.rounding),
+            )
+            .expect_err("a moved label is a change");
+            assert!(reason.contains("more than one step"), "{reason}");
+        }
+
+        /// **The measured exception** (#127): scaled text on lavapipe differs by six steps on a channel,
+        /// and the tree scenes say so; every other scene keeps the ordinary two-step contract.
+        #[test]
+        fn only_the_scenes_whose_text_is_scaled_relax_the_tolerance() {
+            assert_eq!(DEFAULT_BOUNDS.tolerance, 2);
+            assert_eq!(golden_bounds("pane-tree").tolerance, 8);
+            assert_eq!(golden_bounds("pane-tree-pan").tolerance, 8);
+            for scene in ["objects", "panes-filter", "pane-tree-zoom", "installations"] {
+                assert_eq!(
+                    golden_bounds(scene).tolerance,
+                    2,
+                    "{scene} keeps the two-step contract"
+                );
+            }
         }
 
         /// Different sizes are not a big difference: they are not the same picture, and a golden of the

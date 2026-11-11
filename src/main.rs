@@ -98,7 +98,25 @@ fn compare_captures(args: &config::Args) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let verdict = arcons_cc::verify::within(difference, args.tolerance, args.budget);
+    // **The scene's bounds** (#130): derived from the golden's name, which is the scene's identity by
+    // construction (`fixtures/golden/<scene>.png`). A per-scene measurement lives in one place,
+    // `verify::golden_bounds`; the flags are the human's override, and `ARCONS_GOLDENS=exact` passes
+    // zeroes.
+    let scene = golden
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default();
+    let mut bounds = arcons_cc::verify::golden_bounds(scene);
+    if let Some(tolerance) = args.tolerance {
+        bounds.tolerance = tolerance;
+    }
+    if let Some(changed) = args.budget {
+        bounds.changed = changed;
+    }
+    if let Some(rounding) = args.rounding {
+        bounds.rounding = rounding;
+    }
+    let verdict = arcons_cc::verify::within(difference, bounds);
     match verdict {
         Ok(()) if difference.is_identical() => {
             println!("identical to {} — byte for byte", golden.display());
@@ -106,21 +124,26 @@ fn compare_captures(args: &config::Args) -> ExitCode {
         }
         Ok(()) => {
             println!(
-                "matches {} within tolerance: {} px differ, max Δ{}/255 (tolerance {}, budget {})",
+                "matches {} within bounds: {} px differ ({} changed, {} rounding), max Δ{}/255 \
+                 (tolerance {}, change {}, rounding {})",
                 golden.display(),
                 difference.differing,
+                difference.changed,
+                difference.rounding,
                 difference.max_delta,
-                args.tolerance,
-                args.budget
+                bounds.tolerance,
+                bounds.changed,
+                bounds.rounding
             );
             ExitCode::SUCCESS
         }
         Err(reason) => {
             eprintln!(
-                "DIFFERS from {} — {reason} (tolerance {}, budget {})",
+                "DIFFERS from {} — {reason} (tolerance {}, change {}, rounding {})",
                 golden.display(),
-                args.tolerance,
-                args.budget
+                bounds.tolerance,
+                bounds.changed,
+                bounds.rounding
             );
             ExitCode::FAILURE
         }

@@ -94,25 +94,27 @@ for scene in "${SCENES[@]}"; do
     continue
   fi
 
-  # The golden is compared on **every** machine, within a stated tolerance: two rasterisers (this
-  # laptop's iGPU and CI's lavapipe) were measured to differ by at most 1/255 on at most 23 pixels of
-  # 921,600, so a byte compare can only ever be the reference machine's privilege — and CI skipping the
-  # goldens is how a consistent change (a moved card, a shifted token colour) passes CI. The numbers
-  # are printed on every run; a tolerance nobody can see the margin of is a tolerance that widens.
+  # The golden is compared on **every** machine within the **scene's own bounds** (#130): two
+  # rasterisers (this laptop's iGPU and CI's lavapipe) round glyph edges differently, so a byte compare
+  # can only ever be the reference machine's privilege. The bounds — a channel tolerance, a budget for
+  # pixels that changed by more than one step, and a budget for one-step rounding — live in
+  # `verify::golden_bounds`, one place, with the measurement that set each exception. The numbers are
+  # printed on every run; a bound nobody can see the margin of is a bound that quietly widens.
   golden="fixtures/golden/$scene.png"
-  tolerance="${ARCONS_TOLERANCE:-2}"
-  budget="${ARCONS_BUDGET:-200}"
+  compare_args=(--compare "$golden" --image "out/$scene.png")
   # `ARCONS_GOLDENS=exact` demands bytes: for the reference machine, when a human wants to know that the
   # pixels are the reviewed ones and not merely the same picture.
   if [ "${ARCONS_GOLDENS:-on}" = "exact" ]; then
-    tolerance=0
-    budget=0
+    compare_args+=(--tolerance 0 --budget 0 --rounding 0)
+  else
+    [ -n "${ARCONS_TOLERANCE:-}" ] && compare_args+=(--tolerance "$ARCONS_TOLERANCE")
+    [ -n "${ARCONS_BUDGET:-}" ] && compare_args+=(--budget "$ARCONS_BUDGET")
+    [ -n "${ARCONS_ROUNDING:-}" ] && compare_args+=(--rounding "$ARCONS_ROUNDING")
   fi
   if [ ! -f "$golden" ]; then
     echo "  no golden at $golden: run scripts/capture.sh --update-goldens $scene" >&2
     status=1
-  elif ./target/debug/arcons-cc --compare "$golden" --image "out/$scene.png" \
-      --tolerance "$tolerance" --budget "$budget"; then
+  elif ./target/debug/arcons-cc "${compare_args[@]}"; then
     :
   else
     status=1

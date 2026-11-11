@@ -324,26 +324,40 @@ drawn. `card-open` did exactly that with the card's age, and the result was a ca
 and under load, which read as a flaky test rather than as a clock (#35). The fix was one line, and the
 tripwire is the rule.
 
-### A golden is compared within a stated tolerance, everywhere
+### A golden is compared within a stated bound, everywhere
 
 `scripts/capture.sh` renders every scene **twice** and compares the bytes: on one machine, twice, a
 capture must be identical (`INV-11`'s machine-independent half).
 
-Against the committed golden, the compare is **bounded**, not byte-exact:
+Against the committed golden, the compare is **bounded**, not byte-exact. There are three bounds, because
+one count cannot tell a rasteriser's noise from a picture that changed (#130):
 
-| bound | value | why that number |
+| bound | default | why that number |
 | --- | --- | --- |
-| no channel differs by more than | **2 / 255** | two rasterisers (this laptop's iGPU and CI's lavapipe) were measured at **1/255**, on at most 23 pixels of 921,600 |
-| pixels differing at all | **200** | ~10× the worst measured case, and small enough that a moved label or a torn panel cannot hide |
+| no channel differs by more than | **2 / 255** | a rounding step at a glyph edge. Scaled text — the tree canvas — was measured at **6/255** on lavapipe, so `pane-tree` and `pane-tree-pan` state **8** |
+| pixels differing **by more than one step** | **200** | ink where the golden has water, or a different colour: a label that moved, an edge that shifted, a token that changed. 200 is small enough that a label-sized block moved by a visible amount fails |
+| pixels differing by **exactly one step** | **600** | the rasteriser's rounding. Text-heavy scenes were measured at 252–373 of these; the panel-sized falsifier below is **1600**, so the allowance is bounded, not ignored |
 
-Both bounds are needed and neither is enough: a budget alone would let 200 pixels of *text* change, and a
-tolerance alone would let a whole panel shift by a rounding step. The measured numbers are printed on
-every run — a tolerance nobody can see the margin of is a tolerance that quietly widens.
+**Why three, and not two.** A single pixel budget had to grow to accept a rasteriser's text — 373 pixels
+on the zoomed tree against a bound of 200 — and a bound that large would let a moved label hide. Splitting
+the count by magnitude keeps both promises: rounding is generous and still bounded (a whole panel one step
+off is 100,000 pixels and fails), and a change is tight (a moved label changes pixels by far more than a
+step, and fails).
 
-`ARCONS_GOLDENS=exact` demands bytes (`tolerance 0`, `budget 0`): for the reference machine, or when a
-human wants to know the pixels are the reviewed ones rather than merely the same picture. There is no
-`off`: skipping the goldens in CI is how a *consistent* change — a card moved, a token's colour shifted
-— passes CI and fails only on one laptop.
+The numbers are **per scene**, in one place, `verify::golden_bounds`; the defaults are above and the
+exceptions carry the measurement that set them. A new scene takes the defaults, and the numbers are
+printed on every run — a bound nobody can see the margin of is a bound that quietly widens.
+
+```
+matches fixtures/golden/objects.png within bounds: 276 px differ (0 changed, 276 rounding), max Δ1/255
+(tolerance 2, change 200, rounding 450)
+```
+
+`ARCONS_GOLDENS=exact` demands bytes (`tolerance 0`, `change 0`, `rounding 0`): for the reference machine,
+or when a human wants to know the pixels are the reviewed ones rather than merely the same picture.
+`ARCONS_TOLERANCE`, `ARCONS_BUDGET` and `ARCONS_ROUNDING` are human overrides for one run. There is no
+`off`: skipping the goldens in CI is how a *consistent* change — a card moved, a token's colour shifted —
+passes CI and fails only on one laptop.
 
 A golden changes only through `--update-goldens`, run by a human who has looked at the capture, and the
 PR says which machine made it.
