@@ -1,0 +1,1358 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": [
+    {
+      "id": 1,
+      "code": "BOYCAR_N",
+      "name": "North Cardinal Buoy",
+      "id_name": "Bui Kardinal Utara",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 10,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BOYCAR_N.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 2,
+      "code": "BOYCAR_E",
+      "name": "East Cardinal Buoy",
+      "id_name": "Bui Kardinal Timur",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 20,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BOYCAR_E.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 3,
+      "code": "BOYCAR_S",
+      "name": "South Cardinal Buoy",
+      "id_name": "Bui Kardinal Selatan",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 30,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BOYCAR_S.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 4,
+      "code": "BOYCAR_W",
+      "name": "West Cardinal Buoy",
+      "id_name": "Bui Kardinal Barat",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 40,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BOYCAR_W.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 5,
+      "code": "BCNCAR_N",
+      "name": "North Cardinal Beacon",
+      "id_name": "Rambu Tetap Kardinal Utara",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 50,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BCNCAR_N.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 6,
+      "code": "BCNCAR_E",
+      "name": "East Cardinal Beacon",
+      "id_name": "Rambu Tetap Kardinal Timur",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 60,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BCNCAR_E.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 7,
+      "code": "BCNCAR_S",
+      "name": "South Cardinal Beacon",
+      "id_name": "Rambu Tetap Kardinal Selatan",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 70,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BCNCAR_S.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 8,
+      "code": "BCNCAR_W",
+      "name": "West Cardinal Beacon",
+      "id_name": "Rambu Tetap Kardinal Barat",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 80,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BCNCAR_W.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 9,
+      "code": "BOYLAT_STBD_CONE_GREEN",
+      "name": "Starboard Lateral Conical Buoy (Green)",
+      "id_name": "Bui Lateral Kerucut Hijau",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 90,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BOYLAT_STBD_CONE_GREEN.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 10,
+      "code": "BOYLAT_STBD_CYL_GREEN",
+      "name": "Starboard Lateral Cylindrical Buoy (Green)",
+      "id_name": "Bui Lateral Silinder Hijau",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 100,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BOYLAT_STBD_CYL_GREEN.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 11,
+      "code": "BOYLAT_PORT_CONE_RED",
+      "name": "Port Lateral Conical Buoy (Red)",
+      "id_name": "Bui Lateral Kerucut Merah",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 110,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BOYLAT_PORT_CONE_RED.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 12,
+      "code": "BOYLAT_PORT_CYL_RED",
+      "name": "Port Lateral Cylindrical Buoy (Red)",
+      "id_name": "Bui Lateral Silinder Merah",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 120,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BOYLAT_PORT_CYL_RED.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 13,
+      "code": "BCNLAT_STBD_CONE_GREEN",
+      "name": "Starboard Lateral Conical Beacon (Green)",
+      "id_name": "Rambu Tetap Lateral Kerucut Hijau",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 130,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BCNLAT_STBD_CONE_GREEN.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 14,
+      "code": "BCNLAT_STBD_CYL_GREEN",
+      "name": "Starboard Lateral Cylindrical Beacon (Green)",
+      "id_name": "Rambu Tetap Lateral Silinder Hijau",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 140,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BCNLAT_STBD_CYL_GREEN.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 15,
+      "code": "BCNLAT_PORT_CONE_RED",
+      "name": "Port Lateral Conical Beacon (Red)",
+      "id_name": "Rambu Tetap Lateral Kerucut Merah",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 150,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BCNLAT_PORT_CONE_RED.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 16,
+      "code": "BCNLAT_PORT_CYL_RED",
+      "name": "Port Lateral Cylindrical Beacon (Red)",
+      "id_name": "Rambu Tetap Lateral Silinder Merah",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 160,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BCNLAT_PORT_CYL_RED.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 17,
+      "code": "BOYSAW",
+      "name": "Safe Water Buoy",
+      "id_name": "Bui Aman Perairan",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 170,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BOYSAW.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 18,
+      "code": "BCNSAW",
+      "name": "Safe Water Beacon",
+      "id_name": "Rambu Tetap Aman Perairan",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 180,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BCNSAW.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 19,
+      "code": "BOYISD",
+      "name": "Isolated Danger Buoy",
+      "id_name": "Bui Bahaya Terisolasi",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 190,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BOYISD.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 20,
+      "code": "BCNISD",
+      "name": "Isolated Danger Beacon",
+      "id_name": "Rambu Tetap Bahaya Terisolasi",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 200,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BCNISD.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 21,
+      "code": "BOYSPP",
+      "name": "Special Mark Buoy",
+      "id_name": "Bui Tanda Khusus",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 210,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BOYSPP.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 22,
+      "code": "BCNSPP",
+      "name": "Special Mark Beacon",
+      "id_name": "Rambu Tetap Tanda Khusus",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 220,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BCNSPP.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 23,
+      "code": "BOYSPP_EX",
+      "name": "Exercise Area Buoy",
+      "id_name": "Bui Penanda Daerah Latihan",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 230,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BOYSPP_EX.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 24,
+      "code": "BCNSPP_EX",
+      "name": "Exercise Area Beacon",
+      "id_name": "Rambu Tetap Penanda Daerah Latihan",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 240,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BCNSPP_EX.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 25,
+      "code": "LIGHTS_FIX",
+      "name": "Fixed Light",
+      "id_name": "Suar Tetap",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 250,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/LIGHTS_FIX.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 26,
+      "code": "LIGHTS_FL",
+      "name": "Flashing Light",
+      "id_name": "Suar Berkedip",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 260,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/LIGHTS_FL.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 27,
+      "code": "LIGHTS_Q",
+      "name": "Quick Light",
+      "id_name": "Suar Kilat",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 270,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/LIGHTS_Q.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 28,
+      "code": "LIGHTS_OC",
+      "name": "Occulting Light",
+      "id_name": "Suar Terputus",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 280,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/LIGHTS_OC.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 29,
+      "code": "LIGHTS_ISO",
+      "name": "Isophase Light",
+      "id_name": "Suar Isofase",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 290,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/LIGHTS_ISO.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 30,
+      "code": "LIGHTS_MO",
+      "name": "Morse Light",
+      "id_name": "Suar Morse",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 300,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/LIGHTS_MO.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 31,
+      "code": "TOPMAR_CONE_UP",
+      "name": "Conical Topmark (Point Up)",
+      "id_name": "Puncak Tanda Kerucut Atas",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 310,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/TOPMAR_CONE_UP.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 32,
+      "code": "TOPMAR_CONE_DOWN",
+      "name": "Conical Topmark (Point Down)",
+      "id_name": "Puncak Tanda Kerucut Bawah",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 320,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/TOPMAR_CONE_DOWN.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 33,
+      "code": "TOPMAR_SPHERE",
+      "name": "Spherical Topmark",
+      "id_name": "Puncak Tanda Bola",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 330,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/TOPMAR_SPHERE.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 34,
+      "code": "TOPMAR_X",
+      "name": "Cross Topmark",
+      "id_name": "Puncak Tanda Silang",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 340,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/TOPMAR_X.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 35,
+      "code": "LNDMRK_LDG",
+      "name": "Leading Line",
+      "id_name": "Rambu Penuntun",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 350,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/LNDMRK_LDG.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 36,
+      "code": "LIGHTS_LDG_F",
+      "name": "Front Leading Light",
+      "id_name": "Rambu Jangkauan Depan",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 360,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/LIGHTS_LDG_F.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 37,
+      "code": "LIGHTS_LDG_R",
+      "name": "Rear Leading Light",
+      "id_name": "Rambu Jangkauan Belakang",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 370,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/LIGHTS_LDG_R.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 38,
+      "code": "LITVES",
+      "name": "Light Vessel",
+      "id_name": "Kapal Suar",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 380,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/LITVES.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 39,
+      "code": "RADRFL",
+      "name": "Radar Reflector",
+      "id_name": "Rambu Radar Reflektor",
+      "description": "",
+      "category": {
+        "id": 2,
+        "name": "Kenavigasian",
+        "id_name": "Kenavigasian",
+        "sort_order": 1,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 390,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/RADRFL.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 40,
+      "code": "LNDMRK_LH",
+      "name": "Lighthouse",
+      "id_name": "Mercusuar",
+      "description": "",
+      "category": {
+        "id": 1,
+        "name": "Unsur Laut Statis",
+        "id_name": "Unsur Laut Statis",
+        "sort_order": 2,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 400,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/LNDMRK_LH.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 41,
+      "code": "LNDMRK_BCN",
+      "name": "Beacon Tower",
+      "id_name": "Menara Suar",
+      "description": "",
+      "category": {
+        "id": 1,
+        "name": "Unsur Laut Statis",
+        "id_name": "Unsur Laut Statis",
+        "sort_order": 2,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 410,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/LNDMRK_BCN.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 42,
+      "code": "PLATFRM",
+      "name": "Offshore Platform",
+      "id_name": "Platform Lepas Pantai",
+      "description": "",
+      "category": {
+        "id": 1,
+        "name": "Unsur Laut Statis",
+        "id_name": "Unsur Laut Statis",
+        "sort_order": 2,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 420,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/PLATFRM.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 43,
+      "code": "PLATFRM_OIL",
+      "name": "Oil Rig",
+      "id_name": "Anjungan Minyak",
+      "description": "",
+      "category": {
+        "id": 1,
+        "name": "Unsur Laut Statis",
+        "id_name": "Unsur Laut Statis",
+        "sort_order": 2,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 430,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/PLATFRM_OIL.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 44,
+      "code": "MORFAC",
+      "name": "Mooring Buoy",
+      "id_name": "Tambatan Bui",
+      "description": "",
+      "category": {
+        "id": 1,
+        "name": "Unsur Laut Statis",
+        "id_name": "Unsur Laut Statis",
+        "sort_order": 2,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 440,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/MORFAC.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 45,
+      "code": "ACHARE",
+      "name": "Anchorage Area",
+      "id_name": "Daerah Berlabuh",
+      "description": "",
+      "category": {
+        "id": 1,
+        "name": "Unsur Laut Statis",
+        "id_name": "Unsur Laut Statis",
+        "sort_order": 2,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 450,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/ACHARE.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 46,
+      "code": "WRECKS",
+      "name": "Wreck",
+      "id_name": "Kerangka Kapal Tenggelam",
+      "description": "",
+      "category": {
+        "id": 1,
+        "name": "Unsur Laut Statis",
+        "id_name": "Unsur Laut Statis",
+        "sort_order": 2,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 460,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/WRECKS.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 47,
+      "code": "UWTROC",
+      "name": "Rock Awash",
+      "id_name": "Karang Tampak",
+      "description": "",
+      "category": {
+        "id": 1,
+        "name": "Unsur Laut Statis",
+        "id_name": "Unsur Laut Statis",
+        "sort_order": 2,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 470,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/UWTROC.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 48,
+      "code": "UWTROC_SUB",
+      "name": "Sunken Rock",
+      "id_name": "Karang Tenggelam",
+      "description": "",
+      "category": {
+        "id": 1,
+        "name": "Unsur Laut Statis",
+        "id_name": "Unsur Laut Statis",
+        "sort_order": 2,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 480,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/UWTROC_SUB.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 49,
+      "code": "PIPARE",
+      "name": "Submarine Pipeline",
+      "id_name": "Pipa Bawah Laut",
+      "description": "",
+      "category": {
+        "id": 1,
+        "name": "Unsur Laut Statis",
+        "id_name": "Unsur Laut Statis",
+        "sort_order": 2,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 490,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/PIPARE.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 50,
+      "code": "CBLARE",
+      "name": "Submarine Cable",
+      "id_name": "Kabel Bawah Laut",
+      "description": "",
+      "category": {
+        "id": 1,
+        "name": "Unsur Laut Statis",
+        "id_name": "Unsur Laut Statis",
+        "sort_order": 2,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 500,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/CBLARE.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 51,
+      "code": "DMPGRD",
+      "name": "Dumping Ground",
+      "id_name": "Daerah Pembuangan",
+      "description": "",
+      "category": {
+        "id": 1,
+        "name": "Unsur Laut Statis",
+        "id_name": "Unsur Laut Statis",
+        "sort_order": 2,
+        "domain": {
+          "id": 2,
+          "name": "Maritime",
+          "id_name": "Maritim",
+          "sort_order": 2
+        }
+      },
+      "sort_order": 510,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/DMPGRD.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 52,
+      "code": "AIRP",
+      "name": "Airfield",
+      "id_name": "Lapangan Udara",
+      "description": "",
+      "category": {
+        "id": 3,
+        "name": "Unsur Udara Statis",
+        "id_name": "Unsur Udara Statis",
+        "sort_order": 1,
+        "domain": {
+          "id": 3,
+          "name": "Air",
+          "id_name": "Udara",
+          "sort_order": 3
+        }
+      },
+      "sort_order": 520,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/AIRP.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 53,
+      "code": "HELIPAD",
+      "name": "Helipad",
+      "id_name": "Helipad",
+      "description": "",
+      "category": {
+        "id": 3,
+        "name": "Unsur Udara Statis",
+        "id_name": "Unsur Udara Statis",
+        "sort_order": 1,
+        "domain": {
+          "id": 3,
+          "name": "Air",
+          "id_name": "Udara",
+          "sort_order": 3
+        }
+      },
+      "sort_order": 530,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/HELIPAD.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 54,
+      "code": "AIRARE",
+      "name": "Restricted Airspace",
+      "id_name": "Ruang Udara Terbatas",
+      "description": "",
+      "category": {
+        "id": 3,
+        "name": "Unsur Udara Statis",
+        "id_name": "Unsur Udara Statis",
+        "sort_order": 1,
+        "domain": {
+          "id": 3,
+          "name": "Air",
+          "id_name": "Udara",
+          "sort_order": 3
+        }
+      },
+      "sort_order": 540,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/AIRARE.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 55,
+      "code": "DANGER",
+      "name": "Danger Area",
+      "id_name": "Daerah Berbahaya",
+      "description": "",
+      "category": {
+        "id": 3,
+        "name": "Unsur Udara Statis",
+        "id_name": "Unsur Udara Statis",
+        "sort_order": 1,
+        "domain": {
+          "id": 3,
+          "name": "Air",
+          "id_name": "Udara",
+          "sort_order": 3
+        }
+      },
+      "sort_order": 550,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/DANGER.svg?X-Amz-Expires=REDACTED"
+    },
+    {
+      "id": 56,
+      "code": "OBSTRN",
+      "name": "Air Obstacle",
+      "id_name": "Penghalang Udara",
+      "description": "",
+      "category": {
+        "id": 3,
+        "name": "Unsur Udara Statis",
+        "id_name": "Unsur Udara Statis",
+        "sort_order": 1,
+        "domain": {
+          "id": 3,
+          "name": "Air",
+          "id_name": "Udara",
+          "sort_order": 3
+        }
+      },
+      "sort_order": 560,
+      "is_active": true,
+      "is_seeded": true,
+      "asset_source": "seed",
+      "asset_url": "https://objects.example.test/minos/minos/tactical-objects/OBSTRN.svg?X-Amz-Expires=REDACTED"
+    }
+  ],
+  "metadata": {
+    "total_records": 56,
+    "total_pages": 1,
+    "page_size": 200,
+    "current_page": 1,
+    "has_next_page": false,
+    "has_previous_page": false
+  }
+}

@@ -286,3 +286,352 @@ pub struct ErrorData {
     #[serde(default)]
     pub errors: BTreeMap<String, String>,
 }
+
+// ---------------------------------------------------------------------------------------------
+// The operational resources (#107): where the map opens, the facilities, the symbol library and
+// the operational marks, the standing orders of battle, and the supreme command.
+//
+// Every field the spec lists as absent in a real response is `Option`, and `None` means the server
+// did not send it — never a default (`INV-01`). The recorded fixtures carry the absences the dev
+// instance actually produces (an unset viewpoint, a vacant supreme command, a facility-less
+// register); the tests assert them rather than filling them in.
+// ---------------------------------------------------------------------------------------------
+
+/// A read that spans pages: the rows, and what the read cost.
+///
+/// The same shape the fleet register uses, because the failure it guards is the same one (`#52`): a
+/// client that reads page one and believes it has the catalogue draws part of it and says nothing.
+#[derive(Debug, Clone)]
+pub struct Pages<T> {
+    pub rows: Vec<T>,
+    pub pages: u32,
+    pub total_records: Option<u64>,
+    pub truncated: bool,
+}
+
+impl<T> Default for Pages<T> {
+    fn default() -> Self {
+        Self {
+            rows: Vec::new(),
+            pages: 0,
+            total_records: None,
+            truncated: false,
+        }
+    }
+}
+
+/// `GET /viewpoint` — where the map opens by default.
+///
+/// **Both fields are absent together** when the deployment has not chosen a view. `0,0` is never
+/// sent: it is a real place in the Gulf of Guinea, and a client that defaulted to it would draw a
+/// chosen view where there is none. [`Viewpoint::coordinates`] is the only way to read the pair, so
+/// half a position cannot be drawn by accident.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+pub struct Viewpoint {
+    #[serde(default)]
+    pub latitude: Option<f64>,
+    #[serde(default)]
+    pub longitude: Option<f64>,
+}
+
+impl Viewpoint {
+    /// The configured view, or `None` when this deployment has not chosen one.
+    pub fn coordinates(&self) -> Option<(f64, f64)> {
+        Some((self.latitude?, self.longitude?))
+    }
+}
+
+/// `GET /installation-types` — the facility vocabulary, in picker order.
+///
+/// `symbol_code` is a **code** into the tactical-object catalogue, not an id. The catalogue is
+/// reconciled at startup, so a kind may name a code the library does not carry yet: resolve it and
+/// draw a generic marker when it does not match. A read never fails over it.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct InstallationType {
+    pub id: i64,
+    pub name: String,
+    #[serde(default)]
+    pub id_name: Option<String>,
+    #[serde(default)]
+    pub description_en: Option<String>,
+    pub sort_order: i32,
+    #[serde(default)]
+    pub is_system: Option<bool>,
+    #[serde(default)]
+    pub symbol_code: Option<String>,
+}
+
+/// `GET /installations` — a facility: a posko, a base, a headquarters.
+///
+/// Not a hull: it has no hull number, class or movement domain. **The position is optional but
+/// indivisible** — both coordinates or neither — so [`Installation::coordinates`] returns the pair
+/// and nothing else. `latitude: Some(0.0)` is the Equator, not "unknown".
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Installation {
+    pub id: i64,
+    pub id_installation_type: i64,
+    /// The joined kind, so a client need not resolve it.
+    #[serde(default)]
+    pub type_name: Option<String>,
+    pub id_service_branch: i64,
+    pub name: String,
+    #[serde(default)]
+    pub id_name: Option<String>,
+    #[serde(default)]
+    pub description_en: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub latitude: Option<f64>,
+    #[serde(default)]
+    pub longitude: Option<f64>,
+    pub is_active: bool,
+}
+
+impl Installation {
+    /// The facility's position, or `None` when it has not been located.
+    pub fn coordinates(&self) -> Option<(f64, f64)> {
+        Some((self.latitude?, self.longitude?))
+    }
+}
+
+/// One entry in the symbol library (`GET /tactical-objects`).
+///
+/// The **library**, not a map: editing an entry rewrites no placement. `code` is the stable identity;
+/// `name` and `id_name` are display strings. `asset_url` is a time-limited URL and is **absent** when
+/// object storage has no object at the key — a restored database without its bucket is the ordinary
+/// case, not an error.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TacticalObject {
+    pub id: i64,
+    pub code: String,
+    pub name: String,
+    pub id_name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub category: TacticalObjectCategory,
+    pub sort_order: i32,
+    pub is_active: bool,
+    pub is_seeded: bool,
+    /// The wire's word: `none`, `seed` or `upload`. Kept as a string on purpose — the wall does not
+    /// branch on it, and an enum without an unknown arm would break parsing on the next source the
+    /// server adds, which is exactly what rule 8 forbids.
+    pub asset_source: String,
+    #[serde(default)]
+    pub asset_url: Option<String>,
+}
+
+/// The category a symbol belongs to, with the domain it belongs to.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TacticalObjectCategory {
+    pub id: i64,
+    pub name: String,
+    pub id_name: String,
+    pub sort_order: i32,
+    pub domain: TacticalObjectDomain,
+}
+
+/// The domain a symbol's category belongs to.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TacticalObjectDomain {
+    pub id: i64,
+    pub name: String,
+    pub id_name: String,
+    pub sort_order: i32,
+}
+
+/// `GET /tactical-objects/manifest` — the whole active library, for offline caching.
+///
+/// **Unpaginated on purpose**: a page of a cache manifest is an incomplete cache, and the symbol a
+/// client is missing is exactly the one it cannot draw.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TacticalObjectManifest {
+    pub version: i32,
+    pub symbols: Vec<TacticalObjectManifestEntry>,
+}
+
+/// One manifest entry: what a client needs to draw a symbol offline.
+///
+/// A signing failure **omits `asset_url`, not the entry**: the map still needs to know the symbol
+/// exists and what it is called.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TacticalObjectManifestEntry {
+    pub code: String,
+    pub name: String,
+    pub id_name: String,
+    pub category: String,
+    pub domain: String,
+    pub asset_key: String,
+    #[serde(default)]
+    pub asset_url: Option<String>,
+    pub sort_order: i32,
+}
+
+/// `GET /tactical-objects/facets` — the picker's filter vocabulary, with counts.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TacticalObjectFacets {
+    pub total: u64,
+    pub domains: Vec<TacticalObjectDomainFacet>,
+    pub categories: Vec<TacticalObjectCategoryFacet>,
+}
+
+/// One domain row: `count` is the sum of its categories' counts.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TacticalObjectDomainFacet {
+    pub id: i64,
+    pub name: String,
+    pub id_name: String,
+    pub sort_order: i32,
+    pub count: u64,
+}
+
+/// One category row. A category with no symbols is returned with `count: 0`, not omitted.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TacticalObjectCategoryFacet {
+    pub id: i64,
+    pub id_domain: i64,
+    pub name: String,
+    pub id_name: String,
+    pub sort_order: i32,
+    pub count: u64,
+}
+
+/// One library symbol at one coordinate on the operational map.
+///
+/// **Not a vessel and not a track**: fixed furniture with no speed, course or commander. It
+/// **embeds** its whole symbol, so drawing never needs a second lookup. `label` and `rotation_deg`
+/// are absent in real responses even though the spec lists them as required, and neither defaults.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TacticalObjectPlacement {
+    pub id: i64,
+    pub symbol: TacticalObject,
+    pub latitude: f64,
+    pub longitude: f64,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub rotation_deg: Option<f64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// `GET /unit-organisations` — a standing order of battle, one per service branch.
+///
+/// Not `/hierarchy` (the echelon vocabulary) and not `/games/{id}/hierarchy` (one exercise's
+/// arrangement of it).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct UnitOrganisation {
+    pub id: i64,
+    pub id_service_branch: i64,
+    pub name: String,
+    #[serde(default)]
+    pub id_name: Option<String>,
+    #[serde(default)]
+    pub description_en: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub is_system: Option<bool>,
+}
+
+/// `GET /unit-organisations/{id}` — the structure and its forest.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct UnitOrganisationDetail {
+    #[serde(flatten)]
+    pub organisation: UnitOrganisation,
+    /// The **roots** of the forest, highest level first. More than one entry is normal.
+    pub nodes: Vec<UnitOrganisationNode>,
+}
+
+/// One post in a standing structure.
+///
+/// `echelon_name`, `echelon_rank`, `id_unit`, `id_commander`, `commander`, `position_title`, `icon`
+/// and `note` are all absent in a real response, and each absence is a real state: a post with no
+/// level, no hull, nobody appointed, no title. None may default — `echelon_rank: 0` is never sent.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct UnitOrganisationNode {
+    pub id: i64,
+    pub id_organisation: i64,
+    /// Absent for a root. Several roots are normal.
+    #[serde(default)]
+    pub parent_id: Option<i64>,
+    #[serde(default)]
+    pub id_unit_hierarchy: Option<i64>,
+    #[serde(default)]
+    pub echelon_name: Option<String>,
+    #[serde(default)]
+    pub echelon_rank: Option<i32>,
+    #[serde(default)]
+    pub id_unit: Option<i64>,
+    #[serde(default)]
+    pub id_commander: Option<i64>,
+    #[serde(default)]
+    pub commander: Option<NodeCommander>,
+    pub name: String,
+    #[serde(default)]
+    pub position_title: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    /// Always an array, never `null` — for a leaf as much as for a branch.
+    pub children: Vec<UnitOrganisationNode>,
+}
+
+/// The holder of a node, as a tree needs them: a name and a rank beside a post, nothing else.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct NodeCommander {
+    pub id_user: i64,
+    pub name: String,
+    pub username: String,
+    #[serde(default)]
+    pub nrp: Option<String>,
+    #[serde(default)]
+    pub pangkat: Option<String>,
+    #[serde(default)]
+    pub jabatan: Option<String>,
+}
+
+/// `GET /tni-commander/history` — one appointment of the supreme command, newest first.
+///
+/// `to_at` is **absent for the incumbent**, and `is_current` restates that fact so no client has to
+/// infer it from a nullable timestamp.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TniCommander {
+    pub id: i64,
+    pub id_user: i64,
+    pub name: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub nrp: Option<String>,
+    #[serde(default)]
+    pub pangkat: Option<String>,
+    #[serde(default)]
+    pub jabatan: Option<String>,
+    pub from_at: DateTime<Utc>,
+    #[serde(default)]
+    pub to_at: Option<DateTime<Utc>>,
+    pub is_current: bool,
+    pub assigned_by: i64,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// `GET /tni-commander` — the supreme command, one post shared by every service branch.
+///
+/// **`commander` is absent when the post is vacant.** That is a real state, not an error, and the
+/// same one a hull with nobody appointed to it is in.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TniCommandPost {
+    pub id: i64,
+    pub id_unit_hierarchy: i64,
+    #[serde(default)]
+    pub echelon_name: Option<String>,
+    pub echelon_rank: i32,
+    pub position_title: String,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub commander: Option<TniCommander>,
+}

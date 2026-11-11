@@ -1,0 +1,46 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": [
+    {
+      "id": 1,
+      "name": "Posko",
+      "id_name": "Posko",
+      "description_en": "Command post.",
+      "sort_order": 10,
+      "is_system": true
+    },
+    {
+      "id": 2,
+      "name": "Markas",
+      "id_name": "Markas",
+      "description_en": "Headquarters.",
+      "sort_order": 20,
+      "is_system": true
+    },
+    {
+      "id": 3,
+      "name": "Pangkalan",
+      "id_name": "Pangkalan",
+      "description_en": "Naval base.",
+      "sort_order": 30,
+      "is_system": true
+    },
+    {
+      "id": 4,
+      "name": "Satrad",
+      "id_name": "Satrad",
+      "description_en": "Radar station.",
+      "sort_order": 40,
+      "is_system": true
+    },
+    {
+      "id": 5,
+      "name": "Dermaga",
+      "id_name": "Dermaga / Galangan",
+      "description_en": "Berth or dockyard.",
+      "sort_order": 50,
+      "is_system": true
+    }
+  ]
+}

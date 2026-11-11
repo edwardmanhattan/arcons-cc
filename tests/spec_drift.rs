@@ -174,3 +174,67 @@ fn the_drift_parser_actually_reads_the_snapshot() {
         );
     }
 }
+
+/// **The viewpoint has no required list on purpose**: both coordinates are absent together when the
+/// deployment has not chosen a view, so `MODELLED`'s "every schema has a required field" rule does not
+/// apply. The claim here is the other way round — the snapshot must keep both fields *optional*.
+#[test]
+fn the_viewpoint_is_absent_together() {
+    let yaml = spec();
+    let block = schema_block(&yaml, "ViewpointSummary");
+    let required = required_fields(&block, "ViewpointSummary");
+    assert!(
+        required.is_empty(),
+        "ViewpointSummary gained required fields {required:?}: an unconfigured deployment answers {{}}, and a required coordinate would make that answer undecodable"
+    );
+    let properties = properties(&block);
+    for field in wire::VIEWPOINT_SUMMARY {
+        assert!(
+            properties
+                .iter()
+                .any(|property| property.as_str() == *field),
+            "ViewpointSummary.{field} is modelled in arcons_cc::data::wire and the snapshot no longer has it"
+        );
+    }
+    assert_eq!(
+        properties.len(),
+        wire::VIEWPOINT_SUMMARY.len(),
+        "the snapshot has a viewpoint property we do not model: {properties:?}"
+    );
+}
+
+/// **The forest is required, and it lives inside the `allOf`.** `UnitOrganisationDetail` is a
+/// composition, so `MODELLED`'s parser (which reads 8-space properties) cannot see it. This test reads
+/// the composed block the way the schema is written: `required: [nodes]` plus the summary it extends.
+#[test]
+fn the_unit_organisation_detail_requires_its_forest() {
+    let yaml = spec();
+    let block = schema_block(&yaml, "UnitOrganisationDetail");
+    let required = required_fields(&block, "UnitOrganisationDetail");
+    assert_eq!(
+        required,
+        vec!["nodes".to_string()],
+        "UnitOrganisationDetail must require exactly `nodes`: a structure without its forest is not drawable"
+    );
+    for field in wire::UNIT_ORGANISATION_DETAIL {
+        if *field == "nodes" {
+            assert!(
+                required.iter().any(|required| required == "nodes"),
+                "the detail models `nodes` and the snapshot no longer requires it"
+            );
+            continue;
+        }
+        // The rest come from the summary this schema composes.
+        let summary = wire::UNIT_ORGANISATION_SUMMARY;
+        assert!(
+            summary.contains(field),
+            "UnitOrganisationDetail.{field} is neither `nodes` nor a UnitOrganisationSummary field"
+        );
+    }
+    assert!(
+        block
+            .iter()
+            .any(|line| line.contains("$ref: '#/components/schemas/UnitOrganisationSummary'")),
+        "UnitOrganisationDetail no longer composes UnitOrganisationSummary: re-read the schema and follow it"
+    );
+}

@@ -12148,6 +12148,58 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+    put:
+      tags: [master-data]
+      summary: Replace the operational map in one request
+      description: |
+        Requires `update` on `/system/tactical-object-placements`.
+
+        **THE WHOLE MAP, IN ONE CALL.** The body says what the operational map IS: a mark it does not
+        name is **removed**, and `{"placements": []}` clears the map. That is the point of the route —
+        a CMS that saves by re-sending the entire picture must not have to work out which marks were
+        deleted since it loaded.
+
+        **`id` IS OPTIONAL AND MEANS "THIS ROW, CHANGED".**
+        * with an `id` — the existing mark is UPDATED. Its id, its `created_at` and its author are kept.
+        * without one — a NEW mark is placed.
+        * a live mark whose id is absent from the body is **tombstoned**.
+
+        Echo the ids you read and unchanged marks keep their identity; send none and every save mints
+        new rows, so `created_at` always reads "the last time somebody pressed Save".
+
+        **REFUSED AS A WHOLE, NEVER HALF-APPLIED.** Every mark is validated before anything is written,
+        inside one transaction, so a bad item cannot leave the map empty. Errors name the index —
+        `placements[3].id_symbol` — because a client with two hundred marks has no other way to find
+        the one that was wrong.
+
+        **`id_game` IS NOT ACCEPTED.** This route touches the operational map only; a TFG exercise's
+        marks are unreachable from it.
+
+        At most 2000 marks per request. The response is the whole map as it now stands, so the client
+        holds the ids of whatever it just created.
+      operationId: replaceTacticalObjectPlacements
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TacticalObjectPlacementReplaceRequest'
+      responses:
+        '200':
+          description: The whole operational map after the replacement.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TacticalObjectPlacementListEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /tactical-object-placements/{id}:
     get:
       tags: [tactical-objects]
@@ -12723,6 +12775,1179 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /unit-organisations:
+    get:
+      tags: [master-data]
+      summary: List the standing orders of battle
+      description: |
+        Requires `read` on `/system/unit-organisations`.
+
+        **THE OPERATIONAL STRUCTURE, NOT AN EXERCISE'S TREE.** One row is a standing organisation —
+        "TNI AL", "TNI AD", "TNI AU" — which the CMS authors and the operational map draws. No game
+        owns one, so none carries a commander gate, an echelon ceiling or a state machine.
+
+        This is NOT `/hierarchy` (the ECHELON VOCABULARY every tree is built from) and NOT
+        `/games/{id}/hierarchy` (one exercise's arrangement of it). Three tiers, three resources:
+        what levels exist, who sits where standing, and what one exercise planned.
+      operationId: listUnitOrganisations
+      responses:
+        '200':
+          description: Every structure, ordered by service branch then name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitOrganisationListEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [master-data]
+      summary: Add a standing structure
+      description: |
+        Requires `create` on `/system/unit-organisations`.
+
+        **A SERVICE BRANCH HOLDS AT MOST ONE STRUCTURE.** One matra, one order of battle, so **409 if that
+        branch already holds one** — whatever either is called. A structure is the branch's whole
+        organisation, so a second row for the same branch is a duplicate rather than a second opinion.
+
+        The name carries no uniqueness of its own: it is a label an operator may change, and the branch is
+        the identity.
+      operationId: createUnitOrganisation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnitOrganisationCreateRequest'
+      responses:
+        '201':
+          description: The new structure and its (empty) tree.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitOrganisationDetailEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The service branch already holds a structure. `data.errors` names `_request`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /unit-organisations/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The structure's id.
+        schema: {type: integer, format: int64, minimum: 1}
+    get:
+      tags: [master-data]
+      summary: Read one structure and its tree
+      description: |
+        Requires `read` on `/system/unit-organisations`. `nodes` is a FOREST — more than one root is
+        normal, as a game may hold several trees — and each node nests its own subtree.
+
+        **`echelon_name` AND `echelon_rank` ARE ABSENT WHEN A POST HAS NO LEVEL.** That is a real
+        state rather than a missing value: nothing in the operational path consumes the rank, so an
+        operator may build a chain of command without deciding what echelon each post is.
+      operationId: getUnitOrganisation
+      responses:
+        '200':
+          description: The structure and its forest.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitOrganisationDetailEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [master-data]
+      summary: Rename a structure
+      description: |
+        Requires `update` on `/system/unit-organisations`. Every field is optional, and absent and
+        empty differ: `{"note": ""}` clears the note and omitting the key leaves it.
+
+        **THE SERVICE BRANCH CANNOT BE CHANGED HERE.** Moving a structure between matra would change
+        which structure is "the AL one", and that is a different operation from a rename.
+      operationId: updateUnitOrganisation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnitOrganisationUpdateRequest'
+      responses:
+        '200':
+          description: The structure and its tree after the change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitOrganisationDetailEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The new name is already used in this service branch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [master-data]
+      summary: Remove a structure
+      description: |
+        Requires `delete` on `/system/unit-organisations`. Every node goes with it. `is_system` rows
+        are the CMS's to protect — the API does not refuse them, matching the other master data.
+
+        Answers with the remaining structures, because the one in the path is gone and a client
+        holding a list would otherwise keep a row that no longer exists.
+      operationId: deleteUnitOrganisation
+      responses:
+        '200':
+          description: Every remaining structure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitOrganisationListEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /unit-organisations/{id}/duplicate:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The structure to copy.
+        schema: {type: integer, format: int64, minimum: 1}
+    post:
+      tags: [master-data]
+      summary: Take an independent copy of a structure
+      description: |
+        Requires `create` on `/system/unit-organisations` — a copy WRITES a new structure and every
+        node under it, so listing the catalogue does not entitle a caller to multiply it.
+
+        **THE COPY IS INDEPENDENT.** Editing either side afterwards cannot touch the other: that is
+        what makes this the way the CMS takes a structure into use, rather than pointing the
+        operation at the catalogue. Same reasoning as a mission template against a game's snapshot.
+
+        **THE TARGET BRANCH MUST BE FREE, WHICH MAKES A SAME-BRANCH COPY A 409.** A branch holds at most
+        one structure, and `id_service_branch` defaults to the source's — so `{}` copies into a branch that
+        is already occupied and is refused. This route is for taking a matra's structure into ANOTHER
+        branch: send the destination branch and a name.
+
+        `name` defaults to `<original> (copy)`.
+      operationId: duplicateUnitOrganisation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnitOrganisationDuplicateRequest'
+      responses:
+        '201':
+          description: The new, independent structure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitOrganisationDetailEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The destination service branch already holds a structure. `data.errors` names
+            `id_service_branch`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /unit-organisations/{id}/nodes:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The structure's id.
+        schema: {type: integer, format: int64, minimum: 1}
+    post:
+      tags: [master-data]
+      summary: Add a post or a hull slot to a structure
+      description: |
+        Requires `update` on `/system/unit-organisations`. Nodes ride on `update` because they are an
+        edit to the structure rather than a resource of their own — the same rule `/games/{id}/hierarchy`
+        follows.
+
+        **`parent_id` ABSENT STARTS A NEW ROOT.** Several roots are allowed.
+
+        **A NODE NAMES EITHER A HULL OR A COMMANDER, NEVER BOTH.** Where `id_unit` is supplied the
+        commander comes from `unit_commanders`, the standing appointment — a second answer on the same
+        node would drift. Sending both is 400.
+
+        **THE ORDERING RULE IS CONDITIONAL.** When the request names `id_unit_hierarchy` AND the parent
+        carries one too, the parent must rank higher. If either is unranked, no comparison is made:
+        the rank is optional on this table because nothing in the operational path consumes it.
+      operationId: createUnitOrganisationNode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnitOrganisationNodeCreateRequest'
+      responses:
+        '201':
+          description: The structure and its tree after the insert.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitOrganisationDetailEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: That hull is already placed in this structure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /unit-organisations/{id}/nodes/{node_id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The structure's id.
+        schema: {type: integer, format: int64, minimum: 1}
+      - name: node_id
+        in: path
+        required: true
+        description: The node's id.
+        schema: {type: integer, format: int64, minimum: 1}
+    patch:
+      tags: [master-data]
+      summary: Rename a post or change its icon
+      description: |
+        Requires `update` on `/system/unit-organisations`.
+
+        **THERE IS NO PARENT AND NO ECHELON HERE.** Re-parenting and re-levelling are structural,
+        carry validations this request has no room for, and have their own routes so neither can
+        happen by accident while doing the other.
+      operationId: updateUnitOrganisationNode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnitOrganisationNodeUpdateRequest'
+      responses:
+        '200':
+          description: The structure and its tree after the change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitOrganisationDetailEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [master-data]
+      summary: Remove a node
+      description: |
+        Requires `update` on `/system/unit-organisations`. **409 while the node still has children** —
+        a post with a force under it is not removed out from under them. Empty the node's subtree
+        first, or move the children.
+      operationId: deleteUnitOrganisationNode
+      responses:
+        '200':
+          description: The structure and its tree after the removal.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitOrganisationDetailEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The node still has children.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /unit-organisations/{id}/nodes/{node_id}/parent:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The structure's id.
+        schema: {type: integer, format: int64, minimum: 1}
+      - name: node_id
+        in: path
+        required: true
+        description: The node's id.
+        schema: {type: integer, format: int64, minimum: 1}
+    put:
+      tags: [master-data]
+      summary: Re-parent a node
+      description: |
+        Requires `update` on `/system/unit-organisations`.
+
+        **400 IF THE MOVE WOULD CLOSE A CYCLE** — the parent may not be the node itself nor anything
+        beneath it. And **400 naming `parent_id` if the parent ranks at or below the node's own level**,
+        when both carry one.
+      operationId: moveUnitOrganisationNode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnitOrganisationNodeParentRequest'
+      responses:
+        '200':
+          description: The structure and its tree after the move.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitOrganisationDetailEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [master-data]
+      summary: Lift a node to the top level
+      description: |
+        Requires `update` on `/system/unit-organisations`. Making a node a root is a different intent
+        from moving it under something, so it is a different route — the same split a game's hierarchy
+        makes. Idempotent: a root stays a root.
+      operationId: detachUnitOrganisationNode
+      responses:
+        '200':
+          description: The structure and its tree after the move.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitOrganisationDetailEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /unit-organisations/{id}/nodes/{node_id}/unit:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The structure's id.
+        schema: {type: integer, format: int64, minimum: 1}
+      - name: node_id
+        in: path
+        required: true
+        description: The node's id.
+        schema: {type: integer, format: int64, minimum: 1}
+    put:
+      tags: [master-data]
+      summary: Put a real hull in a slot
+      description: |
+        Requires `update` on `/system/unit-organisations`. `id_unit` names a hull from the master
+        register — the operational structure is about real vessels, unlike a game's tree.
+
+        **400 IF THE NODE ALREADY NAMES A COMMANDER.** Clear the appointment first; a hull's commander
+        comes from its standing appointment in `unit_commanders`, not from this node.
+
+        **409 IF THAT HULL IS ALREADY IN THIS STRUCTURE.** A duplicate is a mistake that would draw her
+        twice; the database refuses it through a partial unique index.
+      operationId: setUnitOrganisationNodeUnit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnitOrganisationNodeUnitRequest'
+      responses:
+        '200':
+          description: The structure and its tree after the change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitOrganisationDetailEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: That hull is already placed in this structure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [master-data]
+      summary: Detach the hull from a slot
+      description: |
+        Requires `update` on `/system/unit-organisations`. The POST stays a post; only the vessel is
+        removed. Idempotent.
+      operationId: clearUnitOrganisationNodeUnit
+      responses:
+        '200':
+          description: The structure and its tree after the change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitOrganisationDetailEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /unit-organisations/{id}/nodes/{node_id}/commander:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The structure's id.
+        schema: {type: integer, format: int64, minimum: 1}
+      - name: node_id
+        in: path
+        required: true
+        description: The node's id.
+        schema: {type: integer, format: int64, minimum: 1}
+    put:
+      tags: [master-data]
+      summary: Appoint the person holding a post
+      description: |
+        Requires `update` on `/system/unit-organisations`. `id_commander` is a USER, not a game
+        participant: a participant only exists inside an exercise.
+
+        **400 IF THE NODE NAMES A HULL** — its commander comes from `unit_commanders`. Detach the hull
+        first.
+
+        There is NO readiness gate here: nobody has to hold a post for the structure to be true.
+      operationId: setUnitOrganisationNodeCommander
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnitOrganisationNodeCommanderRequest'
+      responses:
+        '200':
+          description: The structure and its tree after the appointment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitOrganisationDetailEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [master-data]
+      summary: Clear a post's commander
+      description: |
+        Requires `update` on `/system/unit-organisations`. Always allowed and idempotent — the node
+        stands, uncommanded, and no rule is broken.
+      operationId: clearUnitOrganisationNodeCommander
+      responses:
+        '200':
+          description: The structure and its tree after the change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitOrganisationDetailEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /installation-types:
+    get:
+      tags: [master-data]
+      summary: List the kinds of installation
+      description: |
+        Requires `read` on `/system/installations`. The FACILITY VOCABULARY — Posko, Markas,
+        Pangkalan, Satrad, Dermaga — in the order the picker draws them.
+
+        **`symbol_code` IS A CODE, NOT AN ID.** The symbol catalogue is reconciled from an embedded
+        manifest when the API starts, so a kind may name a code that `/system/tactical-objects` does
+        not carry yet. Resolve it there and draw a generic marker when it does not match.
+      operationId: listInstallationTypes
+      responses:
+        '200':
+          description: Every kind, in picker order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallationTypeListEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /installations:
+    get:
+      tags: [master-data]
+      summary: List the facilities
+      description: |
+        Requires `read` on `/system/installations`.
+
+        **THE PLACES, NOT THE HULLS.** A facility is a Posko, a base or a headquarters — something
+        with a position that ships, commands and people are stationed at. It is not a `unit`: a hull
+        has a hull number, a class and a movement domain and none of that describes a base.
+
+        **OPERATIONAL ONLY.** These rows belong to no exercise: there is no game, no participants and
+        no state machine, so no readiness gate and no commander requirement applies. A hull named
+        `id_unit` in a game's tree is a different subject entirely.
+
+        Both filters are the picker's axes and are applied server-side.
+      operationId: listInstallations
+      parameters:
+        - name: id_service_branch
+          in: query
+          description: Narrow to one matra.
+          schema: {type: integer, format: int64, minimum: 1}
+        - name: id_installation_type
+          in: query
+          description: Narrow to one kind, from `/installation-types`.
+          schema: {type: integer, format: int64, minimum: 1}
+        - name: active_only
+          in: query
+          description: |
+            Exclude decommissioned posts. Default false, because "what used to be here" is a real
+            question an operator asks.
+          schema: {type: boolean, default: false}
+      responses:
+        '200':
+          description: Every matching facility, by branch then kind then name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallationListEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [master-data]
+      summary: Add a facility
+      description: |
+        Requires `create` on `/system/installations`.
+
+        **THE POSITION IS OPTIONAL BUT INDIVISIBLE.** Send both coordinates or neither: a facility
+        registered before its location is known is a real state, and 0,0 is a place in the Gulf of
+        Guinea rather than "unknown". One coordinate alone is a 400 naming the missing half.
+
+        **409 if the service branch already holds a facility with this name.**
+      operationId: createInstallation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallationCreateRequest'
+      responses:
+        '201':
+          description: The new facility and its (empty) stationing lists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallationDetailEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The service branch already holds a facility with this name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /installations/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The facility's id.
+        schema: {type: integer, format: int64, minimum: 1}
+    get:
+      tags: [master-data]
+      summary: Read one facility and what sits at it
+      description: |
+        Requires `read` on `/system/installations`.
+
+        **THE THREE LISTS ARE THE POINT.** `units`, `nodes` and `personnel` answer "what is at this
+        post" in one read, so a client does not have to query three collections and intersect them.
+        Each is always an array, never null.
+      operationId: getInstallation
+      responses:
+        '200':
+          description: The facility and its stationing lists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallationDetailEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [master-data]
+      summary: Change a facility
+      description: |
+        Requires `update` on `/system/installations`. Every field is optional, and absent and empty
+        differ.
+
+        **THE POSITION IS REPLACED WHOLESALE WHEN THE REQUEST MENTIONS IT.** Omitting both
+        coordinates leaves the facility where it is; sending both as null clears the location.
+        Supplying one is a 400 naming the missing half — checked against the merged row, so a
+        request may complete a half-known position.
+      operationId: updateInstallation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallationUpdateRequest'
+      responses:
+        '200':
+          description: The facility after the change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallationDetailEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The new name is already used in this service branch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [master-data]
+      summary: Remove a facility
+      description: |
+        Requires `delete` on `/system/installations`.
+
+        **THE STATIONED THINGS SURVIVE.** The three links are `ON DELETE SET NULL`, so the hulls, the
+        commands and the people keep existing and simply stop pointing here. Decommissioning a base
+        must not delete the fleet based at it.
+
+        Answers with the remaining facilities.
+      operationId: deleteInstallation
+      responses:
+        '200':
+          description: Every remaining facility.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallationListEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /units/{id}/installation:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The hull's id.
+        schema: {type: integer, format: int64, minimum: 1}
+    put:
+      tags: [master-data]
+      summary: Record where a hull is based
+      description: |
+        Requires `update` on `/system/units` — **not** on `/system/installations`. Attaching a hull
+        to a base edits THE HULL, and a role trusted to maintain the facility register has not
+        thereby been trusted to move a warship.
+
+        400 naming `id_installation` when the facility does not exist. 404 when the hull does not.
+
+        `id_installation` graduates the `Pangkalan Induk` column the v2 workbook carried and the
+        importer deliberately dropped; nothing requires it, so a hull with no recorded berth stays
+        valid.
+      operationId: setUnitInstallation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallationLinkRequest'
+      responses:
+        '200':
+          description: Recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallationLinkEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [master-data]
+      summary: Clear a hull's home base
+      description: Requires `update` on `/system/units`. Idempotent.
+      operationId: clearUnitInstallation
+      responses:
+        '200':
+          description: Cleared.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallationLinkEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /unit-organisations/{id}/nodes/{node_id}/installation:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The structure's id.
+        schema: {type: integer, format: int64, minimum: 1}
+      - name: node_id
+        in: path
+        required: true
+        description: The node's id.
+        schema: {type: integer, format: int64, minimum: 1}
+    put:
+      tags: [master-data]
+      summary: Record where a command is garrisoned
+      description: |
+        Requires `update` on `/system/unit-organisations`. The node is WHO — a command; an
+        installation is WHERE. They compose rather than compete.
+
+        400 naming `id_installation` when the facility does not exist. 404 when the node does not.
+      operationId: setOrganisationNodeInstallation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallationLinkRequest'
+      responses:
+        '200':
+          description: Recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallationLinkEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [master-data]
+      summary: Clear a command's garrison
+      description: Requires `update` on `/system/unit-organisations`. Idempotent.
+      operationId: clearOrganisationNodeInstallation
+      responses:
+        '200':
+          description: Cleared.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallationLinkEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /users/{id}/installation:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The account's id.
+        schema: {type: integer, format: int64, minimum: 1}
+    put:
+      tags: [master-data]
+      summary: Record where a person is stationed
+      description: |
+        Requires `update` on `/system/users`. A CURRENT POSTING, not a history — matching
+        `pangkat` / `satuan` / `jabatan` on the same table.
+
+        400 naming `id_installation` when the facility does not exist. 404 when the account does.
+      operationId: setUserInstallation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallationLinkRequest'
+      responses:
+        '200':
+          description: Recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallationLinkEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [master-data]
+      summary: Clear a person's posting
+      description: Requires `update` on `/system/users`. Idempotent.
+      operationId: clearUserInstallation
+      responses:
+        '200':
+          description: Cleared.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallationLinkEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /viewpoint:
+    get:
+      tags: [master-data]
+      summary: Read the default map view
+      description: |
+        **AUTHENTICATION ONLY — NO PERMISSION OBJECT.** Where a map opens is needed by every client
+        that draws one: the command centre, the CMS, and a participant's handset. Requiring a CMS
+        permission would have made the one thing all three share the one thing none of them could
+        read. Follows the reference library, this API's other authentication-only read.
+
+        **WHERE THE VALUE COMES FROM.** Today it is deployment configuration
+        (`VIEWPOINT_LATITUDE` / `VIEWPOINT_LONGITUDE`). When instance provisioning lands and manages
+        several Minos deployments, the same question will be answered per instance — and this endpoint
+        will not change shape, because the value is read through a service rather than straight out of
+        configuration.
+
+        **AN UNCONFIGURED DEPLOYMENT ANSWERS `{}`.** Both fields are omitted together, and a client
+        falls back to its own default. That is deliberately not a 404 — a map would have to special-case
+        it — and not a `500`, which would make a working installation look broken.
+
+        `0,0` is never sent, because it is a real place in the Gulf of Guinea and would look like a
+        chosen view rather than an absent one.
+
+        The pair is validated at STARTUP: a lone latitude or longitude, a value outside its range, or a
+        decimal comma stops the process instead of being silently ignored.
+      operationId: getViewpoint
+      responses:
+        '200':
+          description: |
+            The configured view, or `{}` when this deployment has not chosen one.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ViewpointEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tni-commander:
+    get:
+      tags: [master-data]
+      summary: Read the supreme command
+      description: |
+        Requires `read` on `/system/tni-command`.
+
+        **ONE POST, SHARED BY EVERY SERVICE BRANCH.** `Panglima TNI` commands all of them, so it is not a
+        node in any branch's structure — the same example. Intent: each branch's tree starts at its own
+        chief (Kasal, Kasad, Kasau) and this post sits above all three.
+
+        A structure cannot share a node: `unit_organisation_nodes` carries
+        `(id_organisation, parent_id) -> (id_organisation, id)`, which is what stops a tree spanning two
+        structures. This resource is the consequence, not a preference.
+
+        **`commander` IS ABSENT WHEN THE POST IS VACANT.** That is a real state, not an error, and the
+        same one a hull with nobody appointed to it is in.
+      operationId: getTniCommand
+      responses:
+        '200':
+          description: The post and its incumbent, when there is one.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TniCommandPostEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [master-data]
+      summary: Appoint the supreme commander
+      description: |
+        Requires `update` on `/system/tni-command`.
+
+        **THE BODY CARRIES NO ECHELON AND NO TITLE.** Both belong to the post, which the migration wrote
+        once: an appointment chooses WHO, never WHAT. That is also what makes the post's rank-7 position
+        unbreakable through this API — there is no field in which to get it wrong.
+
+        **A HAND-OVER IS ONE TRANSACTION.** The incumbent's interval is closed and the successor's opened
+        together, so there is no instant in which the post has two holders or none.
+
+        **RE-APPOINTING THE CURRENT HOLDER IS A NO-OP**, not a second history row: a form that re-sends
+        the same person must not fill the history with zero-length terms.
+
+        **400 naming `id_user`** when the account does not exist or has been deleted.
+      operationId: appointTniCommander
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TniCommandAppointRequest'
+      responses:
+        '200':
+          description: The post with its new incumbent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TniCommandPostEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [master-data]
+      summary: Retitle the supreme command
+      description: |
+        Requires `update` on `/system/tni-command`. Every field is optional, and absent and empty differ.
+
+        **THERE IS NO ECHELON HERE AND NO INCUMBENT.** Moving the post to a different level is a
+        re-organisation of every branch at once, and appointing is its own route because it closes one
+        interval and opens another — a different act from correcting a label.
+      operationId: updateTniCommand
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TniCommandUpdateRequest'
+      responses:
+        '200':
+          description: The post after the change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TniCommandPostEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [master-data]
+      summary: Relieve the supreme commander
+      description: |
+        Requires `update` on `/system/tni-command`. Closes the incumbent's interval, leaving the post
+        VACANT; the history keeps the row.
+
+        **404 when nobody holds the post**, so a client cannot mistake "already vacant" for a successful
+        relief. `note` is an optional query parameter, not a body: a DELETE with a body is legal but
+        poorly supported by proxies and generated clients.
+      operationId: relieveTniCommander
+      parameters:
+        - name: note
+          in: query
+          required: false
+          description: Why the appointment ended.
+          schema: {type: string, maxLength: 2000}
+      responses:
+        '200':
+          description: The post, now vacant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TniCommandPostEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tni-commander/history:
+    get:
+      tags: [master-data]
+      summary: Read the supreme command's appointments
+      description: |
+        Requires `read` on `/system/tni-command`. Every appointment, newest first, with each holder's
+        name and personnel fields joined — a client drawing the history should not have to resolve a user
+        id per row.
+
+        `is_current` restates what an absent `to_at` already says, because a client comparing nullable
+        timestamps is a client that gets one of them wrong.
+      operationId: listTniCommanderHistory
+      responses:
+        '200':
+          description: Every appointment, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TniCommanderListEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -13367,6 +14592,15 @@ components:
             DEPLOYMENT state, and NOT the account status. `status` above answers "may this login
             be used"; this answers "where is this officer posted". Keeping them apart is why the
             lookup is a table of its own. Resolve it from `/helpers`.
+        id_installation:
+          type: integer
+          format: int64
+          nullable: true
+          description: |
+            Where this person is STATIONED, or absent when not recorded. A CURRENT POSTING rather
+            than a history, matching `pangkat` / `satuan` / `jabatan`. Distinct from
+            `id_deployment_status` above, which is a vocabulary value; this names a facility in the
+            register. Resolve the name from `/installations`.
         photo_url:
           type: string
           nullable: true
@@ -13873,6 +15107,13 @@ components:
           $ref: '#/components/schemas/Helper'
         movement_domain:
           $ref: '#/components/schemas/Helper'
+        id_installation:
+          type: integer
+          format: int64
+          description: |
+            The hull's HOME BASE, omitted when none is recorded. This is the `Pangkalan Induk` the
+            source workbook carried and the importer dropped. Resolve the name from
+            `/installations`.
         current_specification_version:
           type: integer
           nullable: true
@@ -21161,6 +22402,54 @@ components:
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}
 
+    TacticalObjectPlacementWrite:
+      type: object
+      required: [id_symbol, latitude, longitude]
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: |
+            Omit to place a NEW mark. Supply to UPDATE the existing one, keeping its identity and its
+            `created_at`. A live mark whose id is absent from the whole request is removed.
+        id_symbol: {type: integer, format: int64, minimum: 1}
+        latitude:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          description: Required, and a pointer on the wire because 0 is the Equator.
+        longitude:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+        label: {type: string, maxLength: 255}
+        rotation_deg:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 360
+          exclusiveMaximum: true
+          description: |
+            `[0, 360)` — 360 is the same bearing as 0. An open upper bound, so it is written the
+            3.0.3 way: `exclusiveMaximum` is a BOOLEAN modifier on `maximum` here, not the numeric
+            bound JSON Schema 2020-12 uses. A number in this field is a lint error, which is how this
+            was caught.
+
+    TacticalObjectPlacementReplaceRequest:
+      type: object
+      required: [placements]
+      properties:
+        placements:
+          type: array
+          maxItems: 2000
+          description: |
+            The complete operational map. An empty array clears it. A mark not named here is removed.
+          items:
+            $ref: '#/components/schemas/TacticalObjectPlacementWrite'
+
     TacticalObjectPlacementCreateRequest:
       type: object
       required: [id_symbol, latitude, longitude]
@@ -21561,3 +22850,555 @@ components:
           required: [id]
           properties:
             id: {type: integer, format: int64}
+
+    ViewpointSummary:
+      type: object
+      description: |
+        The default map view. BOTH FIELDS ARE ABSENT TOGETHER when the deployment has not chosen one —
+        that is one state, not two.
+      properties:
+        latitude:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+
+    ViewpointEnvelope:
+      type: object
+      required: [status_code, message, data]
+      properties:
+        status_code: {type: integer, format: int32}
+        message: {type: string}
+        data:
+          $ref: '#/components/schemas/ViewpointSummary'
+
+    InstallationTypeSummary:
+      type: object
+      required: [id, name, sort_order]
+      properties:
+        id: {type: integer, format: int64}
+        name: {type: string}
+        id_name: {type: string}
+        description_en: {type: string}
+        sort_order:
+          type: integer
+          description: The picker's order. Not alphabetical.
+        is_system:
+          type: boolean
+          description: Seeded by a migration, so the CMS offers no delete.
+        symbol_code:
+          type: string
+          description: |
+            How the map draws this kind, as a `tactical_object_symbols.code`. A CODE rather than an
+            id, because the symbol catalogue is reconciled at startup and may not carry it yet —
+            resolve it there and draw a generic marker when it does not match.
+
+    InstallationSummary:
+      type: object
+      required: [id, id_installation_type, id_service_branch, name, is_active]
+      properties:
+        id: {type: integer, format: int64}
+        id_installation_type: {type: integer, format: int64}
+        type_name:
+          type: string
+          description: The joined kind, so a client need not resolve it.
+        id_service_branch: {type: integer, format: int64}
+        name: {type: string}
+        id_name: {type: string}
+        description_en: {type: string}
+        note: {type: string}
+        latitude:
+          type: number
+          format: double
+          description: |
+            Omitted when the facility has not been located. A client must treat the absence as
+            "unknown" and must not substitute 0 — 0,0 is a real place in the Gulf of Guinea.
+        longitude:
+          type: number
+          format: double
+          description: Omitted when the facility has not been located.
+        is_active: {type: boolean}
+
+    InstallationStationedUnit:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: integer, format: int64}
+        name: {type: string}
+        hull_number: {type: string}
+
+    InstallationStationedNode:
+      type: object
+      required: [id, id_organisation, name]
+      properties:
+        id: {type: integer, format: int64}
+        id_organisation: {type: integer, format: int64}
+        name: {type: string}
+
+    InstallationStationedPerson:
+      type: object
+      required: [id, name, username]
+      properties:
+        id: {type: integer, format: int64}
+        name: {type: string}
+        username: {type: string}
+        nrp: {type: string}
+        pangkat: {type: string}
+        jabatan: {type: string}
+
+    InstallationDetail:
+      allOf:
+        - $ref: '#/components/schemas/InstallationSummary'
+        - type: object
+          required: [units, nodes, personnel]
+          properties:
+            units:
+              type: array
+              description: The hulls whose home base is this facility. Always an array.
+              items:
+                $ref: '#/components/schemas/InstallationStationedUnit'
+            nodes:
+              type: array
+              description: The commands garrisoned here. Always an array.
+              items:
+                $ref: '#/components/schemas/InstallationStationedNode'
+            personnel:
+              type: array
+              description: The people stationed here. Always an array.
+              items:
+                $ref: '#/components/schemas/InstallationStationedPerson'
+
+    InstallationCreateRequest:
+      type: object
+      required: [id_installation_type, id_service_branch, name]
+      properties:
+        id_installation_type: {type: integer, format: int64, minimum: 1}
+        id_service_branch:
+          type: integer
+          format: int64
+          minimum: 1
+          description: |
+            The matra. A branch holds AT MOST ONE structure, so this is the structure's identity rather than
+            a grouping key — a second create for the same branch is 409.
+        name: {type: string, minLength: 1, maxLength: 255}
+        id_name: {type: string, maxLength: 255}
+        description_en: {type: string, maxLength: 2000}
+        note: {type: string, maxLength: 2000}
+        latitude:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          description: Send with `longitude` or not at all.
+        longitude:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          description: Send with `latitude` or not at all.
+        is_active:
+          type: boolean
+          default: true
+
+    InstallationUpdateRequest:
+      type: object
+      properties:
+        id_installation_type: {type: integer, format: int64, minimum: 1}
+        name: {type: string, minLength: 1, maxLength: 255}
+        id_name: {type: string, maxLength: 255}
+        description_en: {type: string, maxLength: 2000}
+        note: {type: string, maxLength: 2000}
+        latitude:
+          type: number
+          format: double
+          nullable: true
+          minimum: -90
+          maximum: 90
+          description: |
+            Mentioned in the request, the position is REPLACED wholesale: send both coordinates to
+            move the facility, both null to clear it, or neither to leave it alone.
+        longitude:
+          type: number
+          format: double
+          nullable: true
+          minimum: -180
+          maximum: 180
+        is_active: {type: boolean}
+
+    InstallationLinkRequest:
+      type: object
+      required: [id_installation]
+      properties:
+        id_installation:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The facility to attach the resource to. Detaching is the DELETE on the route.
+
+    InstallationTypeListEnvelope:
+      type: object
+      required: [status_code, message, data]
+      properties:
+        status_code: {type: integer, format: int32}
+        message: {type: string}
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/InstallationTypeSummary'
+
+    InstallationListEnvelope:
+      type: object
+      required: [status_code, message, data]
+      properties:
+        status_code: {type: integer, format: int32}
+        message: {type: string}
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/InstallationSummary'
+
+    InstallationDetailEnvelope:
+      type: object
+      required: [status_code, message, data]
+      properties:
+        status_code: {type: integer, format: int32}
+        message: {type: string}
+        data:
+          $ref: '#/components/schemas/InstallationDetail'
+
+    InstallationLinkEnvelope:
+      type: object
+      required: [status_code, message]
+      description: |
+        A link write answers 200 with no `data`: the resource a client re-reads is the hull, the
+        command or the account, not the facility.
+      properties:
+        status_code: {type: integer, format: int32}
+        message: {type: string}
+
+    UnitOrganisationSummary:
+      type: object
+      required: [id, id_service_branch, name]
+      properties:
+        id: {type: integer, format: int64}
+        id_service_branch:
+          type: integer
+          format: int64
+          description: Navy / Army / Air Force (or Others), from `service_branches`.
+        name: {type: string}
+        id_name: {type: string}
+        description_en: {type: string}
+        note: {type: string}
+        is_system:
+          type: boolean
+          description: |
+            Written by a migration rather than by an operator, so the CMS offers no delete. Always
+            FALSE today: nothing is seeded.
+
+    UnitOrganisationNodeSummary:
+      type: object
+      required: [id, id_organisation, name, children]
+      properties:
+        id: {type: integer, format: int64}
+        id_organisation: {type: integer, format: int64}
+        parent_id:
+          type: integer
+          format: int64
+          description: Absent for a root. Several roots are normal.
+        id_unit_hierarchy:
+          type: integer
+          format: int64
+          description: Absent when the post has no level, which is a real state.
+        echelon_name:
+          type: string
+          description: Absent when the post has no level.
+        echelon_rank:
+          type: integer
+          description: |
+            The level's POSITION, lowest being 1. Absent when the post has no level — a rank of 0 is
+            never sent, so "no level" cannot be mistaken for a level numbered 0.
+
+            NOT A DEPTH. Two nodes at the same depth may carry different ranks, and one node may
+            appear at two depths while keeping one rank; `parent_id` is what describes the shape.
+        id_unit:
+          type: integer
+          format: int64
+          description: A real hull from the master register, omitted for a command post.
+        id_commander:
+          type: integer
+          format: int64
+          description: |
+            The USER holding the post, omitted when nobody does. A hull slot never carries one: its
+            commander comes from `unit_commanders`.
+
+            **Kept because a WRITE needs an id.** The names are in `commander` below, for reading.
+        commander:
+          description: |
+            The holder's name and personnel fields, ABSENT when nobody is appointed.
+
+            **A convenience, not a replacement for `id_commander`.** An org chart row reads
+            "Kasal — Fixture Commander 1", so without this a client drawing the tree would fetch the
+            account list to turn an id into a name on every render. It costs one LEFT JOIN on a read that
+            already joins the echelon.
+
+            Appointing still takes an id: names are labels an operator may correct, and trusting one to
+            identify a person is how the wrong officer gets a command.
+          allOf:
+            - $ref: '#/components/schemas/NodeCommanderSummary'
+        name: {type: string}
+        position_title:
+          type: string
+          description: |
+            The POSITION TITLE running the node — "Nama Jabatan" — e.g. `Dankormar`. Omitted when
+            none is recorded.
+
+            **Distinct from `name`, and both are usually needed.** `name` is what the structure calls
+            the box (`KORPS MARINIR`); this is the post that runs it (`Dankormar`). A node with a
+            `position_title` and no `id_commander` is a VACANT POST, which is a normal state.
+
+            **NOT A RANK.** `users.pangkat` is the rank a person holds and `echelon_rank` is a
+            level's position in the ladder; a title is neither, and the three vary independently.
+        icon:
+          type: string
+          description: A symbol name from a tactical palette, not an uploaded image.
+        note: {type: string}
+        children:
+          type: array
+          description: Always an array, never null — for a leaf as much as for a branch.
+          items:
+            $ref: '#/components/schemas/UnitOrganisationNodeSummary'
+
+    UnitOrganisationDetail:
+      allOf:
+        - $ref: '#/components/schemas/UnitOrganisationSummary'
+        - type: object
+          required: [nodes]
+          properties:
+            nodes:
+              type: array
+              description: |
+                The ROOTS of the forest, highest level first, each with its subtree nested. Unranked
+                posts sort last. More than one entry is normal.
+              items:
+                $ref: '#/components/schemas/UnitOrganisationNodeSummary'
+
+    UnitOrganisationListEnvelope:
+      type: object
+      required: [status_code, message, data]
+      properties:
+        status_code: {type: integer, format: int32}
+        message: {type: string}
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/UnitOrganisationSummary'
+
+    UnitOrganisationDetailEnvelope:
+      type: object
+      required: [status_code, message, data]
+      properties:
+        status_code: {type: integer, format: int32}
+        message: {type: string}
+        data:
+          $ref: '#/components/schemas/UnitOrganisationDetail'
+
+    UnitOrganisationCreateRequest:
+      type: object
+      required: [id_service_branch, name]
+      properties:
+        id_service_branch: {type: integer, format: int64, minimum: 1}
+        name: {type: string, minLength: 1, maxLength: 255}
+        id_name: {type: string, maxLength: 255}
+        description_en: {type: string, maxLength: 2000}
+        note: {type: string, maxLength: 2000}
+
+    UnitOrganisationUpdateRequest:
+      type: object
+      properties:
+        name: {type: string, minLength: 1, maxLength: 255}
+        id_name: {type: string, maxLength: 255}
+        description_en: {type: string, maxLength: 2000}
+        note: {type: string, maxLength: 2000}
+
+    UnitOrganisationDuplicateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Defaults to `<original> (copy)`.
+        id_service_branch:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Lets a copy cross matra. Omitted keeps the source's.
+
+    UnitOrganisationNodeCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        parent_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Absent starts a new root. The parent must be in this structure.
+        id_unit_hierarchy:
+          type: integer
+          format: int64
+          minimum: 1
+          description: |
+            The echelon, from `/hierarchy`. Absent means an unranked post, which is allowed here —
+            nothing in the operational path consumes the rank. When supplied and the parent carries
+            one too, the parent must rank higher: 400 naming this field otherwise.
+        id_unit:
+          type: integer
+          format: int64
+          minimum: 1
+          description: |
+            A real hull from the master register. Mutually exclusive with `id_commander` — where a
+            vessel is named, `unit_commanders` is the authority on who commands her.
+        id_commander:
+          type: integer
+          format: int64
+          minimum: 1
+          description: A user holding the post. Only meaningful for a node with no hull.
+        name: {type: string, minLength: 1, maxLength: 255}
+        position_title:
+          type: string
+          maxLength: 255
+          description: |
+            The position title running the post — "Nama Jabatan" — e.g. `Dankormar`. Optional, and
+            independent of `id_commander`: the title is the post, the commander is the person.
+        icon: {type: string, maxLength: 64}
+        note: {type: string, maxLength: 2000}
+
+    UnitOrganisationNodeUpdateRequest:
+      type: object
+      properties:
+        name: {type: string, minLength: 1, maxLength: 255}
+        position_title:
+          type: string
+          maxLength: 255
+          description: |
+            The position title. A POINTER like every field here, so `{"position_title": ""}` CLEARS it
+            and omitting the key leaves it.
+        icon: {type: string, maxLength: 64}
+        note: {type: string, maxLength: 2000}
+
+    NodeCommanderSummary:
+      type: object
+      required: [id_user, name, username]
+      properties:
+        id_user: {type: integer, format: int64}
+        name: {type: string}
+        username: {type: string}
+        nrp: {type: string}
+        pangkat: {type: string}
+        jabatan: {type: string}
+      description: |
+        The holder of a task-organisation node, as a tree needs them. DELIBERATELY NARROWER THAN
+        `UserSummary`: an org chart shows a name and a rank beside a post, and nothing else about the
+        account — status, roles, photo — belongs on a structure read.
+
+    UnitOrganisationNodeParentRequest:
+      type: object
+      required: [parent_id]
+      properties:
+        parent_id: {type: integer, format: int64, minimum: 1}
+
+    UnitOrganisationNodeUnitRequest:
+      type: object
+      required: [id_unit]
+      properties:
+        id_unit: {type: integer, format: int64, minimum: 1}
+
+    UnitOrganisationNodeCommanderRequest:
+      type: object
+      required: [id_commander]
+      properties:
+        id_commander: {type: integer, format: int64, minimum: 1}
+
+    TniCommanderSummary:
+      type: object
+      required: [id, id_user, name, from_at, is_current, assigned_by]
+      properties:
+        id: {type: integer, format: int64}
+        id_user: {type: integer, format: int64}
+        name: {type: string}
+        username: {type: string}
+        nrp: {type: string}
+        pangkat: {type: string}
+        jabatan: {type: string}
+        from_at: {type: string, format: date-time}
+        to_at:
+          type: string
+          format: date-time
+          description: ABSENT for the incumbent. Its presence is what marks the row as history.
+        is_current:
+          type: boolean
+          description: The same fact as an absent `to_at`, restated so no client infers it.
+        assigned_by: {type: integer, format: int64}
+        note: {type: string}
+
+    TniCommandPostSummary:
+      type: object
+      required: [id, id_unit_hierarchy, echelon_rank, position_title]
+      properties:
+        id: {type: integer}
+        id_unit_hierarchy: {type: integer, format: int64}
+        echelon_name: {type: string}
+        echelon_rank:
+          type: integer
+          description: |
+            The post's level, which is the TOP of the vocabulary. Written once by the migration; no route
+            accepts it, so it cannot drift.
+        position_title: {type: string, example: Panglima TNI}
+        note: {type: string}
+        commander:
+          description: The incumbent, ABSENT when the post is vacant.
+          allOf:
+            - $ref: '#/components/schemas/TniCommanderSummary'
+
+    TniCommandAppointRequest:
+      type: object
+      required: [id_user]
+      properties:
+        id_user:
+          type: integer
+          format: int64
+          minimum: 1
+          description: |
+            Who takes the post. Not an echelon and not a title: an appointment chooses WHO, never WHAT.
+        note: {type: string, maxLength: 2000}
+
+    TniCommandUpdateRequest:
+      type: object
+      properties:
+        position_title: {type: string, minLength: 1, maxLength: 255}
+        note: {type: string, maxLength: 2000}
+
+    TniCommandPostEnvelope:
+      type: object
+      required: [status_code, message, data]
+      properties:
+        status_code: {type: integer, format: int32}
+        message: {type: string}
+        data:
+          $ref: '#/components/schemas/TniCommandPostSummary'
+
+    TniCommanderListEnvelope:
+      type: object
+      required: [status_code, message, data]
+      properties:
+        status_code: {type: integer, format: int32}
+        message: {type: string}
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/TniCommanderSummary'

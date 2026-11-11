@@ -42,6 +42,33 @@ Two rules for adding one:
 2. **Redact tokens, passwords and hostnames** before committing. `grep -r REDACTED fixtures/` should
    find every one, and nothing else should look like a JWT.
 
+## `rest/` — recorded 2026-11-11, the operational resources
+
+From the same dev Minos, with the wall's read-only account, for #107. Nothing was trimmed: the symbol
+library is 56 entries and the whole catalogue was recorded. Every `asset_url` is a presigned URL, so
+its scheme, host and query are replaced with `https://objects.example.test/…?X-Amz-Expires=REDACTED`
+(the path — the object key — is kept); the query is the credential (`X-Amz-Credential`,
+`X-Amz-Signature`) and a fixture is not worth an `INV-08` break. The envelope and every key are
+otherwise exactly as the wire sent them.
+
+| file | what it is |
+| --- | --- |
+| `viewpoint.json` | `GET /viewpoint` — `data: {}`, because this deployment has not chosen a view. That is the recorded state: both coordinates absent together, not `0,0` |
+| `installation-types.json` | `GET /installation-types` — five kinds in picker order. None carries `symbol_code` on this deployment, which is why the type models it as optional |
+| `installations.json` | `GET /installations?active_only=true` — an **empty list**: the dev instance has registered no facilities. A valid answer, and the one that says "draw no facilities", not "the read failed" |
+| `tactical-objects.json` | `GET /tactical-objects?page_size=200&page_number=1&active=true` — all 56 active symbols, with `metadata` (`total_records: 56`, one page) |
+| `tactical-objects-manifest.json` | `GET /tactical-objects/manifest` — `version: 1`, the same 56 symbols with `asset_key` and `asset_url`, unpaginated |
+| `tactical-objects-facets.json` | `GET /tactical-objects/facets` — `total: 56`, six domains (four with `count: 0`) and three categories |
+| `tactical-object-placements.json` | `GET /tactical-object-placements` — three marks on the operational map, each embedding its whole `symbol` |
+| `unit-organisations.json` | `GET /unit-organisations` — four structures, one per service branch |
+| `unit-organisation-1.json` | `GET /unit-organisations/1` — the Navy's structure: one root, seven nodes, nested `children`. Recorded because it is the real id the list named |
+| `tni-commander.json` | `GET /tni-commander` — the post, with **no `commander` key**: the post is vacant, which is a real state and not an error |
+| `tni-commander-history.json` | `GET /tni-commander/history` — an empty list. Nobody has been appointed yet, so the dev instance cannot record a non-empty history; the field names are pinned by the spec and the drift test |
+
+The empty answers (`viewpoint`, `installations`, `tni-commander/history`) are recorded rather than
+worked around. A test that needs a non-empty history cannot get one from this server without appointing
+an officer, and inventing the row would be worse than the gap.
+
 ## `scenes/` and `golden/` — recorded 2026-11-07
 
 `scenes/feed.json` is the picture the named scenes load: 40 hulls in the `GET /live-feed/positions`

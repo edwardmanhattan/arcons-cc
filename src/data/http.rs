@@ -1,4 +1,4 @@
-//! The HTTP calls themselves: five endpoints, one retry rule.
+//! The HTTP calls themselves: the reads the wall performs, one retry rule.
 //!
 //! **Nothing here runs on the UI thread.** The backend thread (`data::thread`) owns one
 //! current-thread Tokio runtime and this client; the view loop talks to it over a channel.
@@ -15,8 +15,10 @@ use crate::config::Minos;
 use crate::data::Error;
 use crate::data::auth::{Auth, Refresher};
 use crate::data::types::{
-    Envelope, ErrorResponse, FeedPosition, Register, TokenPair, UnitCommander, UnitDetail,
-    UnitSummary,
+    Envelope, ErrorResponse, FeedPosition, Installation, InstallationType, Pages, Register,
+    TacticalObject, TacticalObjectFacets, TacticalObjectManifest, TacticalObjectPlacement,
+    TniCommandPost, TniCommander, TokenPair, UnitCommander, UnitDetail, UnitOrganisation,
+    UnitOrganisationDetail, UnitSummary, Viewpoint,
 };
 
 /// A request timeout. The wall is on a LAN or a VPN; a read that takes longer than this is a stall to
@@ -161,29 +163,121 @@ impl Http {
     /// has ended, or until [`PAGE_CAP`] pages — because a backend that always says "more" must not spin the
     /// reads thread forever.
     pub async fn units(&self) -> Result<Register, Error> {
-        let mut register = Register::default();
+        let pages = self.paged::<UnitSummary>("/units").await?;
+        Ok(Register {
+            units: pages.rows,
+            pages: pages.pages,
+            total_records: pages.total_records,
+            truncated: pages.truncated,
+        })
+    }
+
+    /// `GET /viewpoint` — where the map opens. **Authentication only**, and an unconfigured
+    /// deployment answers `{}`: both coordinates absent, never `0,0`.
+    pub async fn viewpoint(&self) -> Result<Viewpoint, Error> {
+        self.get("/viewpoint").await
+    }
+
+    /// `GET /installation-types` — the facility vocabulary, in picker order. Needs `read` on
+    /// `/system/installations`.
+    pub async fn installation_types(&self) -> Result<Vec<InstallationType>, Error> {
+        self.get("/installation-types").await
+    }
+
+    /// `GET /installations?active_only=true` — the facilities, operational only. Needs `read` on
+    /// `/system/installations`.
+    ///
+    /// `active_only` is the wall's read: a decommissioned post is a real answer to "what used to be
+    /// here", but it is not a thing the picture draws. The route also filters by `id_service_branch`
+    /// and `id_installation_type`; nothing asks for those yet, so this client does not send them.
+    pub async fn installations(&self) -> Result<Vec<Installation>, Error> {
+        self.get("/installations?active_only=true").await
+    }
+
+    /// `GET /tactical-objects?active=true` — the symbol library, every page. Needs `read` on
+    /// `/system/tactical-objects`.
+    ///
+    /// The library is the picker's catalogue, not the map; a placement embeds its own symbol. It is
+    /// paged like the register, for the same reason: page one is not the catalogue.
+    pub async fn tactical_objects(&self) -> Result<Pages<TacticalObject>, Error> {
+        self.paged("/tactical-objects?active=true").await
+    }
+
+    /// `GET /tactical-objects/manifest` — the whole active library, **unpaginated on purpose**, so a
+    /// client can cache it and draw a symbol with no network.
+    pub async fn tactical_object_manifest(&self) -> Result<TacticalObjectManifest, Error> {
+        self.get("/tactical-objects/manifest").await
+    }
+
+    /// `GET /tactical-objects/facets` — the filter rows and their active counts.
+    pub async fn tactical_object_facets(&self) -> Result<TacticalObjectFacets, Error> {
+        self.get("/tactical-objects/facets").await
+    }
+
+    /// `GET /tactical-object-placements` — the operational map's marks, every page. Needs `read` on
+    /// `/system/tactical-object-placements`.
+    pub async fn tactical_object_placements(
+        &self,
+    ) -> Result<Pages<TacticalObjectPlacement>, Error> {
+        self.paged("/tactical-object-placements").await
+    }
+
+    /// `GET /unit-organisations` — the standing orders of battle. Needs `read` on
+    /// `/system/unit-organisations`.
+    pub async fn unit_organisations(&self) -> Result<Vec<UnitOrganisation>, Error> {
+        self.get("/unit-organisations").await
+    }
+
+    /// `GET /unit-organisations/{id}` — one structure and its forest of roots.
+    pub async fn unit_organisation(&self, id: i64) -> Result<UnitOrganisationDetail, Error> {
+        self.get(&format!("/unit-organisations/{id}")).await
+    }
+
+    /// `GET /tni-commander` — the supreme command. Needs `read` on `/system/tni-command`.
+    /// `commander` is absent when the post is vacant, which is a real state.
+    pub async fn tni_commander(&self) -> Result<TniCommandPost, Error> {
+        self.get("/tni-commander").await
+    }
+
+    /// `GET /tni-commander/history` — every appointment, newest first.
+    pub async fn tni_commander_history(&self) -> Result<Vec<TniCommander>, Error> {
+        self.get("/tni-commander/history").await
+    }
+
+    /// Every page of a paginated list, at the server's maximum page size.
+    ///
+    /// `path` may already carry a filter (`?active=true`); the page parameters are appended to it.
+    /// The cap and the `truncated` flag are the register's rule (`#52`), shared so a second paged
+    /// read cannot quietly grow a different one.
+    async fn paged<T: DeserializeOwned>(&self, path: &str) -> Result<Pages<T>, Error> {
+        let mut read = Pages::default();
         loop {
-            let page = register.pages + 1;
-            let path = format!("/units?page_size={PAGE_SIZE}&page_number={page}");
-            let envelope: Envelope<Vec<UnitSummary>> = self.get_envelope(&path).await?;
-            register.pages = page;
-            register.total_records = envelope.metadata.map(|metadata| metadata.total_records);
+            let page = read.pages + 1;
+            let separator = if path.contains('?') { '&' } else { '?' };
+            let url = format!("{path}{separator}page_size={PAGE_SIZE}&page_number={page}");
+            let envelope: Envelope<Vec<T>> = self.get_envelope(&url).await?;
+            read.pages = page;
+            read.total_records = envelope
+                .metadata
+                .as_ref()
+                .map(|metadata| metadata.total_records);
             let more = envelope
                 .metadata
                 .is_some_and(|metadata| metadata.has_next_page);
-            register.units.extend(envelope.data);
+            read.rows.extend(envelope.data);
             if !more {
-                return Ok(register);
+                return Ok(read);
             }
             if page >= PAGE_CAP {
-                register.truncated = true;
+                read.truncated = true;
                 tracing::warn!(
-                    pages = register.pages,
-                    rows = register.units.len(),
-                    total = register.total_records,
-                    "the fleet register is longer than the page cap: the wall is drawing part of the fleet"
+                    endpoint = path,
+                    pages = read.pages,
+                    rows = read.rows.len(),
+                    total = read.total_records,
+                    "a paginated read is longer than the page cap: the wall is drawing part of it"
                 );
-                return Ok(register);
+                return Ok(read);
             }
         }
     }
@@ -340,6 +434,8 @@ mod tests {
         base: String,
         refreshes: Arc<AtomicUsize>,
         gets: Arc<AtomicUsize>,
+        /// The request line of every `GET`, so a test can assert the route and its filters.
+        paths: Arc<Mutex<Vec<String>>>,
     }
 
     fn stub(get_answers: Vec<(u16, String)>) -> Stub {
@@ -350,7 +446,9 @@ mod tests {
         );
         let refreshes = Arc::new(AtomicUsize::new(0));
         let gets = Arc::new(AtomicUsize::new(0));
+        let paths = Arc::new(Mutex::new(Vec::new()));
         let (thread_refreshes, thread_gets) = (Arc::clone(&refreshes), Arc::clone(&gets));
+        let thread_paths = Arc::clone(&paths);
         let answers = Arc::new(Mutex::new(VecDeque::from(get_answers)));
 
         std::thread::spawn(move || {
@@ -371,6 +469,7 @@ mod tests {
                     )
                 } else if line.starts_with("GET ") {
                     thread_gets.fetch_add(1, Ordering::SeqCst);
+                    thread_paths.lock().unwrap().push(line.clone());
                     answers
                         .lock()
                         .unwrap()
@@ -392,6 +491,7 @@ mod tests {
             base,
             refreshes,
             gets,
+            paths,
         }
     }
 
@@ -502,6 +602,118 @@ mod tests {
             PAGE_CAP,
             "no request past the cap"
         );
+    }
+
+    /// **The operational resources are read from their own routes, with the filters the wall asks
+    /// for** (#107). Each answer is the recorded fixture, and the request lines are asserted so a
+    /// client that dropped `active_only=true` or the page parameters is caught here rather than by a
+    /// server that quietly answered a different question.
+    #[tokio::test]
+    async fn the_operational_resources_read_from_their_own_routes() {
+        let stub = stub(vec![
+            (200, fixture("fixtures/rest/viewpoint.json")),
+            (200, fixture("fixtures/rest/installation-types.json")),
+            (200, fixture("fixtures/rest/installations.json")),
+            (200, fixture("fixtures/rest/tactical-objects.json")),
+            (200, fixture("fixtures/rest/tactical-objects-manifest.json")),
+            (200, fixture("fixtures/rest/tactical-objects-facets.json")),
+            (
+                200,
+                fixture("fixtures/rest/tactical-object-placements.json"),
+            ),
+            (200, fixture("fixtures/rest/unit-organisations.json")),
+            (200, fixture("fixtures/rest/unit-organisation-1.json")),
+            (200, fixture("fixtures/rest/tni-commander.json")),
+            (200, fixture("fixtures/rest/tni-commander-history.json")),
+        ]);
+        let http = signed_in(&stub).await;
+
+        assert_eq!(
+            http.viewpoint()
+                .await
+                .expect("the viewpoint reads")
+                .coordinates(),
+            None,
+            "an unset viewpoint is absent, not 0,0"
+        );
+        assert_eq!(
+            http.installation_types().await.expect("types read").len(),
+            5
+        );
+        assert!(
+            http.installations()
+                .await
+                .expect("facilities read")
+                .is_empty()
+        );
+        let library = http.tactical_objects().await.expect("the library reads");
+        assert_eq!(library.rows.len(), 56);
+        assert_eq!(library.pages, 1, "the recorded page says there is no more");
+        assert_eq!(library.total_records, Some(56));
+        assert_eq!(
+            http.tactical_object_manifest()
+                .await
+                .expect("the manifest reads")
+                .symbols
+                .len(),
+            56
+        );
+        assert_eq!(
+            http.tactical_object_facets()
+                .await
+                .expect("the facets read")
+                .total,
+            56
+        );
+        assert_eq!(
+            http.tactical_object_placements()
+                .await
+                .expect("the placements read")
+                .rows
+                .len(),
+            3
+        );
+        assert_eq!(
+            http.unit_organisations()
+                .await
+                .expect("the structures read")
+                .len(),
+            4
+        );
+        assert_eq!(
+            http.unit_organisation(1)
+                .await
+                .expect("one structure reads")
+                .organisation
+                .id,
+            1
+        );
+        assert!(
+            http.tni_commander()
+                .await
+                .expect("the supreme command reads")
+                .commander
+                .is_none(),
+            "the recorded post is vacant"
+        );
+        assert!(
+            http.tni_commander_history()
+                .await
+                .expect("the history reads")
+                .is_empty()
+        );
+
+        let paths = stub.paths.lock().unwrap().clone();
+        for wanted in [
+            "GET /api/v1/installations?active_only=true ",
+            "GET /api/v1/tactical-objects?active=true&page_size=200&page_number=1 ",
+            "GET /api/v1/tactical-object-placements?page_size=200&page_number=1 ",
+        ] {
+            assert!(
+                paths.iter().any(|path| path.contains(wanted)),
+                "the client did not ask {wanted:?}; it asked {paths:?}"
+            );
+        }
     }
 
     #[tokio::test]

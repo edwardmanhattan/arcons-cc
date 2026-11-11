@@ -83,6 +83,166 @@ pub const UNIT_SPECIFICATION: &[&str] = &[
     "spec",
 ];
 
+// ---------------------------------------------------------------------------------------------
+// The operational resources (#107). Field names are the spec's, verbatim; every field the server
+// omits in a real response is modelled (and decoded as `Option`) rather than dropped.
+// ---------------------------------------------------------------------------------------------
+
+/// `GET /viewpoint` — both coordinates, or neither. The schema has **no** required list, so
+/// `tests/spec_drift.rs` reads it with a dedicated test rather than through [`MODELLED`].
+pub const VIEWPOINT_SUMMARY: &[&str] = &["latitude", "longitude"];
+
+/// `GET /installation-types`. `symbol_code` is a code into the tactical-object catalogue, not an id.
+pub const INSTALLATION_TYPE_SUMMARY: &[&str] = &[
+    "id",
+    "name",
+    "id_name",
+    "description_en",
+    "sort_order",
+    "is_system",
+    "symbol_code",
+];
+
+/// `GET /installations` — the position is optional but indivisible.
+pub const INSTALLATION_SUMMARY: &[&str] = &[
+    "id",
+    "id_installation_type",
+    "type_name",
+    "id_service_branch",
+    "name",
+    "id_name",
+    "description_en",
+    "note",
+    "latitude",
+    "longitude",
+    "is_active",
+];
+
+/// One entry of `GET /tactical-objects`: the library, not a map.
+pub const TACTICAL_OBJECT: &[&str] = &[
+    "id",
+    "code",
+    "name",
+    "id_name",
+    "description",
+    "category",
+    "sort_order",
+    "is_active",
+    "is_seeded",
+    "asset_source",
+    "asset_url",
+];
+
+/// The category a symbol belongs to, with its domain.
+pub const TACTICAL_OBJECT_CATEGORY_REF: &[&str] =
+    &["id", "name", "id_name", "sort_order", "domain"];
+
+/// The domain a symbol's category belongs to.
+pub const TACTICAL_OBJECT_DOMAIN_REF: &[&str] = &["id", "name", "id_name", "sort_order"];
+
+/// `GET /tactical-objects/manifest` — unpaginated on purpose.
+pub const TACTICAL_OBJECT_MANIFEST: &[&str] = &["version", "symbols"];
+
+/// One manifest entry. A signing failure omits `asset_url`, not the entry.
+pub const TACTICAL_OBJECT_MANIFEST_ENTRY: &[&str] = &[
+    "code",
+    "name",
+    "id_name",
+    "category",
+    "domain",
+    "asset_key",
+    "asset_url",
+    "sort_order",
+];
+
+/// `GET /tactical-objects/facets` — the filter vocabulary and its counts.
+pub const TACTICAL_OBJECT_FACETS: &[&str] = &["total", "domains", "categories"];
+
+/// One domain row; `count` is the sum of its categories' counts.
+pub const TACTICAL_OBJECT_DOMAIN_FACET: &[&str] = &["id", "name", "id_name", "sort_order", "count"];
+
+/// One category row. Zero is returned, not omitted.
+pub const TACTICAL_OBJECT_CATEGORY_FACET: &[&str] =
+    &["id", "id_domain", "name", "id_name", "sort_order", "count"];
+
+/// `GET /tactical-object-placements` — one symbol at one coordinate, embedding the symbol.
+pub const TACTICAL_OBJECT_PLACEMENT: &[&str] = &[
+    "id",
+    "symbol",
+    "latitude",
+    "longitude",
+    "label",
+    "rotation_deg",
+    "created_at",
+    "updated_at",
+];
+
+/// `GET /unit-organisations` — a standing order of battle.
+pub const UNIT_ORGANISATION_SUMMARY: &[&str] = &[
+    "id",
+    "id_service_branch",
+    "name",
+    "id_name",
+    "description_en",
+    "note",
+    "is_system",
+];
+
+/// One post in a standing structure. `children` is always an array; several roots are normal.
+pub const UNIT_ORGANISATION_NODE_SUMMARY: &[&str] = &[
+    "id",
+    "id_organisation",
+    "parent_id",
+    "id_unit_hierarchy",
+    "echelon_name",
+    "echelon_rank",
+    "id_unit",
+    "id_commander",
+    "commander",
+    "name",
+    "position_title",
+    "icon",
+    "note",
+    "children",
+];
+
+/// The holder of a node, as a tree needs them.
+pub const NODE_COMMANDER_SUMMARY: &[&str] =
+    &["id_user", "name", "username", "nrp", "pangkat", "jabatan"];
+
+/// One appointment of the supreme command.
+pub const TNI_COMMANDER_SUMMARY: &[&str] = &[
+    "id",
+    "id_user",
+    "name",
+    "username",
+    "nrp",
+    "pangkat",
+    "jabatan",
+    "from_at",
+    "to_at",
+    "is_current",
+    "assigned_by",
+    "note",
+];
+
+/// `GET /tni-commander` — the post; `commander` is absent when it is vacant.
+pub const TNI_COMMAND_POST_SUMMARY: &[&str] = &[
+    "id",
+    "id_unit_hierarchy",
+    "echelon_name",
+    "echelon_rank",
+    "position_title",
+    "note",
+    "commander",
+];
+
+/// `GET /unit-organisations/{id}` — the structure's summary plus its forest of roots.
+///
+/// The schema is an `allOf` composition, so its `required: [nodes]` sits inside the inline half and
+/// [`MODELLED`]'s text parser cannot read it. `tests/spec_drift.rs` reads it with a dedicated test.
+pub const UNIT_ORGANISATION_DETAIL: &[&str] = &["id", "id_service_branch", "name", "nodes"];
+
 /// Every schema this client models, by the name it has in `docs/spec/minos-api.yaml`.
 pub const MODELLED: &[(&str, &[&str])] = &[
     ("FeedPosition", FEED_POSITION),
@@ -97,6 +257,31 @@ pub const MODELLED: &[(&str, &[&str])] = &[
     ("UnitClassSummary", UNIT_CLASS_SUMMARY),
     ("UnitCommanderSummary", UNIT_COMMANDER_SUMMARY),
     ("UnitSpecification", UNIT_SPECIFICATION),
+    ("InstallationTypeSummary", INSTALLATION_TYPE_SUMMARY),
+    ("InstallationSummary", INSTALLATION_SUMMARY),
+    ("TacticalObject", TACTICAL_OBJECT),
+    ("TacticalObjectCategoryRef", TACTICAL_OBJECT_CATEGORY_REF),
+    ("TacticalObjectDomainRef", TACTICAL_OBJECT_DOMAIN_REF),
+    ("TacticalObjectManifest", TACTICAL_OBJECT_MANIFEST),
+    (
+        "TacticalObjectManifestEntry",
+        TACTICAL_OBJECT_MANIFEST_ENTRY,
+    ),
+    ("TacticalObjectFacets", TACTICAL_OBJECT_FACETS),
+    ("TacticalObjectDomainFacet", TACTICAL_OBJECT_DOMAIN_FACET),
+    (
+        "TacticalObjectCategoryFacet",
+        TACTICAL_OBJECT_CATEGORY_FACET,
+    ),
+    ("TacticalObjectPlacement", TACTICAL_OBJECT_PLACEMENT),
+    ("UnitOrganisationSummary", UNIT_ORGANISATION_SUMMARY),
+    (
+        "UnitOrganisationNodeSummary",
+        UNIT_ORGANISATION_NODE_SUMMARY,
+    ),
+    ("NodeCommanderSummary", NODE_COMMANDER_SUMMARY),
+    ("TniCommanderSummary", TNI_COMMANDER_SUMMARY),
+    ("TniCommandPostSummary", TNI_COMMAND_POST_SUMMARY),
 ];
 
 #[cfg(test)]
