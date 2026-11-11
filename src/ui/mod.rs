@@ -25,6 +25,7 @@ pub mod symbol;
 pub mod tokens;
 pub mod unitcard;
 pub mod view;
+mod viewpoint;
 
 pub use view::{Dir, Layout, Rect, ViewId};
 
@@ -327,6 +328,10 @@ pub struct State {
     pub live: Option<LiveThread>,
     /// The reads thread: the card asks it for identity, commander and specification.
     pub backend: Option<crate::data::Backend>,
+    /// **The pane a `/viewpoint` reply may move** (#108): its id, captured when the read was asked
+    /// for. `None` means no read is in flight, or its answer has already been folded in — an answer
+    /// moves one pane, once.
+    viewpoint_pane: Option<ViewId>,
     /// What the socket last said about itself.
     pub link: Link,
     /// How many fixes the socket has delivered **and the picture applied**, for the header's
@@ -440,6 +445,7 @@ impl Default for State {
             cadenced: None,
             live: None,
             backend: None,
+            viewpoint_pane: None,
             link: Link::default(),
             fixes: 0,
             fix_latency: FixLatency::default(),
@@ -2957,6 +2963,9 @@ pub(crate) fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool
                 changed = true;
             }
         }
+        crate::data::Reply::Viewpoint(result) => {
+            changed |= viewpoint::apply(state, result);
+        }
         _ => {}
     }
     changed
@@ -3157,6 +3166,10 @@ fn setup(state: &mut State, waker: rune::Waker) {
         backend.request(crate::data::Command::TacticalObjectManifest);
         backend.request(crate::data::Command::TacticalObjectPlacements);
     }
+    // **Where the wall opens** (#108): one read, off this thread, for the pane that exists now. The
+    // first frame draws the seed camera whether or not it has answered — a late read is not a blank
+    // wall — and the answer moves that pane and no other.
+    viewpoint::ask(state);
     #[cfg(feature = "map")]
     {
         // The first frame's layout corrects this size; 1280x720 is the window it opens at, so the map

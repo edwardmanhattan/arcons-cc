@@ -100,6 +100,13 @@ grep -q 'first map frame' "$PLAIN" ||
   fail "the map never drew: no 'first map frame' in $LOG (a cold start with no seed?)"
 say "map: $(grep -m1 -o 'first map frame in [0-9]* ms' "$PLAIN") from the tile seed"
 
+# **The startup viewpoint read happened** (#108). The stub serves the recorded `/viewpoint`, which is
+# `data: {}` — no deployment view has been chosen — so the honest result is a line saying so and the
+# seed camera on screen. A wall that never asked has no line at all.
+grep -q 'GET /viewpoint' "$PLAIN" ||
+  fail "the wall never read /viewpoint: the first pane opened at the seed camera without asking (#108)"
+say "viewpoint: $(grep -m1 -o 'GET /viewpoint[^"]*' "$PLAIN" | head -c 160)"
+
 SESSIONS=$(grep -c 'socket: connecting' "$PLAIN")
 [ "$SESSIONS" -ge 2 ] || fail "the socket connected $SESSIONS time(s): the deliberate drop did not come back"
 READS=$(grep -c 'picture read after connect' "$PLAIN")
