@@ -99,7 +99,7 @@ impl Pane {
 /// in every pane, and a press in one pane opened a card in all of them.
 ///
 /// **`filter` is deliberately here before it is used.** The operator's next ask is per-pane filters
-/// (ships in pane 1, planes in pane 2, altitude in pane 3). A third field added later would be the same
+/// (ships in pane 1, planes in pane 2, altitude in pane 3). Another field added later would be the same
 /// mistake a second time: the pane's state is one thing, so it has one home.
 #[derive(Clone, Debug, Default)]
 pub struct PaneView {
@@ -110,6 +110,10 @@ pub struct PaneView {
     /// The age text this pane's card drew last frame, so a second passing redraws the card and nothing
     /// else. Per pane for the same reason the card is: two cards age at two moments.
     last_age: String,
+    /// Whether **this pane** draws symbols or pictures, latched with hysteresis on its own frame's zoom
+    /// (`units::mark`). One latch per pane (#115): each pane has its own zoom, so each pane has its own
+    /// representation — zooming one pane into a hull's picture must not switch its neighbour.
+    pub range: crate::units::mark::Range,
     /// Which hulls this pane draws (all of them, for now). The operator's next ticket: a pane per
     /// question — ships, planes, altitide — and the data stays shared.
     pub filter: Filter,
@@ -333,9 +337,6 @@ pub struct State {
     marker_press: bool,
     /// When the last "socket" heartbeat was logged, on the wall's own uptime clock (ms).
     last_report_ms: u64,
-    /// Whether the wall is drawing symbols or pictures, latched with hysteresis on the frame's zoom
-    /// (`units::mark`). One latch for the wall: the decision is about the zoom, not about a hull.
-    pub range: crate::units::mark::Range,
     /// Dimensions of hulls the wall has read, for scaling a picture. Absent means "not read yet", which
     /// draws the picture clamped rather than at a scale nobody measured.
     pub sizes: std::collections::HashMap<i64, crate::units::mark::Size>,
@@ -414,7 +415,6 @@ impl Default for State {
             headless: false,
             marker_press: false,
             last_report_ms: 0,
-            range: crate::units::mark::Range::default(),
             sizes: std::collections::HashMap::new(),
             image_urls: std::collections::HashMap::new(),
             images: None,
@@ -797,7 +797,7 @@ impl State {
                 &frame,
                 self.now(),
                 self.stale_after,
-                self.range,
+                pane.view.range,
                 &|unit| self.sizes.get(&unit).copied(),
             )
             .into_iter()
@@ -1586,6 +1586,11 @@ fn picture(state: &State, scale: f32) -> El {
         }
         body
     };
+    // **The gutters go over the panes and under everything held** (#114): a press in the space between
+    // two panes is the resize it looks like, while a pane in the air, a full-size pane and a menu keep
+    // the top of the picture — a drag in the air is still a lift, and a menu still dismisses on the
+    // press that starts the next thing.
+    body = gutters(state, body);
     // The pane in the air and the context menu are drawn last, over every pane — **and over the one-pane wall too**:
     // "Focus on new pane" lives in that menu, and a wall with one pane is exactly the wall that needs it
     // to get a second one. Drawing the menu only once there were panes made the first split impossible
@@ -1593,6 +1598,46 @@ fn picture(state: &State, scale: f32) -> El {
     body = ghost(state, scale, body);
     body = maximised(state, scale, body);
     body = menu_view(state, scale, body);
+    body
+}
+
+/// One element per border, over the space the panes leave between them (#114).
+///
+/// The gutter is not a pane's, so no pane's `on_drag` can reach it: with a gap, `panes_on` insets every
+/// pane and the middle of the gap belongs to the picture element, which has no handler. These elements are
+/// that handler, and their geometry is [`view::Border::gutter`] — the same `at`, `span` and split extent
+/// the press and the ratio use, so what the eye sees between two panes is what the hand grabs.
+///
+/// **Nothing is drawn**: the gutter's colour is the picture's own background, and a fill here would be a
+/// second copy of the look. The element exists to be hit, and its cursor says it is grabbable.
+fn gutters(state: &State, body: El) -> El {
+    let gap = state.settings.pane_gap;
+    // At gap 0 the panes meet: the gutter has no width and the in-pane grip is the target, which is the
+    // wall every golden before #82 renders. Adding zero-area elements there would only shadow panes.
+    if gap <= 0.0 {
+        return body;
+    }
+    let mut body = body;
+    for border in state.layout.borders(state.pane_viewport()) {
+        let rect = border.gutter(gap);
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            continue;
+        }
+        let cursor = match border.dir {
+            Dir::Horizontal => rune::Cursor::ResizeColumn,
+            Dir::Vertical => rune::Cursor::ResizeRow,
+        };
+        body = body.child(
+            el()
+                // The pair names the split exactly, and a split's gutter is one element.
+                .key(format!("gutter-{}-{}", border.a, border.b))
+                .absolute(rect.x, rect.y)
+                .size(rect.w, rect.h)
+                .fill(tokens::clear())
+                .cursor(cursor)
+                .on_drag(move |state: &mut State, drag, _tx| drag_gutter(state, rect, drag)),
+        );
+    }
     body
 }
 
@@ -1848,7 +1893,7 @@ fn ghost(state: &State, scale: f32, body: El) -> El {
         &frame,
         state.now(),
         state.stale_after,
-        state.range,
+        pane.view.range,
         &sizes,
     );
     let pictures = markers::Pictures {
@@ -1874,12 +1919,18 @@ fn projections(
     scale: f32,
 ) -> El {
     let sizes = |id_unit: i64| state.sizes.get(&id_unit).copied();
+    // **This pane's latch, not the wall's** (#115): the same frame it draws against is the frame that
+    // decided whether its hulls are symbols or pictures.
+    let range = state
+        .pane(id)
+        .map(|pane| pane.view.range)
+        .unwrap_or_default();
     let placed = markers::place(
         &state.picture,
         frame,
         state.now(),
         state.stale_after,
-        state.range,
+        range,
         &sizes,
     );
     let pictures = markers::Pictures {
@@ -2504,6 +2555,41 @@ fn begin_resize(state: &mut State, viewport: crate::map::geometry::Viewport, at:
     state.begin(Begin::Resize(border));
 }
 
+/// A drag that began **in the gutter** (#114): the same `begin_resize` / `set_ratio` / `end` the pane's
+/// own border grip uses (#69), reached from an element that exists only because the gap does.
+///
+/// `rect` is the gutter element's rectangle, and its origin is the offset from the pointer's own points
+/// to the viewport's — the same conversion `drag_pane` makes for a pane (#80). Every question the layout
+/// answers (`border_at`, `ratio_for`) is asked in the viewport's points.
+fn drag_gutter(state: &mut State, rect: Rect, drag: &mut rune::Drag) {
+    let viewport = state.pane_viewport();
+    match drag.phase {
+        rune::Phase::Down => {
+            let at = view::viewport_point(rect, (drag.start_x, drag.start_y));
+            begin_resize(state, viewport, at);
+        }
+        rune::Phase::Move => {
+            let Some(border) = state.resizing() else {
+                return;
+            };
+            // A point, not a delta: the ratio follows the line the operator is holding, and a gesture
+            // that leaves the gutter and comes back lands where the pointer is.
+            let pointer = view::viewport_point(rect, (drag.x, drag.y));
+            if state
+                .layout
+                .set_ratio(&border, border.ratio_for(border.axis_of(pointer)))
+            {
+                state.layout_dirty = true;
+            }
+        }
+        rune::Phase::Up => {
+            if state.resizing().is_some() {
+                state.end();
+            }
+        }
+    }
+}
+
 /// Without the engine there is still something to drag: the border between two panes (#69).
 #[cfg(not(feature = "map"))]
 fn drag_pane(state: &mut State, _id: ViewId, rect: Rect, drag: &mut rune::Drag, _scale: f32) {
@@ -2535,9 +2621,9 @@ fn drag_pane(state: &mut State, _id: ViewId, rect: Rect, drag: &mut rune::Drag, 
 
 /// How the window opens: sized from the command line, or covering the primary output.
 ///
-/// Rune at this rev exposes no fullscreen API, so `--fullscreen` is the closest honest thing —
-/// borderless, at the primary output's own size and position. #8 revisits it once the wall's output
-/// is chosen, and records what it decided.
+/// Rune exposes fullscreen as a runtime toggle (`Tx::toggle_full_screen`), not as a startup option,
+/// so `--fullscreen` is still the closest honest thing — borderless, at the primary output's own
+/// size and position. #8 decides when the wall toggles the real one, and records what it decided.
 fn window_options(window: config::Window, displays: &[rune::Display]) -> rune::WindowOptions {
     let options = rune::WindowOptions {
         min_size: Some(tokens::MIN_WINDOW),
@@ -3026,20 +3112,27 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
         state.layout_dirty = false;
         changed = true;
     }
-    // The range follows the frame's zoom, not the camera's: mid-gesture they disagree, and a hull must
-    // not switch representation while it is still projected against the previous frame.
-    if let Some(frame) = state.frame() {
-        let latched = state.range.update(frame.camera.zoom);
-        if latched != state.range {
-            state.range = latched;
-            changed = true;
+    // **The range follows the pane's own frame's zoom, not the camera's** (#115): mid-gesture they
+    // disagree, and a hull must not switch representation while it is still projected against the
+    // previous frame. One latch per pane, because each pane has its own zoom — a pane zoomed into a
+    // hull's picture must not switch its neighbour's representation.
+    for pane in &mut state.panes {
+        if let Some(frame) = pane.frame {
+            let latched = pane.view.range.update(frame.camera.zoom);
+            if latched != pane.view.range {
+                pane.view.range = latched;
+                changed = true;
+            }
         }
     }
-    // In picture range the wall needs two things the feed does not carry: the register (picture URLs,
-    // one read for the fleet) and each hull's dimensions (what the picture is scaled by). Both are
-    // asked for a bounded number per frame, off the UI thread, and neither is asked in symbol range
-    // where nothing uses them.
-    if state.range == crate::units::mark::Range::Picture
+    // In picture range **any pane** needs two things the feed does not carry: the register (picture URLs,
+    // one read for the fleet) and each hull's dimensions (what the picture is scaled by). The register, the
+    // decoded pictures and the per-frame budget are the wall's shared resources — one cache, several
+    // views (#115) — so the ask is gated by any pane being in picture range, not by the focused one.
+    if state
+        .panes
+        .iter()
+        .any(|pane| pane.view.range == crate::units::mark::Range::Picture)
         && let Some(backend) = &state.backend
     {
         if !state.asked_register && due(state.now(), state.register_retry_at) {

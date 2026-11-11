@@ -19,7 +19,7 @@ from a fixed clock, so a capture is reproducible and a test can count what is in
 `rune` (github.com/anomalyco/rune), **pinned by rev**:
 
 ```
-rune = "b73010b85b451ad687a7189d347dd8875fb91e24"
+rune = "14e3c5d50ae4c26ebd6621e11cd8f846257e4cde"
 ```
 
 Why:
@@ -87,6 +87,76 @@ per-marker work is now a smaller share of a Rune frame", not "Rune frames got ch
 assumes the reference workload is a constant; a renderer bump is exactly when it is not. #48's design
 still leaves 3.8–4.1 ms against a limit of 8, so the budget stays where it is; the numbers in this
 paragraph are the new measurement.
+
+### Bumped again: `b73010b` → `14e3c5d` (#106)
+
+169 commits on, 2026-11-11. **The new surface was read in full, and one addition replaced a
+hand-rolled assumption**: the card's name is the one multi-paragraph, feed-supplied text on the
+wall, and it now takes `El::dir_by_paragraph` so each paragraph lays out in the direction of its own
+words, as a browser's `unicode-bidi: plaintext` does. A Latin name is one text and lays out exactly
+as before — which is why the goldens' diff is rasterisation and not layout — while a right-to-left
+name no longer leans on the wall's direction. The other eight replace nothing this tree hand-rolls
+yet: it has no tooltip, no scroll view, no web page and no keyboard focus to hand back; the wall's
+"focus" is a pane (`Layout::focused`), not an element. Each is listed here with the ticket that will
+adopt it, so the next wave cites this shape instead of reinventing one:
+
+- **`El::help`, `help_row`, `help_keys`, `help_side`/`help_above`, `help_when_truncated`** — a hint
+  attached to the control it describes, with rows and keycaps, and shown only when a text is cut.
+  The wall explains itself in visible rows today ("Enter names it, Escape leaves it as it was"),
+  which is the right shape for a keyboard-first wall; a control that needs a hint on hover is the
+  pane menu's and settings sheet's chrome, when they grow one.
+- **`Tx::return_focus` and `El::press_focuses_below`** — focus handed back to the trigger when a
+  menu or sheet closes, and the region under a menu's scrim focused as a press there would. The
+  pane menu opens at a right-click point, which is not an element and does not survive the close;
+  the settings trigger does, so it is the first candidate when the wall grows a keyboard path to
+  the sheet.
+- **`El::dir_by_paragraph`** — adopted on the card's name, above. Pane names are operator-typed and
+  may be Arabic or Hebrew too, but #83's plate is one line; it takes this when a name can hold a
+  newline.
+- **`El::unselectable`**, **`El::set_content`** — a web page's text selection and a styled text
+  reused with new words. The wall is native and rebuilds its tree per frame, so neither has a call
+  site; the first web build and the first templated row will.
+- **`Tx::relaunch`** — restart in place with the same arguments, which is what a setting that
+  cannot be applied live needs. Nothing in `settings.toml` is in that class yet (#82 is one value,
+  applied and written).
+- **`El::on_far_from_bottom_under`** — "jump to latest" for a viewport under a frame. The wall has
+  no scroll view; a scrollable feed (#11's plot) is where it lands.
+
+What the bump buys beyond the nine, and why it is taken now rather than with those tickets:
+
+- **The window groups its own modules**: `rune::desktop` → `rune::window`, `cursor` →
+  `input/cursor`, `pixels` → `image/pixels`, `titlebar` → `window/titlebar`, `windows.rs` →
+  `window/`. The public re-exports (`rune::Pixels`, `rune::WindowOptions`, `rune::Display`) are
+  where they were, so this is a naming fact: a path written from an old screenshot of the tree is
+  stale, and the names above are the current ones.
+- **A wall that stays up**: `gpu/health.rs` and `render/gpu_loss.rs` replace a lost device or an
+  unconfigured surface instead of panicking the process (#492); a window covered whole by other
+  windows rests (#570); `clipboard/secret.rs` clears a secret on a timer. A display that is up for
+  hours is the product, and a device loss used to be a coredump.
+- **Resizing is layout, not a view run**: a commit whose only change is the viewport re-solves
+  layout and re-breaks text, skipping the view. Panes resize on every gutter drag and every full-size
+  toggle (#85), so this is `INV-12`'s cadence paid less often.
+- **More newest surface for the wave**: `App::on_visibility` (#497) for a wall that is off screen,
+  `rune::marks` (#569) for a launch trace, `El::{core_animation, icon_rotation, native_surface,
+  surface_anchor, surface_unscaled, video}`, and the new modules later tickets name —
+  `el/{help,input,paragraphs}.rs`, `overlay/{presence,lifetime}.rs`,
+  `runtime/input/{hover_delay,press_run,key_releases}.rs`, `text/{inline_fit,synthetic_bold}.rs`,
+  `render/breaker.rs`.
+
+**Text rasterisation moved again**, exactly as at the last bump: all sixteen goldens differ, and
+every difference is glyph pixels on a text row — the wordmark and header status, the card and menu
+labels, the name plates, the sheet — with no geometry, colour or marker change. Measured before the
+goldens were rewritten: `empty` differed on 1692 pixels of 921,600, confined to the header's 13 text
+rows; `picture`, `stale`, `photo` and `settings-dismiss` on 1510, also header text only; the
+menu-bearing scenes up to 5,482 where their labels are. `scripts/assert.sh` passed every structural
+assertion against the new renderer before `scripts/capture.sh --update-goldens` was run, so the
+pictures moved where text is drawn and nowhere else.
+
+The frame budget is unchanged and still clear: two post-bump gate runs measured **2.9–3.8 ms** on
+the reference machine for one 1280×720 pane with 200 markers panning (limit 8) and **3.8–10.7 ms**
+for four 960×540 panes (limit 14), normalised by the same-run calibration workload. The spread is
+the calibration workload's, not the wall's — #79 recorded the same effect — and both ends are inside
+the limits, so the bump costs no budget and no budget decision.
 
 ## Decision 2 — MapLibre Native (`maplibre_native`)
 
@@ -211,7 +281,7 @@ Two sharp edges, recorded because they cost coredumps to find:
 | the map feature inside the gate | #9 | it needs a C++ toolchain or a 378 MB download; the gate stays free of both |
 | a test that names the adapter the map got | #16 follow-up | the evidence is two log lines today; an assertable report needs MapLibre to expose its device |
 | `vendor/rune` | before v0.1 ships | it is a git dependency today; vendoring makes the build reproducible offline |
-| true fullscreen | #8 | Rune at this rev exposes no fullscreen API; `--fullscreen` is borderless at the primary output's size |
+| true fullscreen | #8 | Rune exposes it as `Tx::toggle_full_screen`; `--fullscreen` is still borderless at the primary output's size until #8 picks the output and decides when to toggle |
 | the exercise plot, orders, participants | #11 | out of scope for v0.1 on purpose |
 
 ## Consequences
