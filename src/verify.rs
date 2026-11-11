@@ -1609,7 +1609,12 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 failures.push(format!("pane-tree: pane {tree_id} draws no tree"));
                 return Err(failures);
             };
-            let (canvas_x, canvas_y) = crate::ui::tree::canvas_origin();
+            // **The tree pane's camera** (#127): the fit while no hand has taken it, the hand's after.
+            // The same function the view draws with, so a plate is sampled where it was drawn.
+            let camera = state
+                .pane(tree_id)
+                .map(|pane| crate::ui::tree::camera_for(pane, &drawn, tree_rect))
+                .unwrap_or_else(|| crate::ui::tree::fit(&drawn, (tree_rect.w, tree_rect.h)));
 
             // **One node per post**, counted from the wire data the pane names. A layout that dropped a
             // root, or a flattened forest, draws fewer plates than the server sent posts.
@@ -1647,13 +1652,14 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             let plate = ink(tokens::name_plate());
             let mut missing = Vec::new();
             for node in &drawn.nodes {
+                let (nx, ny) = crate::ui::view::tree_point(&camera, (node.rect.x, node.rect.y));
                 let rect = crate::ui::Rect {
-                    x: tree_rect.x + canvas_x + node.rect.x,
-                    y: tree_rect.y + canvas_y + node.rect.y,
-                    w: node.rect.w,
-                    h: node.rect.h,
+                    x: tree_rect.x + nx,
+                    y: tree_rect.y + ny,
+                    w: node.rect.w * camera.zoom,
+                    h: node.rect.h * camera.zoom,
                 };
-                let probe = crate::ui::tree::node_probe(rect);
+                let probe = crate::ui::tree::node_probe(rect, camera.zoom);
                 let at = crate::ui::Rect {
                     x: origin_x as f32 + probe.x,
                     y: origin_y as f32 + probe.y,
@@ -1682,9 +1688,10 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             let mut unlinked = Vec::new();
             for link in &drawn.links {
                 let (x, y) = crate::ui::tree::link_probe(link);
+                let (px, py) = crate::ui::view::tree_point(&camera, (x, y));
                 let at = crate::ui::Rect {
-                    x: origin_x as f32 + tree_rect.x + canvas_x + x - 1.0,
-                    y: origin_y as f32 + tree_rect.y + canvas_y + y - 1.0,
+                    x: origin_x as f32 + tree_rect.x + px - 1.0,
+                    y: origin_y as f32 + tree_rect.y + py - 1.0,
                     w: 3.0,
                     h: 3.0,
                 };
@@ -1739,6 +1746,293 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 lines.push(format!(
                     "pane-tree: the map pane still draws its markers ({in_map} accent px)"
                 ));
+            }
+        }
+        "pane-tree-narrow" | "pane-tree-zoom" | "pane-tree-pan" => {
+            // **The tree pane is a canvas** (#127). Two claims, one per scene:
+            //
+            // - `narrow`: no hand has taken the camera, so the fit runs — **every post and every
+            //   connector is inside the pane's own rectangle** in a 320 pt pane, where 1:1 would cut the
+            //   784 pt forest.
+            // - `zoom`: a hand has, and the known post's centre is at the known pane point, at the known
+            //   zoom — the one transform, not a per-node re-layout.
+            let Some((origin_x, origin_y, panel_w, panel_h)) =
+                image.find_panel_rect(ink(tokens::panel()))
+            else {
+                failures.push(format!("{scene}: no picture panel on screen"));
+                return Err(failures);
+            };
+            let state = scene::state_for(scene);
+            let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
+            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let Some((tree_id, tree_rect)) = rects
+                .iter()
+                .find(|(id, _)| state.pane(*id).is_some_and(|pane| !pane.content.is_map()))
+                .copied()
+            else {
+                failures.push(format!(
+                    "{scene}: no tree pane — the scene is a tree beside a map"
+                ));
+                return Err(failures);
+            };
+            let Some(drawn) = crate::ui::tree::tree_for(&state, tree_id) else {
+                failures.push(format!("{scene}: pane {tree_id} draws no tree"));
+                return Err(failures);
+            };
+            let fitted = crate::ui::tree::fit(&drawn, (tree_rect.w, tree_rect.h));
+            let camera = if scene == "pane-tree-pan" {
+                // The script drags from the fitted camera; state_for builds the scene *before* the
+                // pointer moves, so the expectation is the fit plus the script's travel.
+                fitted.panned(scene::TREE_PAN_BY)
+            } else {
+                state
+                    .pane(tree_id)
+                    .map(|pane| crate::ui::tree::camera_for(pane, &drawn, tree_rect))
+                    .unwrap_or(fitted)
+            };
+            let project = |point: (f32, f32)| crate::ui::view::tree_point(&camera, point);
+
+            if scene == "pane-tree-narrow" {
+                if camera.touched {
+                    failures.push(
+                        "pane-tree-narrow: the camera is the hand's, and nothing has touched this \
+                         pane — a narrow pane must re-fit instead of keeping a camera it never had"
+                            .to_string(),
+                    );
+                }
+                let mut outside = Vec::new();
+                for node in &drawn.nodes {
+                    let (x, y) = project((node.rect.x, node.rect.y));
+                    let (w, h) = (node.rect.w * camera.zoom, node.rect.h * camera.zoom);
+                    if x < -0.5
+                        || y < -0.5
+                        || x + w > tree_rect.w + 0.5
+                        || y + h > tree_rect.h + 0.5
+                    {
+                        outside.push(node.label.clone());
+                    }
+                }
+                if !outside.is_empty() {
+                    failures.push(format!(
+                        "pane-tree-narrow: {} of {} posts are outside the {} pt pane (zoom {:.2}): {} — \
+                         narrowing the pane cut the tree, which is the behaviour this scene exists to \
+                         refuse",
+                        outside.len(),
+                        drawn.nodes.len(),
+                        tree_rect.w,
+                        camera.zoom,
+                        outside.join(", ")
+                    ));
+                }
+                let mut off = 0;
+                for link in &drawn.links {
+                    for point in &link.points {
+                        let (x, y) = project((point[0], point[1]));
+                        if x < -0.5 || y < -0.5 || x > tree_rect.w + 0.5 || y > tree_rect.h + 0.5 {
+                            off += 1;
+                        }
+                    }
+                }
+                if off > 0 {
+                    failures.push(format!(
+                        "pane-tree-narrow: {off} connector points are outside the {} pt pane — a \
+                         connector that leaves the canvas is the forest being cut",
+                        tree_rect.w
+                    ));
+                }
+                if failures.is_empty() {
+                    lines.push(format!(
+                        "pane-tree-narrow: {} posts and {} connectors inside a {} pt pane at zoom \
+                         {:.2}, by the fit",
+                        drawn.nodes.len(),
+                        drawn.links.len(),
+                        tree_rect.w,
+                        camera.zoom
+                    ));
+                }
+            } else if scene == "pane-tree-pan" {
+                // **A drag on a post pans the canvas** (#127). The known post's plate is where the fit
+                // plus the script's travel puts it: a drag that reached nothing leaves the tree at the
+                // fit and the plate is a travel away from where this looks.
+                if !camera.touched {
+                    failures.push(
+                        "pane-tree-pan: the camera is the fit's, and the script dragged it"
+                            .to_string(),
+                    );
+                }
+                let Some(known) = drawn
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == scene::TREE_ZOOM_NODE)
+                else {
+                    failures.push(format!(
+                        "pane-tree-pan: no post {} — the scene's known node",
+                        scene::TREE_ZOOM_NODE
+                    ));
+                    return Err(failures);
+                };
+                // **The script takes hold of a post, not of empty canvas.** If the point were empty,
+                // the pan would still pass on the canvas root and prove nothing about routing a gesture
+                // that starts on a plate.
+                let (kx, ky) = crate::ui::view::tree_point(&fitted, (known.rect.x, known.rect.y));
+                let plate = crate::ui::Rect {
+                    x: tree_rect.x + kx,
+                    y: tree_rect.y + ky,
+                    w: known.rect.w * fitted.zoom,
+                    h: known.rect.h * fitted.zoom,
+                };
+                let press = (
+                    scene::TREE_PAN_AT.0 - origin_x as f32,
+                    scene::TREE_PAN_AT.1 - origin_y as f32,
+                );
+                if !plate.contains(press) {
+                    failures.push(format!(
+                        "pane-tree-pan: the script presses ({:.0}, {:.0}) and the known post's plate \
+                         is ({:.0}, {:.0}) {}×{} — a drag from empty canvas does not prove a post is \
+                         a handle",
+                        press.0, press.1, plate.x, plate.y, plate.w, plate.h
+                    ));
+                }
+                let centre = (
+                    known.rect.x + known.rect.w / 2.0,
+                    known.rect.y + known.rect.h / 2.0,
+                );
+                let (was_x, was_y) = crate::ui::view::tree_point(&fitted, centre);
+                let (x, y) = project(centre);
+                if ((x - was_x) - scene::TREE_PAN_BY.0).abs() > 0.5
+                    || ((y - was_y) - scene::TREE_PAN_BY.1).abs() > 0.5
+                {
+                    failures.push(format!(
+                        "pane-tree-pan: the known post is at ({x:.1}, {y:.1}) and the fit put it at \
+                         ({was_x:.1}, {was_y:.1}) — a travel of ({:.0}, {:.0}) was not paned, so the \
+                         drag reached no canvas",
+                        scene::TREE_PAN_BY.0,
+                        scene::TREE_PAN_BY.1
+                    ));
+                }
+                let (nx, ny) = project((known.rect.x, known.rect.y));
+                let rect = crate::ui::Rect {
+                    x: tree_rect.x + nx,
+                    y: tree_rect.y + ny,
+                    w: known.rect.w * camera.zoom,
+                    h: known.rect.h * camera.zoom,
+                };
+                let probe = crate::ui::tree::node_probe(rect, camera.zoom);
+                let at = crate::ui::Rect {
+                    x: origin_x as f32 + probe.x,
+                    y: origin_y as f32 + probe.y,
+                    w: probe.w,
+                    h: probe.h,
+                };
+                if !rect_has(image, at, ink(tokens::name_plate()), 4) {
+                    failures.push(format!(
+                        "pane-tree-pan: the known post's plate is not at ({:.0}, {:.0}) — the panned \
+                         tree was not drawn",
+                        at.x, at.y
+                    ));
+                }
+                if failures.is_empty() {
+                    lines.push(format!(
+                        "pane-tree-pan: the known post moved by ({:.0}, {:.0}) to ({x:.0}, {y:.0}) — \
+                         a drag on a post pans the canvas",
+                        scene::TREE_PAN_BY.0,
+                        scene::TREE_PAN_BY.1
+                    ));
+                }
+            } else {
+                if !camera.touched {
+                    failures.push(
+                        "pane-tree-zoom: the camera is the fit's, and this scene is a hand's zoom"
+                            .to_string(),
+                    );
+                }
+                if (camera.zoom - scene::TREE_ZOOM_IN).abs() > 1e-3 {
+                    failures.push(format!(
+                        "pane-tree-zoom: zoom {:.3}, and the scene set {}",
+                        camera.zoom,
+                        scene::TREE_ZOOM_IN
+                    ));
+                }
+                let Some(known) = drawn
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == scene::TREE_ZOOM_NODE)
+                else {
+                    failures.push(format!(
+                        "pane-tree-zoom: no post {} — the scene's known node",
+                        scene::TREE_ZOOM_NODE
+                    ));
+                    return Err(failures);
+                };
+                let (x, y) = project((
+                    known.rect.x + known.rect.w / 2.0,
+                    known.rect.y + known.rect.h / 2.0,
+                ));
+                if (x - scene::TREE_ZOOM_AT.0).abs() > 0.5
+                    || (y - scene::TREE_ZOOM_AT.1).abs() > 0.5
+                {
+                    failures.push(format!(
+                        "pane-tree-zoom: the known post is at ({x:.1}, {y:.1}) in its pane, and the \
+                         scene put it at ({:.0}, {:.0}) — the camera the drawing used is not the camera \
+                         the scene set",
+                        scene::TREE_ZOOM_AT.0,
+                        scene::TREE_ZOOM_AT.1
+                    ));
+                }
+                // The plate is where the transform puts it, and it is drawn: a node that is placed but
+                // not filled is a rectangle in a test and a hole on the wall.
+                let (nx, ny) = project((known.rect.x, known.rect.y));
+                let rect = crate::ui::Rect {
+                    x: tree_rect.x + nx,
+                    y: tree_rect.y + ny,
+                    w: known.rect.w * camera.zoom,
+                    h: known.rect.h * camera.zoom,
+                };
+                let probe = crate::ui::tree::node_probe(rect, camera.zoom);
+                let at = crate::ui::Rect {
+                    x: origin_x as f32 + probe.x,
+                    y: origin_y as f32 + probe.y,
+                    w: probe.w,
+                    h: probe.h,
+                };
+                if !rect_has(image, at, ink(tokens::name_plate()), 4) {
+                    failures.push(format!(
+                        "pane-tree-zoom: the known post's plate is not at ({:.0}, {:.0}) — the one \
+                         transform puts a node where the hit test can find it",
+                        at.x, at.y
+                    ));
+                }
+                // A zoom, not a fit: some posts are off the canvas, which is what "fewer nodes" means.
+                let on_screen = drawn
+                    .nodes
+                    .iter()
+                    .filter(|node| {
+                        let (x, y) = project((node.rect.x, node.rect.y));
+                        x + node.rect.w * camera.zoom >= 0.0
+                            && y + node.rect.h * camera.zoom >= 0.0
+                            && x <= tree_rect.w
+                            && y <= tree_rect.h
+                    })
+                    .count();
+                if on_screen >= drawn.nodes.len() {
+                    failures.push(format!(
+                        "pane-tree-zoom: all {} posts are on screen at zoom {:.1} — this is a fit, \
+                         not the zoomed canvas",
+                        drawn.nodes.len(),
+                        camera.zoom
+                    ));
+                }
+                if failures.is_empty() {
+                    lines.push(format!(
+                        "pane-tree-zoom: {} of {} posts on screen at zoom {:.1}, the known post at \
+                         ({:.0}, {:.0}) and its plate drawn",
+                        on_screen,
+                        drawn.nodes.len(),
+                        camera.zoom,
+                        x,
+                        y
+                    ));
+                }
             }
         }
         "panes-drag" => {
@@ -2097,7 +2391,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                 ));
             }
         }
-        "pane-tree" => {
+        "pane-tree" | "pane-tree-narrow" | "pane-tree-zoom" | "pane-tree-pan" => {
             // **A tree pane is a pane, and it is not a map** (#116). It has no frame — so nothing is
             // projected into it (`INV-04`) — and it draws one node per post of the structure it names,
             // under the supreme command. The pane beside it is still a map with its own frame.
@@ -2118,7 +2412,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                 .collect();
             if trees.len() != 1 || maps.len() != 1 {
                 failures.push(format!(
-                    "pane-tree: {} tree panes and {} map panes — the scene is one of each",
+                    "{scene}: {} tree panes and {} map panes — the scene is one of each",
                     trees.len(),
                     maps.len()
                 ));
@@ -2127,18 +2421,18 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                 let pane = state.pane(*id).expect("the tree pane");
                 if pane.frame.is_some() {
                     failures.push(format!(
-                        "pane-tree: tree pane {id} has a frame — INV-04 holds literally, and a tree \
+                        "{scene}: tree pane {id} has a frame — INV-04 holds literally, and a tree \
                          draws nothing that projects"
                     ));
                 }
                 match crate::ui::tree::tree_for(&state, *id) {
                     Some(tree) => lines.push(format!(
-                        "pane-tree: tree pane {id} draws {} posts and {} connectors, and has no frame",
+                        "{scene}: tree pane {id} draws {} posts and {} connectors, and has no frame",
                         tree.nodes.len(),
                         tree.links.len()
                     )),
                     None => failures.push(format!(
-                        "pane-tree: tree pane {id} draws no tree at all"
+                        "{scene}: tree pane {id} draws no tree at all"
                     )),
                 }
             }
