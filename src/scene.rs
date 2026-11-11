@@ -262,10 +262,13 @@ fn panes_max(state: &mut State) {
     crate::ui::full_size_for_scene(state, id);
 }
 
-/// The `panes-named` scene (#83): three panes, two of them **named** — one short enough to read and one long
-/// enough to be cut — and one unnamed, so the capture says both "a name is drawn" and "no name draws
-/// nothing". The names are set the way the sheet sets them, through `shown_name`, so a name the wall would
-/// trim is drawn trimmed here too.
+/// The `panes-named` scene (#83, #113): three panes, two of them **named** — one short enough to read and
+/// one long enough to be cut — and the third left unnamed, so the capture says both "a typed name is
+/// drawn" and "a pane nobody named still has a title". The names are set the way the sheet sets them,
+/// through `shown_name`, so a name the wall would trim is drawn trimmed here too.
+///
+/// **The unnamed pane is the third**, whose id is 3, so the picture proves the default comes from the
+/// pane's id rather than its position: it draws `pane-03` after the two named panes before it.
 fn panes_named(state: &mut State) {
     panes(state);
     let ids: Vec<crate::ui::ViewId> = state.pane_rects().into_iter().map(|(id, _)| id).collect();
@@ -274,13 +277,13 @@ fn panes_named(state: &mut State) {
     {
         pane.name = crate::ui::shown_name("Surabaya approaches");
     }
-    if let Some(id) = ids.get(2).copied()
+    if let Some(id) = ids.get(1).copied()
         && let Some(pane) = state.pane_mut(id)
     {
         pane.name =
             crate::ui::shown_name("the strait at first light, and the traffic separation scheme");
     }
-    // The middle pane is deliberately left unnamed.
+    // The third pane is deliberately left unnamed: it draws `pane-03`.
 }
 
 /// The `panes-gaps` scene (#82): the same wall with **space between the panes** — the settings sheet's

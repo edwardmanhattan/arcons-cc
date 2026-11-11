@@ -64,7 +64,9 @@ pub struct Pane {
     /// filter it will draw with. The wall's data is shared — one picture, one socket, one fleet — and the
     /// *question* is not: two panes may ask about two hulls, and a press in one must not answer in the other.
     pub view: PaneView,
-    /// What the operator called this pane (#83). `None` draws nothing: a name nobody typed is not a name.
+    /// **The name the operator typed** (#83, #113). `None` means "nobody named this pane": the plate then
+    /// draws the pane's own number from [`Pane::title`], because a title is not a name invented — a name is
+    /// something somebody typed.
     ///
     /// It lives on the pane and not in `settings.toml`, because a pane does not survive a restart yet — a
     /// saved layout (which panes, at which cameras, in what tiling) is its own ticket, and a name that
@@ -73,6 +75,15 @@ pub struct Pane {
 }
 
 impl Pane {
+    /// **What the plate says** (#113): the name the operator typed, or the pane's own number.
+    ///
+    /// The number comes from the pane's **id**, not its position: a re-tile keeps an id and a close does
+    /// not renumber the others, so a wall can honestly show `pane-01` and `pane-03` after the second pane
+    /// was closed. Renumbering by position would rename panes whenever they were dragged.
+    pub fn title(&self) -> String {
+        self.name.clone().unwrap_or_else(|| default_title(self.id))
+    }
+
     pub fn new(id: ViewId, camera: Camera) -> Self {
         Self {
             id,
@@ -236,6 +247,14 @@ impl Rename {
         edit.focused = true;
         Rename { pane, edit }
     }
+}
+
+/// **The only place the default title's form is written** (#113): `pane-01`, `pane-02`, … from the pane's
+/// id, zero-padded to two digits so a wall of nine panes does not draw a column of ragged edges.
+///
+/// Past 99 it simply grows (`pane-100`): a wall with a hundred panes is not a wall this app is for.
+pub fn default_title(id: ViewId) -> String {
+    format!("pane-{id:02}")
 }
 
 /// What a name shows: trimmed, cut to `tokens::NAME_MAX_CHARS` with a drawn ellipsis. `None` for a name
@@ -1394,9 +1413,7 @@ fn maximised(state: &State, scale: f32, body: El) -> El {
         );
     }
     sheet = sheet.child(projections(state, id, &frame, scale));
-    if let Some(plate) = name_plate(pane) {
-        sheet = sheet.child(plate);
-    }
+    sheet = sheet.child(name_plate(pane));
     // The way back, said in words and pressable: a wall has no title bar to close and no icon set to
     // draw an × with.
     sheet = sheet.child(
@@ -1470,14 +1487,17 @@ fn single_pane(state: &State, id: ViewId, rect: Rect, scale: f32, body: El) -> E
     let Some(pane) = state.pane(id) else {
         return body;
     };
-    let Some(frame) = pane.frame else {
-        return body;
-    };
-    let mut layer = body.child(projections(state, id, &frame, scale));
-    // The name is chrome on the wall as it was, too: a one-pane wall with a name is a pane somebody named.
-    if let Some(plate) = state.pane(id).and_then(name_plate) {
-        layer = layer.child(plate);
+    let mut layer = body;
+    // A pane whose map has not drawn yet has no markers, but it **still has a title**: the plate is chrome
+    // over the picture, not part of it. A tiled pane draws its plate before its first frame for the same
+    // reason, and one pane is not a special case of "every pane has a title" (#113).
+    if let Some(frame) = pane.frame {
+        layer = layer.child(projections(state, id, &frame, scale));
     }
+    // **Every pane has a title, including the only one** (#113): a lone pane draws `pane-01` in the corner.
+    // The control must not appear from nowhere the first time the wall is split, and it is drawn after the
+    // markers so a press on it is a press on the label rather than on a hull underneath.
+    layer = layer.child(name_plate(pane));
     layer
 }
 
@@ -1543,10 +1563,13 @@ fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
     if let Some(frame) = state.pane(id).and_then(|pane| pane.frame) {
         layer = layer.child(projections(state, id, &frame, scale));
     }
-    // The plate is chrome over the picture, and the handle goes on top of it: a grab must never be a press
-    // on the label either (#83).
-    if let Some(plate) = state.pane(id).and_then(name_plate) {
-        layer = layer.child(plate);
+    // **Chrome is drawn after the markers, in this order** (#113). The plate is a press target now — a
+    // press on the label opens the rename sheet — and the handle is the grab target at the top centre.
+    // Drawing the plate before the handle, and both after the markers, is what makes a press on the label
+    // a rename rather than a hull selection or a lift, and a grab on the handle a lift rather than a
+    // rename. The ordering is load-bearing, not tidy.
+    if let Some(pane) = state.pane(id) {
+        layer = layer.child(name_plate(pane));
     }
     // The handle is drawn **last**, over the markers: it is the element a grab lands on, and a grab must
     // never be a press on the hull underneath it.
@@ -1719,28 +1742,46 @@ fn projections(
     layer
 }
 
-/// A pane's name, on its own border (#83): a plate in the top-left corner, left of the handle.
+/// A pane's **title**, on its own border (#83, #113): a plate in the top-left corner, left of the handle.
+///
+/// **Every pane draws one.** The plate is what the operator clicks to type a new name, so a fresh pane has
+/// a control rather than a gap: it says the pane's own number (`pane-01`) until somebody names it. A name
+/// the operator typed is still the only thing stored on the pane; the number is [`Pane::title`]'s answer,
+/// not a name invented in `Pane.name`.
 ///
 /// **Inside the pane, not straddling its edge**: a pane clips its picture (`clip_rounded`), so a plate
-/// half outside would be cut in half — and a name is chrome, which belongs *on* the picture rather than
-/// hanging off it. Unnamed panes draw nothing at all: a placeholder is a promise of a name nobody made.
-fn name_plate(pane: &Pane) -> Option<El> {
-    let shown = shown_name(pane.name.as_deref().unwrap_or_default())?;
-    Some(
-        row()
-            .key(format!("pane-name-{}", pane.id))
-            // The same offsets `view::name_probe` measures against: the plate sits half a gap in from the
-            // pane's corner, so the probe lands on it rather than on the pane beside it.
-            .absolute(tokens::GAP / 2.0, tokens::GAP / 2.0)
-            .h(tokens::NAME_H)
-            .max_w(tokens::NAME_MAX_W)
-            .items_center()
-            .px(tokens::GAP)
-            .radius(tokens::NAME_H / 2.0)
-            .fill(tokens::name_plate())
-            .border(tokens::HAIRLINE, tokens::hairline())
-            .child(text(shown).font(tokens::LABEL).color(tokens::ink_dim())),
-    )
+/// half outside would be cut in half — and a title is chrome, which belongs *on* the picture rather than
+/// hanging off it.
+///
+/// Its press calls the same [`begin_rename`] the menu row calls, so there is one way into the sheet and no
+/// second path to keep in step. It is drawn after the markers and before the handle in [`pane`]: the
+/// ordering is load-bearing now that the plate is a press target — a press on the label must be a rename,
+/// never a grab, and a grab on the handle must never be a press on the label.
+fn name_plate(pane: &Pane) -> El {
+    let id = pane.id;
+    let title = pane.title();
+    // A title is short by construction, so the ellipsis remains a property of typed names only. The
+    // fallback covers a `name` that is empty once trimmed: it is not a name, so the pane keeps its number.
+    let shown = shown_name(&title).unwrap_or_else(|| default_title(id));
+    row()
+        .key(format!("pane-name-{id}"))
+        // The same offsets `view::name_probe` measures against: the plate sits half a gap in from the
+        // pane's corner, so the probe lands on it rather than on the pane beside it.
+        .absolute(tokens::GAP / 2.0, tokens::GAP / 2.0)
+        .h(tokens::NAME_H)
+        .max_w(tokens::NAME_MAX_W)
+        .items_center()
+        .px(tokens::GAP)
+        .radius(tokens::NAME_H / 2.0)
+        .fill(tokens::name_plate())
+        .border(tokens::HAIRLINE, tokens::hairline())
+        .on_press(move |state: &mut State| begin_rename(state, id))
+        .child(
+            text(shown)
+                .key(format!("pane-title-{id}"))
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim()),
+        )
 }
 
 /// One pane's picture: the map's pixels, its failure, or the placeholder.
@@ -4464,9 +4505,129 @@ mod tests {
         state.renaming_mut().expect("open").edit.text = "   ".to_string();
         commit_rename(&mut state);
         assert_eq!(state.pane(id).and_then(|pane| pane.name.as_deref()), None);
+        assert_eq!(
+            state.pane(id).expect("the pane").title(),
+            default_title(id),
+            "an unnamed pane still has a title: its own number"
+        );
+    }
+
+    /// #113: the title is the typed name or the pane's own number, and the number is the pane's **id**,
+    /// zero-padded to two digits. The form is written in one place, so this is its one literal check.
+    #[test]
+    fn a_panes_title_is_its_name_or_its_id() {
+        for (id, expected) in [
+            (1, "pane-01"),
+            (2, "pane-02"),
+            (9, "pane-09"),
+            (10, "pane-10"),
+            (23, "pane-23"),
+            (99, "pane-99"),
+            (100, "pane-100"),
+        ] {
+            assert_eq!(
+                default_title(id),
+                expected,
+                "the default title is the pane's id, zero-padded to two digits"
+            );
+        }
+        let mut pane = Pane::new(7, crate::map::geometry::Camera::START);
+        assert_eq!(pane.title(), "pane-07");
+        pane.name = shown_name("  Surabaya approaches ");
+        assert_eq!(
+            pane.title(),
+            "Surabaya approaches",
+            "a name somebody typed is the title"
+        );
+    }
+
+    /// #113: **every pane draws its title, and the plate is the control**. The press goes through the
+    /// same `begin_rename` the menu row calls, and a default title is not a name: the sheet opens empty.
+    #[test]
+    fn every_pane_has_a_title_and_pressing_it_types_a_new_one() {
+        // A lone pane draws `pane-01` too: a control that appears only once the wall is split appears
+        // from nowhere. The frame is deliberately absent here: a pane whose map has not drawn yet still
+        // has its title, because the plate is chrome rather than part of the picture.
+        let single = crate::scene::state_for("picture");
         assert!(
-            state.pane(id).and_then(name_plate).is_none(),
-            "an unnamed pane draws no plate"
+            single.frame().is_none(),
+            "this is the before-first-frame case"
+        );
+        let single_rt = frame_once(single);
+        assert!(
+            single_rt.find("pane-name-1").is_some(),
+            "a one-pane wall draws its title"
+        );
+        assert_eq!(
+            single_rt
+                .elements()
+                .iter()
+                .find(|element| element.key.as_deref() == Some("pane-title-1"))
+                .and_then(|element| element.text.as_deref()),
+            Some("pane-01"),
+            "the lone pane's title is its own number"
+        );
+
+        let mut rt = frame_once(crate::scene::state_for("panes-named"));
+        let ids = rt.state.layout.ids();
+        assert_eq!(ids.len(), 3);
+        // The scene's third pane is the one nobody named, and its id is 3: `pane-03`, not `pane-01`.
+        assert_eq!(
+            rt.state.pane(ids[2]).expect("the third pane").title(),
+            "pane-03"
+        );
+        let expected = [
+            "Surabaya approaches".to_string(),
+            shown_name("the strait at first light, and the traffic separation scheme")
+                .expect("a long name is still a name"),
+            "pane-03".to_string(),
+        ];
+        for (id, expected) in ids.iter().zip(expected) {
+            let key = format!("pane-name-{id}");
+            let (x, y) = rt
+                .find(&key)
+                .unwrap_or_else(|| panic!("pane {id} draws no title plate"));
+            let picked = rt
+                .element_at(x, y)
+                .unwrap_or_else(|| panic!("nothing is at pane {id}'s plate"));
+            let title_key = format!("pane-title-{id}");
+            assert!(
+                matches!(
+                    picked.key(),
+                    Some(found) if found == key.as_str() || found == title_key.as_str()
+                ),
+                "the plate is chrome over the markers: a press on the label must reach the label, \
+                 not a hull or the handle (got {:?})",
+                picked.key()
+            );
+            let drawn = rt
+                .elements()
+                .iter()
+                .find(|element| element.key.as_deref() == Some(title_key.as_str()))
+                .and_then(|element| element.text.clone());
+            assert_eq!(
+                drawn.as_deref(),
+                Some(expected.as_str()),
+                "pane {id}'s title"
+            );
+        }
+
+        // Press the unnamed pane's plate: the same sheet the menu row opens, with an empty field. A
+        // default title is not a name, so Enter on an untouched field leaves it unnamed.
+        let id = ids[2];
+        let (x, y) = rt.find(&format!("pane-name-{id}")).expect("the plate");
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        let rename = rt
+            .state
+            .rename()
+            .expect("a press on the plate opens the sheet");
+        assert_eq!(rename.pane, id);
+        assert_eq!(rename.edit.text, "", "a default title is not a name");
+        assert!(
+            rt.state.dragging().is_none(),
+            "a press on the label is a rename, never a lift"
         );
     }
 
