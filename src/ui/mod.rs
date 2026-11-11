@@ -98,7 +98,7 @@ impl Pane {
 /// in every pane, and a press in one pane opened a card in all of them.
 ///
 /// **`filter` is deliberately here before it is used.** The operator's next ask is per-pane filters
-/// (ships in pane 1, planes in pane 2, altitude in pane 3). A third field added later would be the same
+/// (ships in pane 1, planes in pane 2, altitude in pane 3). Another field added later would be the same
 /// mistake a second time: the pane's state is one thing, so it has one home.
 #[derive(Clone, Debug, Default)]
 pub struct PaneView {
@@ -109,6 +109,10 @@ pub struct PaneView {
     /// The age text this pane's card drew last frame, so a second passing redraws the card and nothing
     /// else. Per pane for the same reason the card is: two cards age at two moments.
     last_age: String,
+    /// Whether **this pane** draws symbols or pictures, latched with hysteresis on its own frame's zoom
+    /// (`units::mark`). One latch per pane (#115): each pane has its own zoom, so each pane has its own
+    /// representation — zooming one pane into a hull's picture must not switch its neighbour.
+    pub range: crate::units::mark::Range,
     /// Which hulls this pane draws (all of them, for now). The operator's next ticket: a pane per
     /// question — ships, planes, altitide — and the data stays shared.
     pub filter: Filter,
@@ -332,9 +336,6 @@ pub struct State {
     marker_press: bool,
     /// When the last "socket" heartbeat was logged, on the wall's own uptime clock (ms).
     last_report_ms: u64,
-    /// Whether the wall is drawing symbols or pictures, latched with hysteresis on the frame's zoom
-    /// (`units::mark`). One latch for the wall: the decision is about the zoom, not about a hull.
-    pub range: crate::units::mark::Range,
     /// Dimensions of hulls the wall has read, for scaling a picture. Absent means "not read yet", which
     /// draws the picture clamped rather than at a scale nobody measured.
     pub sizes: std::collections::HashMap<i64, crate::units::mark::Size>,
@@ -413,7 +414,6 @@ impl Default for State {
             headless: false,
             marker_press: false,
             last_report_ms: 0,
-            range: crate::units::mark::Range::default(),
             sizes: std::collections::HashMap::new(),
             image_urls: std::collections::HashMap::new(),
             images: None,
@@ -786,7 +786,7 @@ impl State {
                 &frame,
                 self.now(),
                 self.stale_after,
-                self.range,
+                pane.view.range,
                 &|unit| self.sizes.get(&unit).copied(),
             )
             .into_iter()
@@ -1709,7 +1709,7 @@ fn ghost(state: &State, scale: f32, body: El) -> El {
         &frame,
         state.now(),
         state.stale_after,
-        state.range,
+        pane.view.range,
         &sizes,
     );
     let pictures = markers::Pictures {
@@ -1735,12 +1735,18 @@ fn projections(
     scale: f32,
 ) -> El {
     let sizes = |id_unit: i64| state.sizes.get(&id_unit).copied();
+    // **This pane's latch, not the wall's** (#115): the same frame it draws against is the frame that
+    // decided whether its hulls are symbols or pictures.
+    let range = state
+        .pane(id)
+        .map(|pane| pane.view.range)
+        .unwrap_or_default();
     let placed = markers::place(
         &state.picture,
         frame,
         state.now(),
         state.stale_after,
-        state.range,
+        range,
         &sizes,
     );
     let pictures = markers::Pictures {
@@ -2941,20 +2947,27 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
         state.layout_dirty = false;
         changed = true;
     }
-    // The range follows the frame's zoom, not the camera's: mid-gesture they disagree, and a hull must
-    // not switch representation while it is still projected against the previous frame.
-    if let Some(frame) = state.frame() {
-        let latched = state.range.update(frame.camera.zoom);
-        if latched != state.range {
-            state.range = latched;
-            changed = true;
+    // **The range follows the pane's own frame's zoom, not the camera's** (#115): mid-gesture they
+    // disagree, and a hull must not switch representation while it is still projected against the
+    // previous frame. One latch per pane, because each pane has its own zoom — a pane zoomed into a
+    // hull's picture must not switch its neighbour's representation.
+    for pane in &mut state.panes {
+        if let Some(frame) = pane.frame {
+            let latched = pane.view.range.update(frame.camera.zoom);
+            if latched != pane.view.range {
+                pane.view.range = latched;
+                changed = true;
+            }
         }
     }
-    // In picture range the wall needs two things the feed does not carry: the register (picture URLs,
-    // one read for the fleet) and each hull's dimensions (what the picture is scaled by). Both are
-    // asked for a bounded number per frame, off the UI thread, and neither is asked in symbol range
-    // where nothing uses them.
-    if state.range == crate::units::mark::Range::Picture
+    // In picture range **any pane** needs two things the feed does not carry: the register (picture URLs,
+    // one read for the fleet) and each hull's dimensions (what the picture is scaled by). The register, the
+    // decoded pictures and the per-frame budget are the wall's shared resources — one cache, several
+    // views (#115) — so the ask is gated by any pane being in picture range, not by the focused one.
+    if state
+        .panes
+        .iter()
+        .any(|pane| pane.view.range == crate::units::mark::Range::Picture)
         && let Some(backend) = &state.backend
     {
         if !state.asked_register && due(state.now(), state.register_retry_at) {

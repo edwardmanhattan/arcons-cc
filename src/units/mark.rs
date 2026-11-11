@@ -52,10 +52,11 @@ pub const MIN_PICTURE_PT: f32 = 24.0;
 /// ever re-orients its photographs, this is the line that changes, and the test below says so.
 pub const IMAGE_BOW_DEGREES: f32 = 90.0;
 
-/// Whether the wall is in symbol range or picture range.
+/// Whether a pane is in symbol range or picture range.
 ///
-/// One latch for the whole wall, because the decision is about the *zoom*, not about a hull: two hulls at
-/// the same zoom must not disagree about which representation they are in.
+/// **One latch per pane** (#115), because the decision is about the *zoom* and each pane holds its own:
+/// zooming one pane into a hull's picture must not switch its neighbour's representation. Two hulls at
+/// the same zoom in the same pane still cannot disagree about which representation they are in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Range {
     #[default]

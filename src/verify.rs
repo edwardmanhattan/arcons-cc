@@ -650,6 +650,120 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 )),
             }
         }
+        "panes-range" => {
+            // **The symbol-to-picture range belongs to the pane** (#115). Two panes look at the same
+            // hull: the focused one at `PHOTO_ZOOM`, where a ship is its photograph, and its neighbour at
+            // a chart zoom, where it is a symbol. Both panes hold the decoded picture — the cache is the
+            // wall's — so this capture is a claim about the *latch*: a wall-wide range draws one
+            // representation in both, and one of these two checks goes red.
+            let Some((origin_x, origin_y, panel_w, panel_h)) =
+                image.find_panel_rect(ink(tokens::panel()))
+            else {
+                failures.push("panes-range: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let state = scene::state_for("panes-range");
+            let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
+            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            if rects.len() != 2 {
+                failures.push(format!(
+                    "panes-range: {} panes for a two-pane scene",
+                    rects.len()
+                ));
+                return Err(failures);
+            }
+            let Some(fix) = scene::fixture().ok().and_then(|entries| {
+                entries
+                    .into_iter()
+                    .find(|entry| entry.id_unit == scene::PHOTO_UNIT)
+                    .and_then(|entry| entry.position)
+            }) else {
+                failures.push(format!(
+                    "panes-range: hull {} has no fix",
+                    scene::PHOTO_UNIT
+                ));
+                return Err(failures);
+            };
+            // The photograph's own ink: a colour no token uses, so finding it at the projected hull is
+            // proof that this pane drew the decoded bytes rather than a symbol (#54).
+            let hud = [232u8, 243, 255];
+            let (mut pictures, mut symbols) = (0usize, 0usize);
+            for (index, (id, rect)) in rects.iter().enumerate() {
+                let Some(pane) = state.pane(*id) else {
+                    failures.push(format!("panes-range: pane {id} has no state"));
+                    continue;
+                };
+                // **The latch each pane's own zoom calls for** (#115): picture at or past `PHOTO_ZOOM`,
+                // symbol below it — and this scene's chart zoom is below `PHOTO_EXIT`, so hysteresis has
+                // no say in either answer. A pane holding the neighbour's range fails here before any
+                // pixel is read, so the failure names the latch rather than a missing marker.
+                let want = if pane.camera.zoom >= crate::units::mark::PHOTO_ZOOM {
+                    crate::units::mark::Range::Picture
+                } else {
+                    crate::units::mark::Range::Symbol
+                };
+                if pane.view.range != want {
+                    failures.push(format!(
+                        "panes-range: pane {index} holds {:?} at zoom {} — its own zoom asks for {want:?}, \
+                         and a wall-wide latch is why a neighbour's zoom would switch it (#115)",
+                        pane.view.range, pane.camera.zoom
+                    ));
+                    continue;
+                }
+                let frame = crate::ui::view::synthetic_frame(pane.camera, *rect, 1.0);
+                let (px, py) = frame.project(fix.latitude, fix.longitude);
+                let (x, y) = (
+                    origin_x + f64::from(rect.x) + px,
+                    origin_y + f64::from(rect.y) + py,
+                );
+                match pane.view.range {
+                    crate::units::mark::Range::Picture => {
+                        pictures += 1;
+                        match image.nearest_colour(x, y, hud, 30.0) {
+                            Some(distance) => lines.push(format!(
+                                "panes-range: pane {index} draws the hull's own picture within \
+                                 {distance:.1} px of ({x:.0}, {y:.0})"
+                            )),
+                            None => failures.push(format!(
+                                "panes-range: pane {index} is in picture range but has no picture ink \
+                                 near ({x:.0}, {y:.0}) — the zoomed pane drew the symbol (#115)"
+                            )),
+                        }
+                    }
+                    crate::units::mark::Range::Symbol => {
+                        symbols += 1;
+                        match image.blob_centre(x, y, accent, 8) {
+                            Some((centre, count)) if count >= 8 => {
+                                let distance =
+                                    ((centre.0 - x).powi(2) + (centre.1 - y).powi(2)).sqrt();
+                                if distance > TOLERANCE_PX {
+                                    failures.push(format!(
+                                        "panes-range: pane {index}'s symbol is {distance:.1} px from \
+                                         ({x:.0}, {y:.0}), its own projection"
+                                    ));
+                                } else {
+                                    lines.push(format!(
+                                        "panes-range: pane {index} draws the hull's symbol \
+                                         {distance:.1} px from ({x:.0}, {y:.0})"
+                                    ));
+                                }
+                            }
+                            _ => failures.push(format!(
+                                "panes-range: pane {index} is in symbol range but has no symbol ink \
+                                 near ({x:.0}, {y:.0}) — the neighbour's zoom switched it to a picture \
+                                 (#115)"
+                            )),
+                        }
+                    }
+                }
+            }
+            if pictures != 1 || symbols != 1 {
+                failures.push(format!(
+                    "panes-range: {pictures} panes in picture range and {symbols} in symbol range — one \
+                     capture must hold both representations (#115)"
+                ));
+            }
+        }
         "panes-max" => {
             // **A maximised pane is a bigger rectangle, not a different pane** (#85). Its hulls project
             // against a frame the size of the panel — its own camera, the window's frame — and the tiling
@@ -1494,13 +1608,13 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
         &frame,
         state.now(),
         state.stale_after,
-        state.range,
+        state.focused_pane().view.range,
         &|_| None,
     );
 
     match scene {
         "panes" | "panes-drag" | "panes-pan" | "panes-gaps" | "panes-gap-resize"
-        | "panes-named" | "panes-max" => {
+        | "panes-named" | "panes-max" | "panes-range" => {
             // One marker per hull with a fix **in every pane**: a pane that drew nothing, or drew the
             // same set twice, is not a view.
             let expected = state
@@ -1524,7 +1638,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                     &frame,
                     state.now(),
                     state.stale_after,
-                    state.range,
+                    pane.view.range,
                     &|_| None,
                 );
                 if placed.len() != expected {

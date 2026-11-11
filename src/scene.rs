@@ -126,7 +126,7 @@ pub const PHOTO_FIXTURE: &[u8] = include_bytes!("../fixtures/scenes/hull.png");
 /// marker, not just the drawing half.
 fn photo(state: &mut State) {
     load(state);
-    state.range = crate::units::mark::Range::Picture;
+    state.focused_pane_mut().view.range = crate::units::mark::Range::Picture;
     state.sizes.insert(
         PHOTO_UNIT,
         crate::units::mark::Size {
@@ -143,16 +143,7 @@ fn photo(state: &mut State) {
         state,
         &crate::data::Reply::Image(PHOTO_UNIT, Ok(PHOTO_FIXTURE.to_vec())),
     );
-    for _ in 0..400 {
-        if state
-            .pictures
-            .get(&PHOTO_UNIT)
-            .is_some_and(|image| image.is_ready())
-        {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(2));
-    }
+    wait_for_picture(state);
     // Centred on the hull, at the zoom where a 120 m ship is a 25 pt picture.
     if let Some(view) = state
         .picture
@@ -165,6 +156,79 @@ fn photo(state: &mut State) {
             (drawn.lat, drawn.lon),
             crate::units::mark::PHOTO_ZOOM,
         ));
+    }
+}
+
+/// Wait, **bounded**, for the scene's decoded picture: a capture that raced the decoder would draw a
+/// symbol on some runs and a ship on others, and `INV-11` promises two runs identical (#35). A picture
+/// that cannot decode draws the symbol rather than hanging the capture.
+fn wait_for_picture(state: &mut State) {
+    for _ in 0..400 {
+        if state
+            .pictures
+            .get(&PHOTO_UNIT)
+            .is_some_and(|image| image.is_ready())
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+/// The chart zoom pane B of `panes-range` holds: below `PHOTO_EXIT`, so the same hull that is a picture
+/// in pane A is a symbol here.
+pub const PANES_RANGE_CHART: f64 = 13.0;
+
+/// The `panes-range` scene (#115): **two panes at two zooms, looking at the same hull**.
+///
+/// Pane A is focused and centred on a hull at `PHOTO_ZOOM`, where a ship is its photograph; pane B is the
+/// same hull at a chart zoom, where it is a symbol. Both panes can draw the picture — the decoded bytes and
+/// the dimensions are the wall's, one cache for several views — so the capture is a claim about the
+/// **latch**, not about the cache: a wall-wide range draws one representation in both panes, and
+/// `scripts/assert.sh out/panes-range.png` requires the picture in A and the symbol in B in one capture.
+fn panes_range(state: &mut State) {
+    load(state);
+    let Some(drawn) = state
+        .picture
+        .units()
+        .iter()
+        .find(|unit| unit.unit.id_unit == PHOTO_UNIT)
+        .and_then(|unit| unit.drawn(state.now()))
+    else {
+        return;
+    };
+    let centre = (drawn.lat, drawn.lon);
+    let first = state.layout.focused();
+    state.set_camera(Camera::new(centre, crate::units::mark::PHOTO_ZOOM));
+    if state
+        .split_pane(first, Camera::new(centre, PANES_RANGE_CHART))
+        .is_none()
+    {
+        return;
+    }
+    state.layout.focus(first);
+    state.sizes.insert(
+        PHOTO_UNIT,
+        crate::units::mark::Size {
+            length_m: 120.0,
+            beam_m: 16.0,
+        },
+    );
+    // The same route `photo` takes, for the reason it takes it: bytes → cache → marker, decoded before
+    // the first frame.
+    crate::ui::apply_reply(
+        state,
+        &crate::data::Reply::Image(PHOTO_UNIT, Ok(PHOTO_FIXTURE.to_vec())),
+    );
+    wait_for_picture(state);
+    // **The latch is the pane's** (#115), and the scene says which pane holds which. `poll` re-latches
+    // both from their own frames; `verify` builds this state without a layout pass, so the ranges are
+    // also set here, the way `photo` sets the single pane's.
+    for pane in &mut state.panes {
+        pane.view.range = crate::units::mark::Range::Symbol;
+    }
+    if let Some(pane) = state.pane_mut(first) {
+        pane.view.range = crate::units::mark::Range::Picture;
     }
 }
 
@@ -400,6 +464,7 @@ pub const SCENES: &[Scene] = &[
     ("panes-named", panes_named),
     ("panes-max", panes_max),
     ("panes-cards", panes_cards),
+    ("panes-range", panes_range),
     ("settings", settings_sheet),
     ("settings-dismiss", settings_dismiss),
     ("pane-menu", pane_menu),
@@ -492,6 +557,9 @@ mod tests {
                 "panes-named",
                 "panes-max",
                 "panes-cards",
+                // Two panes at two zooms on the same hull: the symbol-to-picture latch is the pane's,
+                // not the wall's (#115).
+                "panes-range",
                 "settings",
                 // The one scene whose point is that something is **not** there: the sheet, after a press
                 // outside it (#98).
@@ -541,6 +609,33 @@ mod tests {
             panes.layout.focused(),
             panes.layout.ids()[PANES_FOCUSED],
             "the focus is on the pane the constant names"
+        );
+
+        // The range witness (#115): one hull, two panes, one of each representation — and the decoded
+        // bytes are the wall's, so a pane that switches representation is the latch and nothing else.
+        let range = state_for("panes-range");
+        assert_eq!(range.panes.len(), 2, "a pane for each representation");
+        let focused = range.layout.focused();
+        let focused_pane = range.pane(focused).expect("the focused pane");
+        assert_eq!(
+            focused_pane.view.range,
+            crate::units::mark::Range::Picture,
+            "the focused pane is zoomed into the hull's picture"
+        );
+        assert!(
+            range
+                .panes
+                .iter()
+                .filter(|pane| pane.id != focused)
+                .all(|pane| pane.view.range == crate::units::mark::Range::Symbol),
+            "the neighbour at chart zoom is in symbol range"
+        );
+        assert!(
+            range
+                .pictures
+                .get(&PHOTO_UNIT)
+                .is_some_and(|image| image.is_ready()),
+            "the picture is decoded for the wall, so the neighbour could draw it too"
         );
     }
 
