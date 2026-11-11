@@ -596,24 +596,38 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
         "panes-cards" => {
             // **One card, in one pane** (#99) — the operator's screenshot read as a measurement. A card's
             // text is `tokens::ink()`, which nothing else inside a pane draws: markers are accent-cyan
-            // glyphs, the pane's own chrome is hairlines. So each pane is asked how much name-and-value
-            // ink it holds, and the answer must be "one pane, not the others". Two is the shared-selection
-            // bug; none means the pane that was pressed has no card.
-            let Some((px, py, _, _)) = image.find_panel_rect(ink(tokens::panel())) else {
+            // glyphs, the pane's own chrome is hairlines and — since #111 — two icon buttons, whose
+            // rectangles are excluded by the same `chrome_buttons` that draws them. So each pane is asked
+            // how much name-and-value ink it holds, and the answer must be "one pane, not the others".
+            // Two is the shared-selection bug; none means the pane that was pressed has no card.
+            let Some((px, py, pw, ph)) = image.find_panel_rect(ink(tokens::panel())) else {
                 failures.push("panes-cards: no picture panel on screen".to_string());
                 return Err(failures);
             };
             let state = scene::state_for("panes-cards");
+            let viewport = crate::map::geometry::Viewport::new(pw, ph);
+            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
             let ink_colour = ink(tokens::ink());
             let mut counts: Vec<(crate::ui::ViewId, usize)> = Vec::new();
-            for (id, rect) in state.pane_rects() {
+            for (id, rect) in rects {
                 let mut count = 0;
+                let (filter, maximise) = crate::ui::view::chrome_buttons(rect);
                 let x0 = (px + f64::from(rect.x)).max(0.0) as u32 + 4;
                 let y0 = (py + f64::from(rect.y)).max(0.0) as u32 + 4;
                 let x1 = ((px + f64::from(rect.x + rect.w)) as u32).min(image.width) - 4;
                 let y1 = ((py + f64::from(rect.y + rect.h)) as u32).min(image.height) - 4;
                 for y in y0..y1 {
                     for x in x0..x1 {
+                        let local = (f64::from(x) - px, f64::from(y) - py);
+                        let on_button = |button: crate::ui::Rect| {
+                            local.0 >= f64::from(button.x)
+                                && local.0 < f64::from(button.x + button.w)
+                                && local.1 >= f64::from(button.y)
+                                && local.1 < f64::from(button.y + button.h)
+                        };
+                        if on_button(filter) || on_button(maximise) {
+                            continue;
+                        }
                         if near(image.at(x, y), ink_colour, 10) {
                             count += 1;
                         }
@@ -650,6 +664,247 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 )),
             }
         }
+        "panes-chrome" => {
+            // **Two iconed controls in every pane** (#111), sampled where `view::chrome_buttons` puts
+            // them — the same function the picture places the row with. The filter panel is open on the
+            // focused pane because `fixtures/scripts/panes-chrome.json` pressed its toggle: a control
+            // that draws but reaches no handler leaves the panel absent and this goes red.
+            let Some((origin_x, origin_y, panel_w, panel_h)) =
+                image.find_panel_rect(ink(tokens::panel()))
+            else {
+                failures.push("panes-chrome: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let state = scene::state_for("panes-chrome");
+            let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
+            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let icon_ink = ink(tokens::ink());
+            for (index, (id, rect)) in rects.iter().enumerate() {
+                let (filter, maximise) = crate::ui::view::chrome_buttons(*rect);
+                for (name, button) in [("filter", filter), ("maximise", maximise)] {
+                    let mut hits = 0;
+                    let mut samples = 0;
+                    for dy in 0..button.h as i32 {
+                        for dx in 0..button.w as i32 {
+                            let x = (origin_x + f64::from(button.x) + f64::from(dx)) as u32;
+                            let y = (origin_y + f64::from(button.y) + f64::from(dy)) as u32;
+                            if x >= image.width || y >= image.height {
+                                continue;
+                            }
+                            samples += 1;
+                            if near(image.at(x, y), icon_ink, 60) {
+                                hits += 1;
+                            }
+                        }
+                    }
+                    if hits < 8 {
+                        failures.push(format!(
+                            "panes-chrome: pane {index} ({id}) has {hits}/{samples} ink pixels in its \
+                             {name} button at ({:.0}, {:.0}) — the {name} control is not drawn (#111)",
+                            origin_x + f64::from(button.x),
+                            origin_y + f64::from(button.y)
+                        ));
+                    } else {
+                        lines.push(format!(
+                            "panes-chrome: pane {index} draws its {name} control ({hits} ink px)"
+                        ));
+                    }
+                }
+            }
+            // **The filter panel is a popover over the picture, not a modal over it.** Its surface is the
+            // window's own `bg()`, inside a picture that is `panel()`; the bounding box of that fill is
+            // the panel's box, measured against the token the shell was given. No scrim: the water outside
+            // the box is still the picture.
+            let surface = ink(tokens::bg());
+            // A **solid** block, so a single antialiased pixel on the picture's own border cannot stretch
+            // the box across the wall — the same erosion the settings sheet's assertion uses.
+            let solid = |x: u32, y: u32| {
+                x > 0
+                    && y > 0
+                    && x + 1 < image.width
+                    && y + 1 < image.height
+                    && [(0i32, 0i32), (1, 0), (-1, 0), (0, 1), (0, -1)]
+                        .iter()
+                        .all(|(dx, dy)| {
+                            near(
+                                image.at((x as i32 + dx) as u32, (y as i32 + dy) as u32),
+                                surface,
+                                6,
+                            )
+                        })
+            };
+            let (mut sx, mut sy, mut ex, mut ey) = (f64::MAX, f64::MAX, 0.0f64, 0.0f64);
+            let mut found = false;
+            for y in (origin_y as u32 + 2)..((origin_y + panel_h) as u32 - 2).min(image.height) {
+                for x in (origin_x as u32 + 2)..((origin_x + panel_w) as u32 - 2).min(image.width) {
+                    if solid(x, y) {
+                        found = true;
+                        sx = sx.min(f64::from(x));
+                        sy = sy.min(f64::from(y));
+                        ex = ex.max(f64::from(x));
+                        ey = ey.max(f64::from(y));
+                    }
+                }
+            }
+            let (want_w, want_h) = (
+                f64::from(tokens::FILTER_SIZE.0),
+                f64::from(tokens::FILTER_SIZE.1),
+            );
+            if !found {
+                failures.push(
+                    "panes-chrome: no filter panel on screen — the toggle's press reached nothing"
+                        .to_string(),
+                );
+            } else {
+                // The erosion took a pixel off each side; put it back, as the settings assertion does.
+                let (sx, sy) = (sx - 1.0, sy - 1.0);
+                let (sw, sh) = (ex - sx + 2.0, ey - sy + 2.0);
+                if (sw - want_w).abs() > 4.0 || (sh - want_h).abs() > 4.0 {
+                    failures.push(format!(
+                        "panes-chrome: the filter panel is {sw:.0}×{sh:.0} for a \
+                         {want_w:.0}×{want_h:.0} token, at ({sx:.0}, {sy:.0})"
+                    ));
+                } else {
+                    lines.push(format!(
+                        "panes-chrome: filter panel {sw:.0}×{sh:.0} at ({sx:.0}, {sy:.0})"
+                    ));
+                }
+                // The shell has words in it: a title and the one layer's row. A panel of empty fill would
+                // pass the box check and tell the operator nothing.
+                let mut ink_px = 0;
+                for y in (sy as u32 + 6)..(ey as u32).saturating_sub(6) {
+                    for x in (sx as u32 + 6)..(ex as u32).saturating_sub(6) {
+                        if x < image.width && y < image.height && near(image.at(x, y), icon_ink, 60)
+                        {
+                            ink_px += 1;
+                        }
+                    }
+                }
+                if ink_px < 20 {
+                    failures.push(format!(
+                        "panes-chrome: the filter panel has {ink_px} px of label ink — its rows are not drawn"
+                    ));
+                } else {
+                    lines.push(format!(
+                        "panes-chrome: the filter panel's rows are drawn ({ink_px} px of ink)"
+                    ));
+                }
+            }
+        }
+        "panes-range" => {
+            // **The symbol-to-picture range belongs to the pane** (#115). Two panes look at the same
+            // hull: the focused one at `PHOTO_ZOOM`, where a ship is its photograph, and its neighbour at
+            // a chart zoom, where it is a symbol. Both panes hold the decoded picture — the cache is the
+            // wall's — so this capture is a claim about the *latch*: a wall-wide range draws one
+            // representation in both, and one of these two checks goes red.
+            let Some((origin_x, origin_y, panel_w, panel_h)) =
+                image.find_panel_rect(ink(tokens::panel()))
+            else {
+                failures.push("panes-range: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let state = scene::state_for("panes-range");
+            let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
+            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            if rects.len() != 2 {
+                failures.push(format!(
+                    "panes-range: {} panes for a two-pane scene",
+                    rects.len()
+                ));
+                return Err(failures);
+            }
+            let Some(fix) = scene::fixture().ok().and_then(|entries| {
+                entries
+                    .into_iter()
+                    .find(|entry| entry.id_unit == scene::PHOTO_UNIT)
+                    .and_then(|entry| entry.position)
+            }) else {
+                failures.push(format!(
+                    "panes-range: hull {} has no fix",
+                    scene::PHOTO_UNIT
+                ));
+                return Err(failures);
+            };
+            // The photograph's own ink: a colour no token uses, so finding it at the projected hull is
+            // proof that this pane drew the decoded bytes rather than a symbol (#54).
+            let hud = [232u8, 243, 255];
+            let (mut pictures, mut symbols) = (0usize, 0usize);
+            for (index, (id, rect)) in rects.iter().enumerate() {
+                let Some(pane) = state.pane(*id) else {
+                    failures.push(format!("panes-range: pane {id} has no state"));
+                    continue;
+                };
+                // **The latch each pane's own zoom calls for** (#115): picture at or past `PHOTO_ZOOM`,
+                // symbol below it — and this scene's chart zoom is below `PHOTO_EXIT`, so hysteresis has
+                // no say in either answer. A pane holding the neighbour's range fails here before any
+                // pixel is read, so the failure names the latch rather than a missing marker.
+                let want = if pane.camera.zoom >= crate::units::mark::PHOTO_ZOOM {
+                    crate::units::mark::Range::Picture
+                } else {
+                    crate::units::mark::Range::Symbol
+                };
+                if pane.view.range != want {
+                    failures.push(format!(
+                        "panes-range: pane {index} holds {:?} at zoom {} — its own zoom asks for {want:?}, \
+                         and a wall-wide latch is why a neighbour's zoom would switch it (#115)",
+                        pane.view.range, pane.camera.zoom
+                    ));
+                    continue;
+                }
+                let frame = crate::ui::view::synthetic_frame(pane.camera, *rect, 1.0);
+                let (px, py) = frame.project(fix.latitude, fix.longitude);
+                let (x, y) = (
+                    origin_x + f64::from(rect.x) + px,
+                    origin_y + f64::from(rect.y) + py,
+                );
+                match pane.view.range {
+                    crate::units::mark::Range::Picture => {
+                        pictures += 1;
+                        match image.nearest_colour(x, y, hud, 30.0) {
+                            Some(distance) => lines.push(format!(
+                                "panes-range: pane {index} draws the hull's own picture within \
+                                 {distance:.1} px of ({x:.0}, {y:.0})"
+                            )),
+                            None => failures.push(format!(
+                                "panes-range: pane {index} is in picture range but has no picture ink \
+                                 near ({x:.0}, {y:.0}) — the zoomed pane drew the symbol (#115)"
+                            )),
+                        }
+                    }
+                    crate::units::mark::Range::Symbol => {
+                        symbols += 1;
+                        match image.blob_centre(x, y, accent, 8) {
+                            Some((centre, count)) if count >= 8 => {
+                                let distance =
+                                    ((centre.0 - x).powi(2) + (centre.1 - y).powi(2)).sqrt();
+                                if distance > TOLERANCE_PX {
+                                    failures.push(format!(
+                                        "panes-range: pane {index}'s symbol is {distance:.1} px from \
+                                         ({x:.0}, {y:.0}), its own projection"
+                                    ));
+                                } else {
+                                    lines.push(format!(
+                                        "panes-range: pane {index} draws the hull's symbol \
+                                         {distance:.1} px from ({x:.0}, {y:.0})"
+                                    ));
+                                }
+                            }
+                            _ => failures.push(format!(
+                                "panes-range: pane {index} is in symbol range but has no symbol ink \
+                                 near ({x:.0}, {y:.0}) — the neighbour's zoom switched it to a picture \
+                                 (#115)"
+                            )),
+                        }
+                    }
+                }
+            }
+            if pictures != 1 || symbols != 1 {
+                failures.push(format!(
+                    "panes-range: {pictures} panes in picture range and {symbols} in symbol range — one \
+                     capture must hold both representations (#115)"
+                ));
+            }
+        }
         "panes-max" => {
             // **A maximised pane is a bigger rectangle, not a different pane** (#85). Its hulls project
             // against a frame the size of the panel — its own camera, the window's frame — and the tiling
@@ -659,15 +914,10 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 failures.push("panes-max: no picture panel on screen".to_string());
                 return Err(failures);
             };
+            // The scene builds the tiled wall; the **maximise came from the toggle's own press** in
+            // `fixtures/scripts/panes-max.json` (#111). `state_for` does not replay a script, so the
+            // pane this wall must be looking at is the one the scene focuses, named once in `scene`.
             let state = scene::state_for("panes-max");
-            let Some(id) = state.maximised() else {
-                failures.push("panes-max: the scene maximises nothing".to_string());
-                return Err(failures);
-            };
-            let Some(pane) = state.pane(id) else {
-                failures.push(format!("panes-max: pane {id} has no state"));
-                return Err(failures);
-            };
             let rects = crate::ui::view::panes_on(
                 &state.layout,
                 crate::map::geometry::Viewport::new(pw, ph),
@@ -677,7 +927,15 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 rects.len() > 1,
                 "panes-max: the wall behind a full-size pane is still a wall"
             );
-            let index = rects.iter().position(|(pane, _)| *pane == id).unwrap_or(0);
+            let index = scene::PANES_MAXIMISED;
+            let Some((id, _)) = rects.get(index).copied() else {
+                failures.push(format!("panes-max: pane {index} is not on the wall"));
+                return Err(failures);
+            };
+            let Some(pane) = state.pane(id) else {
+                failures.push(format!("panes-max: pane {id} has no state"));
+                return Err(failures);
+            };
             let Some((id_unit, _zoom)) = scene::PANES.get(index).copied() else {
                 failures.push(format!("panes-max: pane {index} has no hull"));
                 return Err(failures);
@@ -885,7 +1143,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                  {gap:.0} pt the setting asks for"
             ));
         }
-        "panes" | "panes-pan" => {
+        "panes" | "panes-pan" | "panes-gap-resize" => {
             // **Each pane projects against its own frame** (`INV-04`, per pane). The rectangles come from
             // `Layout::rects` measured against the panel this capture actually has, so this check and the
             // view cannot disagree about where a pane is.
@@ -898,7 +1156,15 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             // `panes-pan` is asserted against the layout its **pointer** must produce: the scene leaves the
             // split at half and `fixtures/scripts/panes-pan.json` drags it to 58%, so a gesture that
             // reaches nothing (#80) leaves the border at half and every hull lands outside its pane here.
-            let state = scene::state_for("panes");
+            //
+            // `panes-gap-resize` is the same claim for the **gutter** (#114): the scene leaves a gapped wall
+            // at half and its script drags the gap to 58%, so the expected layout is exactly what
+            // `panes-gaps` draws — the same split and the same space, reached from the other direction.
+            let state = if scene == "panes-gap-resize" {
+                scene::state_for("panes-gaps")
+            } else {
+                scene::state_for("panes")
+            };
             // The **drawn** rectangles: the cells pulled in by the gap the scene chose (#82), which is the
             // same function the view lays the panes out with.
             let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
@@ -1023,6 +1289,53 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                     "panes: focus ring on pane {focused} ({focused_luma} luma against {loudest_other})"
                 ));
             }
+
+            // **The drag in the gap moved the split, and the number says so** (#114). The hulls above
+            // project against the expected 58% layout, but a capture can agree with a projection for the
+            // wrong reason; this reads the gutter the operator sees and compares its centre with
+            // `PANES_DRAGGED` of the panel. A gesture that reached nothing leaves the space at half and
+            // is a hundred pixels away here.
+            if scene == "panes-gap-resize" {
+                let gap = f64::from(tokens::GAP);
+                let expected = origin_x + panel_w * f64::from(scene::PANES_DRAGGED);
+                let y = ((origin_y + panel_h * 0.25).max(0.0) as u32).min(image.height - 1);
+                let background = ink(tokens::bg());
+                let mut runs: Vec<(u32, u32)> = Vec::new();
+                let mut run: Option<(u32, u32)> = None;
+                for x in (origin_x as u32 + 1)..((origin_x + panel_w) as u32).saturating_sub(1) {
+                    if near(image.at(x, y), background, 6) {
+                        run = Some((run.map_or(x, |(start, _)| start), x));
+                    } else if let Some((start, last)) = run.take() {
+                        runs.push((start, last - start + 1));
+                    }
+                }
+                if let Some((start, last)) = run.take() {
+                    runs.push((start, last - start + 1));
+                }
+                let measured = runs
+                    .iter()
+                    .filter(|(_, len)| (*len as f64 - gap).abs() <= 1.0)
+                    .map(|(start, len)| {
+                        (f64::from(*start) + f64::from(*len) / 2.0, f64::from(*len))
+                    })
+                    .min_by(|a, b| (a.0 - expected).abs().total_cmp(&(b.0 - expected).abs()));
+                match measured {
+                    Some((centre, len)) if (centre - expected).abs() <= 2.0 => lines.push(format!(
+                        "panes-gap-resize: the {len:.0} pt gutter is at x={centre:.0}, and \
+                         {:.0}% of the panel is {expected:.0}",
+                        scene::PANES_DRAGGED * 100.0
+                    )),
+                    Some((centre, len)) => failures.push(format!(
+                        "panes-gap-resize: the {len:.0} pt gutter is at x={centre:.0}, not at \
+                         {:.0}% of the panel ({expected:.0}) — the drag in the gap reached nothing",
+                        scene::PANES_DRAGGED * 100.0
+                    )),
+                    None => failures.push(format!(
+                        "panes-gap-resize: no {gap:.0} pt gutter in the row at y={y} — measured \
+                         {runs:?}"
+                    )),
+                }
+            }
         }
         "pane-menu" | "panes-menu" => {
             // **The menu is drawn, at the click, inside its pane** (#77), and **as tall as its items**
@@ -1039,9 +1352,10 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 .menu()
                 .map(|menu| crate::ui::menu_items(&state, menu.pane).len())
                 .unwrap_or(0);
-            // One pane: grow the wall, name this pane, go full size — and no `Close pane`, because the last
-            // pane cannot be closed. A tiled wall adds it (#81, #83, #85).
-            let expected = if scene == "panes-menu" { 4 } else { 3 };
+            // One pane: grow the wall, name this pane — and no `Close pane`, because the last pane cannot
+            // be closed. A tiled wall adds it (#81, #83). `Full size` is the pane chrome's toggle since
+            // #111, so it is not a row on either wall.
+            let expected = if scene == "panes-menu" { 3 } else { 2 };
             if rows != expected {
                 failures.push(format!(
                     "{scene}: the menu offers {rows} items, and this wall is the case for {expected}"
@@ -1451,12 +1765,13 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
         &frame,
         state.now(),
         state.stale_after,
-        state.range,
+        state.focused_pane().view.range,
         &|_| None,
     );
 
     match scene {
-        "panes" | "panes-drag" | "panes-pan" | "panes-gaps" | "panes-named" | "panes-max" => {
+        "panes" | "panes-chrome" | "panes-drag" | "panes-pan" | "panes-gaps"
+        | "panes-gap-resize" | "panes-named" | "panes-max" | "panes-range" => {
             // One marker per hull with a fix **in every pane**: a pane that drew nothing, or drew the
             // same set twice, is not a view.
             let expected = state
@@ -1480,7 +1795,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                     &frame,
                     state.now(),
                     state.stale_after,
-                    state.range,
+                    pane.view.range,
                     &|_| None,
                 );
                 if placed.len() != expected {
