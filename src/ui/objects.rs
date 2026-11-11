@@ -54,18 +54,27 @@ pub struct Placed {
     pub rotation_deg: Option<f64>,
 }
 
-/// Project every placement against `frame`, and resolve what each one draws.
+/// Project every placement against `frame` that **this pane's filter** leaves visible, and resolve what
+/// each one draws.
 ///
-/// There is no filtering here: the per-pane filter is #112's, and until it lands the layer is drawn in
-/// every pane. Projecting against the frame passed in — and never a wall-wide camera — is the whole
-/// of `INV-04` on this layer.
+/// **The filter decides here, once** (#112): a placement whose layer, domain or category the pane hides
+/// is absent from the layer, rather than skipped at the element builder or by three callers agreeing to
+/// ask the same question. Projecting against the frame passed in — and never a wall-wide camera — is the
+/// whole of `INV-04` on this layer.
 pub fn place(
     placements: &[TacticalObjectPlacement],
     manifest: &HashMap<String, TacticalObjectManifestEntry>,
     frame: &Rendered,
+    filter: &crate::ui::filter::Filter,
 ) -> Vec<Placed> {
     placements
         .iter()
+        .filter(|placement| {
+            !filter.hides_object_in(
+                placement.symbol.category.domain.id,
+                placement.symbol.category.id,
+            )
+        })
         .map(|placement| {
             let (x, y) = frame.project(placement.latitude, placement.longitude);
             Placed {
@@ -295,7 +304,12 @@ mod tests {
     /// agree with the first pane and be tens of pixels out in the second.
     #[test]
     fn a_placement_lands_where_this_panes_projection_puts_it() {
-        let marks = place(&placements(), &manifest(), &frame(10.6));
+        let marks = place(
+            &placements(),
+            &manifest(),
+            &frame(10.6),
+            &crate::ui::filter::Filter::default(),
+        );
         assert_eq!(marks.len(), 3, "the recorded operational map");
         let first = &marks[0];
         let (x, y) = frame(10.6).project(placements()[0].latitude, placements()[0].longitude);
@@ -304,13 +318,67 @@ mod tests {
             "the placement is the frame's own projection, not a second conversion"
         );
 
-        let near = place(&placements(), &manifest(), &frame(10.6));
-        let far = place(&placements(), &manifest(), &frame(9.5));
+        let near = place(
+            &placements(),
+            &manifest(),
+            &frame(10.6),
+            &crate::ui::filter::Filter::default(),
+        );
+        let far = place(
+            &placements(),
+            &manifest(),
+            &frame(9.5),
+            &crate::ui::filter::Filter::default(),
+        );
         assert!(
             (near[0].x - far[0].x).abs() > TOLERANCE,
             "INV-04: two panes at two zooms put the same buoy at two points, got {} and {}",
             near[0].x,
             far[0].x
+        );
+    }
+
+    /// **A hidden domain (or category) is absent from the layer, and its siblings still draw** (#112).
+    /// The decision is the placement's, so a caller cannot draw a placement the pane asked it to hide.
+    #[test]
+    fn a_hidden_domain_or_category_leaves_the_layer_but_not_its_siblings() {
+        let frame = frame(10.6);
+        let all = place(
+            &placements(),
+            &manifest(),
+            &frame,
+            &crate::ui::filter::Filter::default(),
+        );
+        assert_eq!(
+            all.len(),
+            3,
+            "the recorded marks are all visible by default"
+        );
+
+        let domain = placements()[0].symbol.category.domain.id;
+        let mut filter = crate::ui::filter::Filter::default();
+        filter.hidden_domains.insert(domain);
+        assert!(
+            place(&placements(), &manifest(), &frame, &filter).is_empty(),
+            "every recorded mark is in this domain, so hiding it hides the whole layer"
+        );
+
+        let category = placements()[0].symbol.category.id;
+        let mut filter = crate::ui::filter::Filter::default();
+        filter.hidden_categories.insert(category);
+        assert!(
+            place(&placements(), &manifest(), &frame, &filter).is_empty(),
+            "and the same for the category the recording puts them all in"
+        );
+
+        let mut filter = crate::ui::filter::Filter::default();
+        filter
+            .hidden_categories
+            .insert(category.saturating_add(1_000));
+        assert_eq!(
+            place(&placements(), &manifest(), &frame, &filter).len(),
+            3,
+            "a hidden category hides only itself, so a mark in another one still draws: {filter:?}"
         );
     }
 
@@ -340,7 +408,12 @@ mod tests {
     /// be defaulted into a plate or a bearing. The absence case is the same rows with the keys gone.
     #[test]
     fn the_recorded_absence_and_its_empty_value_both_mean_no_label() {
-        let marks = place(&placements(), &manifest(), &frame(10.6));
+        let marks = place(
+            &placements(),
+            &manifest(),
+            &frame(10.6),
+            &crate::ui::filter::Filter::default(),
+        );
         assert_eq!(
             marks.iter().filter(|mark| mark.label.is_some()).count(),
             0,
@@ -352,7 +425,12 @@ mod tests {
             .replace("\"rotation_deg\": 0,\n", "");
         let envelope: Envelope<Vec<TacticalObjectPlacement>> =
             serde_json::from_str(&body).expect("the absence case decodes");
-        let marks = place(&envelope.data, &manifest(), &frame(10.6));
+        let marks = place(
+            &envelope.data,
+            &manifest(),
+            &frame(10.6),
+            &crate::ui::filter::Filter::default(),
+        );
         assert!(marks.iter().all(|mark| mark.label.is_none()));
         assert!(
             marks.iter().all(|mark| mark.rotation_deg.is_none()),
@@ -367,7 +445,12 @@ mod tests {
         let mut rows = placements();
         rows[0].rotation_deg = Some(45.0);
         rows[1].rotation_deg = None;
-        let marks = place(&rows, &manifest(), &frame(10.6));
+        let marks = place(
+            &rows,
+            &manifest(),
+            &frame(10.6),
+            &crate::ui::filter::Filter::default(),
+        );
         assert_eq!(marks[0].rotation_deg, Some(45.0));
         assert_eq!(marks[1].rotation_deg, None);
         // With no decoded bytes every mark is generic; `mark_for` takes the placement's own turn when
@@ -381,13 +464,23 @@ mod tests {
     /// draws the generic mark.
     #[test]
     fn the_asset_key_comes_from_the_manifest_and_never_from_the_placement() {
-        let marks = place(&placements(), &manifest(), &frame(10.6));
+        let marks = place(
+            &placements(),
+            &manifest(),
+            &frame(10.6),
+            &crate::ui::filter::Filter::default(),
+        );
         assert_eq!(
             marks[0].asset_key.as_deref(),
             Some("minos/tactical-objects/LIGHTS_FIX.svg")
         );
         let empty = HashMap::new();
-        let marks = place(&placements(), &empty, &frame(10.6));
+        let marks = place(
+            &placements(),
+            &empty,
+            &frame(10.6),
+            &crate::ui::filter::Filter::default(),
+        );
         assert!(
             marks.iter().all(|mark| mark.asset_key.is_none()),
             "a symbol the library does not carry has no artwork to ask for"
@@ -407,7 +500,12 @@ mod tests {
             .get_mut("LIGHTS_FIX")
             .expect("the recorded library carries this symbol");
         entry.asset_url = None;
-        let marks = place(&placements(), &library, &frame(10.6));
+        let marks = place(
+            &placements(),
+            &library,
+            &frame(10.6),
+            &crate::ui::filter::Filter::default(),
+        );
         assert_eq!(
             marks[0].asset_key.as_deref(),
             Some("minos/tactical-objects/LIGHTS_FIX.svg"),

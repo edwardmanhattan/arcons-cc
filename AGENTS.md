@@ -84,7 +84,7 @@ Comment on the issue rather than choosing silently, especially for: the wall's c
 src/main.rs      flags, startup, exit codes
 src/config.rs    the command line, the resolved Config, Secret (redacting by construction)
 src/config/      file.rs (config.toml) · credential.rs (mode 0600) · settings.rs (settings.toml, written by the display) · check.rs (--self-check, 0–6)
-src/ui/          the view, view.rs (the pane tree), tree.rs (the chain of command), markers.rs, objects.rs (the operational layer), unitcard.rs, tokens.rs (the only file that names a colour or a size)
+src/ui/          the view, view.rs (the pane tree), tree.rs (the chain of command), markers.rs, objects.rs (the operational layer), filter.rs (per-pane visibility and the panel's vocabulary), unitcard.rs, tokens.rs (the only file that names a colour or a size)
 src/units/       the vocabulary and the view model: Unit, UnitView, Glyph, Picture, motion, card
 src/data.rs      the Minos REST client            (#3)
 src/live.rs      the Centrifugo socket actor      (#4)

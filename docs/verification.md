@@ -133,7 +133,7 @@ into the cache: a capture then covers bytes → cache → marker, which is the r
 cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-chrome
                                  # panes-drag · panes-pan · panes-menu · panes-gaps · panes-gap-resize
                                  # panes-named · panes-max · panes-cards · panes-range · objects
-                                 # settings · settings-dismiss · pane-menu · pane-tree
+                                 # panes-filter · settings · settings-dismiss · pane-menu · pane-tree
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -150,6 +150,21 @@ neighbour. It also probes the label plate's left padding for the plate's fill: t
 one, the unlabelled one has none — an empty label is not a label (`INV-01`), and defaulting `""` to a drawn
 plate is red. The three PNGs under `fixtures/scenes/` are stand-ins for the presigned SVG artwork, because a
 scene may not open a socket (`INV-11`).
+
+`panes-filter` is the **per-pane filter** (#112): two panes on the same water at the same zoom, so the
+only difference their pictures may show is the filter. Pane A hides the buoy's domain; pane B hides
+nothing. The filter is set through `ui::filter::toggle_in` — the same function a press on a panel row
+calls — and the panel is open on the filtered pane, with the rows the scene read through the reply path
+from `/tactical-objects/facets`, `/installation-types` and `/installations`. The assertion requires the
+three marks' **artwork ink in B and none in A** at the point each would project to, a live hull drawn in
+**both**, and the panel's box against `tokens::filter_size(rows)` — this vocabulary is taller than
+`FILTER_MAX_H`, so the capture also proves the panel scrolls inside itself rather than growing over the
+water it filters. A wall-wide filter draws the three marks in both panes and both object checks go red,
+which is #99's selection bug in a new place. `cargo test ui::filter` holds the claims a capture cannot:
+a hidden domain hides its categories while a hidden category hides only itself, the panel's labels,
+order and counts are the backend's (a renamed domain on the wire draws the new name), an installation
+type is counted from the complete cache, and a toggle changes the pane that was pressed and not its
+neighbour.
 
 `panes-range` is the same wall stripped to **two panes at two zooms on the same hull** (#115): the focused
 pane at `PHOTO_ZOOM`, where a ship is its photograph, and its neighbour at a chart zoom, where it is a
@@ -179,8 +194,10 @@ wall quietly drawing three of four panes is a line in a file, not a report (#71)
 maximise toggle at `view::chrome_buttons`, drawn after the markers and after the name plate. The capture
 opens the filter panel because `fixtures/scripts/panes-chrome.json` presses the focused pane's toggle, so
 the scene also proves the control reaches a handler rather than being decoration. The assertion samples
-each button's own rectangle for ink and measures the popover's fill against `tokens::FILTER_SIZE`; removing
-either toggle leaves a button-shaped hole and the line names the pane.
+each button's own rectangle for ink and measures the popover's fill against
+`tokens::filter_size(rows)` — a width, a row height, a head and a maximum height, because the panel's
+length is the backend's vocabulary and not ours (#112); removing either toggle leaves a button-shaped
+hole and the line names the pane.
 
 `pane-tree-narrow` and `pane-tree-zoom` are the **tree pane as a canvas** (#127). The first is the
 operator's report made a capture: the same forest in a **320 pt** pane, where 1:1 would cut it, with the

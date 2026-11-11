@@ -392,6 +392,56 @@ fn rect_has(image: &Image, rect: crate::ui::Rect, colour: [u8; 3], tolerance: u8
     (y0..y1).any(|y| (x0..x1).any(|x| near(image.at(x, y), colour, tolerance)))
 }
 
+/// The bounding box of a **solid** block of `fill` inside the picture panel `within` (x, y, w, h).
+///
+/// A pixel counts only when it and its four neighbours are `fill`, so one antialiased pixel on the
+/// picture's own border cannot stretch the box across the wall. The returned box is put back the pixel
+/// the erosion took off each side, so it is the surface's own rectangle and can be compared with a token.
+///
+/// Three assertions ask this question — the settings sheet, and the filter panel in two scenes — and a
+/// box measured three different ways is three chances to disagree with what the view drew.
+fn solid_box(
+    image: &Image,
+    within: (f64, f64, f64, f64),
+    fill: [u8; 3],
+    tolerance: u8,
+) -> Option<(f64, f64, f64, f64)> {
+    let (x0, y0, w, h) = within;
+    let solid = |x: u32, y: u32| {
+        x > 0
+            && y > 0
+            && x + 1 < image.width
+            && y + 1 < image.height
+            && [(0i32, 0i32), (1, 0), (-1, 0), (0, 1), (0, -1)]
+                .iter()
+                .all(|(dx, dy)| {
+                    near(
+                        image.at((x as i32 + dx) as u32, (y as i32 + dy) as u32),
+                        fill,
+                        tolerance,
+                    )
+                })
+    };
+    let (mut sx, mut sy, mut ex, mut ey) = (f64::MAX, f64::MAX, 0.0f64, 0.0f64);
+    let mut found = false;
+    for y in (y0 as u32 + 2)..((y0 + h) as u32 - 2).min(image.height) {
+        for x in (x0 as u32 + 2)..((x0 + w) as u32 - 2).min(image.width) {
+            if solid(x, y) {
+                found = true;
+                sx = sx.min(f64::from(x));
+                sy = sy.min(f64::from(y));
+                ex = ex.max(f64::from(x));
+                ey = ey.max(f64::from(y));
+            }
+        }
+    }
+    found.then(|| {
+        // Put back the pixel the erosion took off each side.
+        let (sx, sy) = (sx - 1.0, sy - 1.0);
+        (sx, sy, ex - sx + 2.0, ey - sy + 2.0)
+    })
+}
+
 /// Check one scene's capture. Returns the lines it wants printed, or the failures.
 pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<String>> {
     let mut failures = Vec::new();
@@ -514,7 +564,12 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 // The frame a headless pane draws with: its own rectangle and its own camera, the
                 // rule `pane_laid_out` applies on the wall's behalf.
                 let frame = crate::ui::view::synthetic_frame(pane.camera, *rect, 1.0);
-                let placed = crate::ui::objects::place(&state.placements, &state.manifest, &frame);
+                let placed = crate::ui::objects::place(
+                    &state.placements,
+                    &state.manifest,
+                    &frame,
+                    &pane.view.filter,
+                );
                 if placed.len() != expected.len() {
                     failures.push(format!(
                         "objects: pane {index} draws {} placements, and the scene has {}",
@@ -571,6 +626,204 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 "objects: {} placements in two panes, the unlabelled one with no plate",
                 expected.len()
             ));
+        }
+        "panes-filter" => {
+            // **The filter is the pane's** (#112). Two panes hold the same camera, so the *only*
+            // difference their pictures may show is the filter: pane A hides the buoy's domain and pane
+            // B hides nothing. A wall-wide filter draws the three marks in both panes — which is the
+            // falsifier this capture exists for, and it is the same bug #99 fixed for the selection.
+            let Some((origin_x, origin_y, panel_w, panel_h)) =
+                image.find_panel_rect(ink(tokens::panel()))
+            else {
+                failures.push("panes-filter: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let state = scene::state_for("panes-filter");
+            let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
+            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            if rects.len() != 2 {
+                failures.push(format!(
+                    "panes-filter: {} panes for a two-pane scene",
+                    rects.len()
+                ));
+                return Err(failures);
+            }
+            let filtered = state.pane_rects()[0].0;
+            if state.filtering() != Some(filtered) {
+                failures.push(format!(
+                    "panes-filter: the panel is open on {:?}, not on the pane that was filtered \
+                     ({filtered}) — the panel and the filter must be the same pane's",
+                    state.filtering()
+                ));
+            }
+            // The three marks the scene places, and the ink each one's decoded artwork carries.
+            let expected = [
+                (scene::OBJECTS_BUOY, scene::OBJECT_BUOY_INK, "buoy"),
+                (scene::OBJECTS_CONE, scene::OBJECT_CONE_INK, "cone"),
+                (
+                    scene::OBJECTS_UNLABELLED,
+                    scene::OBJECT_LIGHT_INK,
+                    "unlabelled light",
+                ),
+            ];
+            let accent = ink(tokens::accent());
+            for (index, (id, rect)) in rects.iter().enumerate() {
+                let Some(pane) = state.pane(*id) else {
+                    failures.push(format!("panes-filter: pane {id} has no state"));
+                    continue;
+                };
+                let hid = *id == filtered;
+                let frame = crate::ui::view::synthetic_frame(pane.camera, *rect, 1.0);
+                let placed = crate::ui::objects::place(
+                    &state.placements,
+                    &state.manifest,
+                    &frame,
+                    &pane.view.filter,
+                );
+                if hid {
+                    if !placed.is_empty() {
+                        failures.push(format!(
+                            "panes-filter: pane {index} hides the buoy's domain and still draws {} \
+                             placements — the filter is the wall's, not this pane's (#99's bug in a \
+                             new place)",
+                            placed.len()
+                        ));
+                    }
+                } else if placed.len() != expected.len() {
+                    failures.push(format!(
+                        "panes-filter: pane {index} draws {} placements for {} that are not filtered",
+                        placed.len(),
+                        expected.len()
+                    ));
+                }
+                for (placement_id, colour, what) in expected {
+                    // The point is the pane's projection of the placement, whether or not the filter
+                    // left it in the layer: the absence is checked at the place the mark *would* be.
+                    let point = match placed.iter().find(|mark| mark.id == placement_id) {
+                        Some(mark) => (mark.x, mark.y),
+                        None => state
+                            .placements
+                            .iter()
+                            .find(|placement| placement.id == placement_id)
+                            .map(|placement| frame.project(placement.latitude, placement.longitude))
+                            .unwrap_or((f64::NAN, f64::NAN)),
+                    };
+                    let x = origin_x + f64::from(rect.x) + point.0;
+                    let y = origin_y + f64::from(rect.y) + point.1;
+                    let found = image.nearest_colour(x, y, colour, 6.0);
+                    if hid {
+                        if let Some(distance) = found {
+                            failures.push(format!(
+                                "panes-filter: the {what}'s ink is within {distance:.1} px of \
+                                 ({x:.0}, {y:.0}) in the pane that hides its domain — a filtered \
+                                 layer that still draws is a toggle that lies"
+                            ));
+                        }
+                    } else if found.is_none() {
+                        failures.push(format!(
+                            "panes-filter: no {what} ink within 6 px of ({x:.0}, {y:.0}) in the pane \
+                             that hides nothing — a filter must hide one pane's marks and not the \
+                             other's"
+                        ));
+                    }
+                }
+                // **Hulls in both.** The filter hid one domain, not the live feed: a wall that emptied
+                // because one vocabulary row was toggled is the same bug in the other direction.
+                let sizes = |id_unit: i64| state.sizes.get(&id_unit).copied();
+                let markers = crate::ui::markers::place(
+                    &state.picture,
+                    &frame,
+                    &pane.view.filter,
+                    state.now(),
+                    state.stale_after,
+                    pane.view.range,
+                    &sizes,
+                );
+                let expected_hulls = state
+                    .picture
+                    .units()
+                    .iter()
+                    .filter(|unit| unit.position.is_some())
+                    .count();
+                if markers.len() != expected_hulls {
+                    failures.push(format!(
+                        "panes-filter: pane {index} draws {} hulls for {expected_hulls} that have a fix",
+                        markers.len()
+                    ));
+                }
+                // One live marker, sampled for the accent its glyph is drawn in, clear of the pane's
+                // edge and as far from the panel's corner as a hull happens to be.
+                let visible = |marker: &&crate::ui::markers::Placed| {
+                    marker.glyph == crate::units::Glyph::Live
+                        && marker.x > 20.0
+                        && marker.y > 40.0
+                        && marker.x < f64::from(frame.width) - 20.0
+                        && marker.y < f64::from(frame.height) - 20.0
+                };
+                match markers.iter().filter(visible).min_by(|a, b| {
+                    a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal)
+                }) {
+                    Some(marker) => {
+                        let x = origin_x + f64::from(rect.x) + marker.x;
+                        let y = origin_y + f64::from(rect.y) + marker.y;
+                        match image.nearest_colour(x, y, accent, 12.0) {
+                            Some(distance) => lines.push(format!(
+                                "panes-filter: pane {index} draws the live feed ({distance:.1} px from \
+                                 hull {}'s projection)",
+                                marker.id_unit
+                            )),
+                            None => failures.push(format!(
+                                "panes-filter: no live marker ink within 12 px of ({x:.0}, {y:.0}) in \
+                                 pane {index} — the filter hid a domain, not the feed"
+                            )),
+                        }
+                    }
+                    None => failures.push(format!(
+                        "panes-filter: pane {index} has no live hull on screen to prove the feed is drawn"
+                    )),
+                }
+            }
+            // The panel is the rows the vocabulary says, in the box the token set gives them. This scene
+            // read both vocabularies, so the box is at its maximum and the panel scrolls inside itself.
+            // The panel belongs to the pane the filter toggle was pressed on, which this scene focuses.
+            let listed = {
+                let pane = state.focused_pane();
+                crate::ui::filter::rows(
+                    &pane.view.filter,
+                    state.facets.as_ref(),
+                    &state.installation_types,
+                    &state.installations,
+                )
+            };
+            let (want_w, want_h) = tokens::filter_size(listed.len());
+            match solid_box(
+                image,
+                (origin_x, origin_y, panel_w, panel_h),
+                ink(tokens::bg()),
+                6,
+            ) {
+                None => failures.push(
+                    "panes-filter: no filter panel on screen — the scene's panel is not drawn"
+                        .to_string(),
+                ),
+                Some((sx, sy, sw, sh)) => {
+                    if (sw - f64::from(want_w)).abs() > 4.0 || (sh - f64::from(want_h)).abs() > 4.0
+                    {
+                        failures.push(format!(
+                            "panes-filter: the panel is {sw:.0}×{sh:.0} for {} rows, and the token \
+                             says {want_w:.0}×{want_h:.0} — a panel that grows past FILTER_MAX_H \
+                             covers the water it filters",
+                            listed.len()
+                        ));
+                    } else {
+                        lines.push(format!(
+                            "panes-filter: one pane hides a domain, the other draws it; the panel \
+                             lists {} rows in {sw:.0}×{sh:.0} at ({sx:.0}, {sy:.0})",
+                            listed.len()
+                        ));
+                    }
+                }
+            }
         }
         "settings" => {
             // **The sheet is drawn, it is the size the token says, and it is on the wall** (#82). The
@@ -828,81 +1081,69 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             }
             // **The filter panel is a popover over the picture, not a modal over it.** Its surface is the
             // window's own `bg()`, inside a picture that is `panel()`; the bounding box of that fill is
-            // the panel's box, measured against the token the shell was given. No scrim: the water outside
-            // the box is still the picture.
-            let surface = ink(tokens::bg());
-            // A **solid** block, so a single antialiased pixel on the picture's own border cannot stretch
-            // the box across the wall — the same erosion the settings sheet's assertion uses.
-            let solid = |x: u32, y: u32| {
-                x > 0
-                    && y > 0
-                    && x + 1 < image.width
-                    && y + 1 < image.height
-                    && [(0i32, 0i32), (1, 0), (-1, 0), (0, 1), (0, -1)]
-                        .iter()
-                        .all(|(dx, dy)| {
-                            near(
-                                image.at((x as i32 + dx) as u32, (y as i32 + dy) as u32),
-                                surface,
-                                6,
-                            )
-                        })
-            };
-            let (mut sx, mut sy, mut ex, mut ey) = (f64::MAX, f64::MAX, 0.0f64, 0.0f64);
-            let mut found = false;
-            for y in (origin_y as u32 + 2)..((origin_y + panel_h) as u32 - 2).min(image.height) {
-                for x in (origin_x as u32 + 2)..((origin_x + panel_w) as u32 - 2).min(image.width) {
-                    if solid(x, y) {
-                        found = true;
-                        sx = sx.min(f64::from(x));
-                        sy = sy.min(f64::from(y));
-                        ex = ex.max(f64::from(x));
-                        ey = ey.max(f64::from(y));
-                    }
-                }
-            }
-            let (want_w, want_h) = (
-                f64::from(tokens::FILTER_SIZE.0),
-                f64::from(tokens::FILTER_SIZE.1),
+            // the panel's box, measured against the token set for the rows it lists. No scrim: the water
+            // outside the box is still the picture.
+            let boxed = solid_box(
+                image,
+                (origin_x, origin_y, panel_w, panel_h),
+                ink(tokens::bg()),
+                6,
             );
-            if !found {
-                failures.push(
+            // **The panel's box is the token set's, for the rows it actually lists** (#112): three
+            // layer rows on this scene, which reads no vocabulary, and `FILTER_MAX_H` past the limit.
+            // The panel belongs to the pane the toggle was pressed on, and every scene that opens one
+            // focuses that pane first — including `panes-chrome`, whose press happens in a script and so
+            // is not in the state `state_for` builds.
+            let listed = {
+                let pane = state.focused_pane();
+                crate::ui::filter::rows(
+                    &pane.view.filter,
+                    state.facets.as_ref(),
+                    &state.installation_types,
+                    &state.installations,
+                )
+            };
+            let (want_w, want_h) = tokens::filter_size(listed.len());
+            let (want_w, want_h) = (f64::from(want_w), f64::from(want_h));
+            match boxed {
+                None => failures.push(
                     "panes-chrome: no filter panel on screen — the toggle's press reached nothing"
                         .to_string(),
-                );
-            } else {
-                // The erosion took a pixel off each side; put it back, as the settings assertion does.
-                let (sx, sy) = (sx - 1.0, sy - 1.0);
-                let (sw, sh) = (ex - sx + 2.0, ey - sy + 2.0);
-                if (sw - want_w).abs() > 4.0 || (sh - want_h).abs() > 4.0 {
-                    failures.push(format!(
-                        "panes-chrome: the filter panel is {sw:.0}×{sh:.0} for a \
-                         {want_w:.0}×{want_h:.0} token, at ({sx:.0}, {sy:.0})"
-                    ));
-                } else {
-                    lines.push(format!(
-                        "panes-chrome: filter panel {sw:.0}×{sh:.0} at ({sx:.0}, {sy:.0})"
-                    ));
-                }
-                // The shell has words in it: a title and the one layer's row. A panel of empty fill would
-                // pass the box check and tell the operator nothing.
-                let mut ink_px = 0;
-                for y in (sy as u32 + 6)..(ey as u32).saturating_sub(6) {
-                    for x in (sx as u32 + 6)..(ex as u32).saturating_sub(6) {
-                        if x < image.width && y < image.height && near(image.at(x, y), icon_ink, 60)
-                        {
-                            ink_px += 1;
+                ),
+                Some((sx, sy, sw, sh)) => {
+                    if (sw - want_w).abs() > 4.0 || (sh - want_h).abs() > 4.0 {
+                        failures.push(format!(
+                            "panes-chrome: the filter panel is {sw:.0}×{sh:.0} for a \
+                             {want_w:.0}×{want_h:.0} token, at ({sx:.0}, {sy:.0})"
+                        ));
+                    } else {
+                        lines.push(format!(
+                            "panes-chrome: filter panel {sw:.0}×{sh:.0} at ({sx:.0}, {sy:.0})"
+                        ));
+                    }
+                    // The shell has words in it: a title and its layer rows. A panel of empty fill would
+                    // pass the box check and tell the operator nothing.
+                    let mut ink_px = 0;
+                    for y in (sy as u32 + 6)..(sy + sh) as u32 - 6 {
+                        for x in (sx as u32 + 6)..(sx + sw) as u32 - 6 {
+                            if x < image.width
+                                && y < image.height
+                                && near(image.at(x, y), icon_ink, 60)
+                            {
+                                ink_px += 1;
+                            }
                         }
                     }
-                }
-                if ink_px < 20 {
-                    failures.push(format!(
-                        "panes-chrome: the filter panel has {ink_px} px of label ink — its rows are not drawn"
-                    ));
-                } else {
-                    lines.push(format!(
-                        "panes-chrome: the filter panel's rows are drawn ({ink_px} px of ink)"
-                    ));
+                    if ink_px < 20 {
+                        failures.push(format!(
+                            "panes-chrome: the filter panel has {ink_px} px of label ink — its rows are \
+                             not drawn"
+                        ));
+                    } else {
+                        lines.push(format!(
+                            "panes-chrome: the filter panel's rows are drawn ({ink_px} px of ink)"
+                        ));
+                    }
                 }
             }
         }
@@ -2342,6 +2583,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     let markers = crate::ui::markers::place(
         &state.picture,
         &frame,
+        &state.focused_pane().view.filter,
         state.now(),
         state.stale_after,
         state.focused_pane().view.range,
@@ -2372,6 +2614,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                 let placed = crate::ui::markers::place(
                     &state.picture,
                     &frame,
+                    &pane.view.filter,
                     state.now(),
                     state.stale_after,
                     pane.view.range,
@@ -2486,9 +2729,9 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     }
 
     // **The operational layer is drawn in every pane** (#110): the data is the wall's, the frame is
-    // the pane's, and until #112 lands the filter there is nothing that may hide a placement in one
-    // pane and not another. A pane that drew no placement, or drew another pane's projection, is the
-    // bug the capture's pixel half names.
+    // the pane's. This scene's panes both hide nothing, so every mark is placed in both; the case where
+    // one pane hides a domain is `panes-filter`, below. A pane that drew no placement, or drew another
+    // pane's projection, is the bug the capture's pixel half names.
     if scene == "objects" {
         let expected = state.placements.len();
         let rects = crate::ui::view::panes_on(
@@ -2507,7 +2750,12 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                 continue;
             };
             let frame = crate::ui::view::synthetic_frame(pane.camera, *rect, 1.0);
-            let placed = crate::ui::objects::place(&state.placements, &state.manifest, &frame);
+            let placed = crate::ui::objects::place(
+                &state.placements,
+                &state.manifest,
+                &frame,
+                &pane.view.filter,
+            );
             if placed.len() != expected {
                 failures.push(format!(
                     "objects: pane {id} draws {} placements for {expected} operational marks",
@@ -2519,6 +2767,57 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
             lines.push(format!(
                 "objects: {expected} placements in {} panes",
                 rects.len()
+            ));
+        }
+    }
+
+    // **The filter is the pane's** (#112), in the structure as well as in the pixels: the pane that
+    // hides the buoy's domain places none of the recorded marks, and the pane beside it places all
+    // three. The two panes hold the same camera, so the only difference is the filter.
+    if scene == "panes-filter" {
+        let rects = crate::ui::view::panes_on(
+            &state.layout,
+            state.pane_viewport(),
+            state.settings.pane_gap,
+        );
+        if rects.len() != 2 {
+            failures.push(format!(
+                "panes-filter: {} panes for a scene that is the case for two",
+                rects.len()
+            ));
+        }
+        let filtered = state.pane_rects()[0].0;
+        let expected = state.placements.len();
+        for (id, rect) in &rects {
+            let Some(pane) = state.pane(*id) else {
+                continue;
+            };
+            let frame = crate::ui::view::synthetic_frame(pane.camera, *rect, 1.0);
+            let placed = crate::ui::objects::place(
+                &state.placements,
+                &state.manifest,
+                &frame,
+                &pane.view.filter,
+            );
+            let want = if *id == filtered { 0 } else { expected };
+            if placed.len() != want {
+                failures.push(format!(
+                    "panes-filter: pane {id} places {} of {expected} marks, and its filter asks for \
+                     {want} — the filter is the pane's, and the objects layer is the layer it filters",
+                    placed.len()
+                ));
+            }
+        }
+        if state.filtering() != Some(filtered) {
+            failures.push(format!(
+                "panes-filter: the scene's panel is open on {:?}, not on the filtered pane",
+                state.filtering()
+            ));
+        }
+        if failures.is_empty() {
+            lines.push(format!(
+                "panes-filter: {expected} marks in the unfiltered pane, 0 in the filtered one, one \
+                 camera each"
             ));
         }
     }

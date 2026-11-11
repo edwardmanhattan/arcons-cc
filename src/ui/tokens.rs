@@ -70,9 +70,32 @@ pub const PANE_HANDLE: (f32, f32) = (28.0, 4.0);
 /// size of a touch target — the same 24 pt rule as a marker (`MARKER_TARGET`) — because a control found
 /// by aiming is a control an operator on a wall does not use.
 pub const PANE_BUTTON: f32 = 24.0;
-/// The filter panel's shell: wide enough for a layer's words and as tall as its title and one row. The
-/// layers arrive in #112; this box is the surface they will fill, so the shell is measured now.
-pub const FILTER_SIZE: (f32, f32) = (216.0, 120.0);
+/// The filter panel (#112): a **set** of sizes, because the panel is a projection of a vocabulary the
+/// backend owns and the vocabulary's length is not ours to decide. A width, one row's height, the head
+/// above the first row, and the height past which the panel scrolls instead of growing over the water.
+pub const FILTER_WIDTH: f32 = 216.0;
+pub const FILTER_ROW: f32 = 26.0;
+/// Everything in the panel that is not a row: the padding above and below, the title's line at
+/// `TITLE`, and the gap between the title and the rows. Derived from the tokens it is made of, so a
+/// padding change cannot silently start clipping the last layer row behind the scroll.
+pub const FILTER_HEAD: f32 = PAD * 2.0 + 20.0 + GAP;
+/// The most of the picture the panel may cover. Past this it scrolls inside itself, because a panel
+/// that grew past the pane would hide the water it is filtering.
+pub const FILTER_MAX_H: f32 = 320.0;
+/// The indent of a category row under its domain: the vocabulary is flat on the wire and grouped here.
+pub const FILTER_INDENT: f32 = 16.0;
+/// The **minimum** height of the panel's scrolling part. It is zero on purpose: a scroll viewport inside
+/// a flex column needs `min_h(0)` or it grows to its content and never scrolls. A named zero, because a
+/// size belongs in this file (`tests/scaffold.rs`) even when the size is "no floor".
+pub const FILTER_SCROLL_MIN_H: f32 = 0.0;
+
+/// The filter panel's box for `rows` rows: its one width, and a height that stops at `FILTER_MAX_H`.
+pub fn filter_size(rows: usize) -> (f32, f32) {
+    (
+        FILTER_WIDTH,
+        (FILTER_HEAD + FILTER_ROW * rows as f32).min(FILTER_MAX_H),
+    )
+}
 /// A pane menu's own size, in points. A context menu is a **surface with a known box** on this wall, not
 /// an intrinsic one: the drag of a menu's corner is not a gesture the operator has, and a known box is
 /// what lets the menu be clamped inside the pane it was asked on without measuring the text first (#77).

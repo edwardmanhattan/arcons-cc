@@ -16,8 +16,8 @@
 use std::path::PathBuf;
 
 use crate::data::types::{
-    Envelope, FeedPosition, Pages, TacticalObjectManifest, TacticalObjectPlacement, TniCommandPost,
-    UnitOrganisationDetail,
+    Envelope, FeedPosition, Installation, InstallationType, Pages, TacticalObjectFacets,
+    TacticalObjectManifest, TacticalObjectPlacement, TniCommandPost, UnitOrganisationDetail,
 };
 use crate::map::geometry::Camera;
 use crate::ui::State;
@@ -345,6 +345,93 @@ fn objects(state: &mut State) {
     let first = state.layout.focused();
     state.set_camera(Camera::new(OBJECTS_CENTRE, OBJECTS_ZOOMS.0));
     state.split_pane(first, Camera::new(OBJECTS_CENTRE, OBJECTS_ZOOMS.1));
+    state.layout.focus(first);
+}
+
+/// `fixtures/rest/tactical-objects-facets.json` — the recorded filter vocabulary, wire-shaped. The
+/// counts are the server's, so the panel's domain and category rows carry them unchanged.
+pub fn facets_fixture() -> Result<TacticalObjectFacets, String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/rest/tactical-objects-facets.json");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let envelope: Envelope<TacticalObjectFacets> = serde_json::from_str(&text)
+        .map_err(|error| format!("{} is not the facets envelope: {error}", path.display()))?;
+    Ok(envelope.data)
+}
+
+/// `fixtures/rest/installation-types.json` — the facility vocabulary in picker order.
+pub fn installation_types_fixture() -> Result<Vec<InstallationType>, String> {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/rest/installation-types.json");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let envelope: Envelope<Vec<InstallationType>> =
+        serde_json::from_str(&text).map_err(|error| {
+            format!(
+                "{} is not the installation-types envelope: {error}",
+                path.display()
+            )
+        })?;
+    Ok(envelope.data)
+}
+
+/// `fixtures/rest/installations.json` — the facilities the wall caches at init. The recording is empty,
+/// which is a complete answer and not a missing read: every type's count is `0`, honestly.
+pub fn installations_fixture() -> Result<Vec<Installation>, String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/rest/installations.json");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let envelope: Envelope<Vec<Installation>> = serde_json::from_str(&text).map_err(|error| {
+        format!(
+            "{} is not the installations envelope: {error}",
+            path.display()
+        )
+    })?;
+    Ok(envelope.data)
+}
+
+/// The zoom both panes of `panes-filter` hold. One zoom, so the only difference between the panes is
+/// the filter — not a camera.
+pub const PANES_FILTER_ZOOM: f64 = 9.5;
+
+/// The `panes-filter` scene (#112): **two panes on the same water, one of them filtered**.
+///
+/// Pane A hides the buoy's **domain**; pane B hides nothing. The two panes hold the same camera, so the
+/// only difference between their pictures is the filter — a wall-wide filter draws the same objects in
+/// both, which is the falsifier the capture exists for.
+///
+/// The filter is set through [`crate::ui::filter::toggle_in`], the same function a press on a panel row
+/// calls, and the panel is opened with the same `Begin::Filter` a press on the pane's toggle uses. The
+/// vocabularies go through the replies the wall takes, so the panel in the capture is the wire's rows.
+fn panes_filter(state: &mut State) {
+    objects(state);
+    if let Ok(facets) = facets_fixture() {
+        crate::ui::apply_reply(state, &crate::data::Reply::TacticalObjectFacets(Ok(facets)));
+    }
+    if let Ok(types) = installation_types_fixture() {
+        crate::ui::apply_reply(state, &crate::data::Reply::InstallationTypes(Ok(types)));
+    }
+    if let Ok(places) = installations_fixture() {
+        crate::ui::apply_reply(state, &crate::data::Reply::Installations(Ok(places)));
+    }
+    // **The same water at the same zoom in both panes**: a difference between their pictures is the
+    // filter and nothing else.
+    for pane in &mut state.panes {
+        pane.camera = Camera::new(OBJECTS_CENTRE, PANES_FILTER_ZOOM);
+    }
+    let first = state.pane_rects()[0].0;
+    // The domain comes from the placement itself, not from an id written here: the scene hides the
+    // buoy's domain whatever the backend calls it and whatever id it gives it.
+    let domain = state
+        .placements
+        .iter()
+        .find(|placement| placement.id == OBJECTS_BUOY)
+        .map(|placement| placement.symbol.category.domain.id);
+    if let Some(domain) = domain {
+        crate::ui::filter::toggle_in(state, first, crate::ui::filter::Target::Domain(domain));
+    }
+    state.begin(crate::ui::Begin::Filter { pane: first });
     state.layout.focus(first);
 }
 
@@ -779,6 +866,9 @@ pub const SCENES: &[Scene] = &[
     // The operational layer (#110): a buoy, a cone and one unlabelled mark, on two panes at two
     // zooms, so a wall-wide camera lands in the wrong place.
     ("objects", objects),
+    // The per-pane filter (#112): two panes on the same water, one hiding a domain — and the panel
+    // that lists the backend's own vocabulary.
+    ("panes-filter", panes_filter),
     ("settings", settings_sheet),
     ("settings-dismiss", settings_dismiss),
     ("pane-menu", pane_menu),
@@ -887,6 +977,8 @@ mod tests {
                 // The operational layer (#110): two panes at two zooms on the same water, so a
                 // placement drawn from the wall's camera is in the wrong place in one of them.
                 "objects",
+                // The per-pane filter (#112): the same water in two panes, one hiding a domain.
+                "panes-filter",
                 "settings",
                 // The one scene whose point is that something is **not** there: the sheet, after a press
                 // outside it (#98).
@@ -1009,6 +1101,75 @@ mod tests {
                     && (pane.camera.center.1 - OBJECTS_CENTRE.1).abs() < 1e-9,
                 "the same water, got {:?}",
                 pane.camera.center
+            );
+        }
+
+        // The per-pane filter (#112): two panes on the same water at the same zoom, the first hiding
+        // the buoy's domain. The vocabularies came through the reply path, so the panel is the wire's
+        // rows; the panel is open on the pane that was filtered.
+        let filtered = state_for("panes-filter");
+        assert_eq!(filtered.panes.len(), 2, "two panes on one water");
+        let first = filtered.pane_rects()[0].0;
+        let second = filtered.pane_rects()[1].0;
+        let buoy = filtered
+            .placements
+            .iter()
+            .find(|placement| placement.id == OBJECTS_BUOY)
+            .expect("the recorded buoy");
+        let domain = buoy.symbol.category.domain.id;
+        let category = buoy.symbol.category.id;
+        assert!(
+            filtered
+                .pane(first)
+                .expect("the first pane")
+                .view
+                .filter
+                .hides_object_in(domain, category),
+            "the first pane hides the buoy's domain"
+        );
+        assert_eq!(
+            filtered.pane(second).expect("the second pane").view.filter,
+            crate::ui::Filter::default(),
+            "the second pane hides nothing: the filter is the pane's"
+        );
+        assert_eq!(
+            filtered.filtering(),
+            Some(first),
+            "the panel is open on the filtered pane"
+        );
+        assert!(
+            filtered.facets.is_some(),
+            "the facets came through the reply path"
+        );
+        assert_eq!(
+            filtered.installation_types.len(),
+            5,
+            "the recorded facility vocabulary"
+        );
+        assert!(
+            filtered.installations.is_empty(),
+            "the recorded installation list is empty, which is a complete answer"
+        );
+        let rows = crate::ui::filter::rows(
+            &filtered.pane(first).expect("pane").view.filter,
+            filtered.facets.as_ref(),
+            &filtered.installation_types,
+            &filtered.installations,
+        );
+        assert!(
+            rows.len() > 12,
+            "the panel lists the layers and both vocabularies, got {} rows",
+            rows.len()
+        );
+        assert_eq!(
+            crate::ui::tokens::filter_size(rows.len()).1,
+            crate::ui::tokens::FILTER_MAX_H,
+            "this vocabulary is taller than the panel, so it scrolls inside its maximum"
+        );
+        for pane in &filtered.panes {
+            assert_eq!(
+                pane.camera.zoom, PANES_FILTER_ZOOM,
+                "one zoom in both panes"
             );
         }
 
