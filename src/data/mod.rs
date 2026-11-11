@@ -301,7 +301,7 @@ impl Session {
                         Some((latitude, longitude)) => {
                             format!("view at {latitude:.4}, {longitude:.4}")
                         }
-                        None => "no default view (unset, not 0,0)".to_string(),
+                        None => "the backend has not chosen a view (unset, not 0,0)".to_string(),
                     },
                 )
                 .await,
