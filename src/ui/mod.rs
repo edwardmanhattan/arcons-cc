@@ -2450,9 +2450,9 @@ fn drag_pane(state: &mut State, _id: ViewId, rect: Rect, drag: &mut rune::Drag, 
 
 /// How the window opens: sized from the command line, or covering the primary output.
 ///
-/// Rune at this rev exposes no fullscreen API, so `--fullscreen` is the closest honest thing —
-/// borderless, at the primary output's own size and position. #8 revisits it once the wall's output
-/// is chosen, and records what it decided.
+/// Rune exposes fullscreen as a runtime toggle (`Tx::toggle_full_screen`), not as a startup option,
+/// so `--fullscreen` is still the closest honest thing — borderless, at the primary output's own
+/// size and position. #8 decides when the wall toggles the real one, and records what it decided.
 fn window_options(window: config::Window, displays: &[rune::Display]) -> rune::WindowOptions {
     let options = rune::WindowOptions {
         min_size: Some(tokens::MIN_WINDOW),
