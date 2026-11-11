@@ -113,6 +113,26 @@ pub fn handle_point(rect: Rect, local: (f32, f32)) -> (f32, f32) {
     )
 }
 
+/// **Tree space → pane space** (#127): `pane = tree * zoom + pan`.
+///
+/// The tree canvas's one transform. The drawing applies it with `El::scale`/`El::offset`, a gesture
+/// inverts it to keep the point under the pointer, and `verify` maps a node through it to ask a capture
+/// where a plate should be — three callers, one rule, the discipline `map::geometry::project` and
+/// [`Layout::rects`] keep. A zero or negative zoom is not a camera; it reads as 1.
+pub fn tree_point(camera: &crate::ui::tree::TreeCamera, point: (f32, f32)) -> (f32, f32) {
+    let zoom = if camera.zoom > 0.0 { camera.zoom } else { 1.0 };
+    (point.0 * zoom + camera.pan.0, point.1 * zoom + camera.pan.1)
+}
+
+/// **Pane space → tree space**: the inverse of [`tree_point`], for a wheel that zooms about the pointer.
+pub fn tree_from_pane(camera: &crate::ui::tree::TreeCamera, point: (f32, f32)) -> (f32, f32) {
+    let zoom = if camera.zoom > 0.0 { camera.zoom } else { 1.0 };
+    (
+        (point.0 - camera.pan.0) / zoom,
+        (point.1 - camera.pan.1) / zoom,
+    )
+}
+
 /// The rectangles the panes are **drawn** at: the layout's cells, pulled in by the gap (#82).
 ///
 /// The cells are the tiling — `border_at`, `drop_for` and `pane_at` all answer in them, because a point in

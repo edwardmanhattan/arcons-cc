@@ -119,6 +119,19 @@ pub const TREE_TOP: f32 = 40.0;
 pub const TREE_LINK_W: f32 = 1.5;
 pub const TREE_ICON: f32 = 14.0;
 
+/// **The tree pane's zoom limits** (#127). They are not the map's: a map's zoom is a ground resolution
+/// and a tree's is a text size, so the numbers come from the label instead of from metres per pixel.
+///
+/// The hand may zoom out to `TREE_ZOOM_MIN`; the automatic fit on open may go as low as this too, because
+/// the operator's complaint is a narrow pane that *cuts* the forest. At the recorded structure's 784 pt
+/// forest in a 320 pt pane the fit is ≈0.38, where a 12 pt label draws at ≈4.6 pt — small, and exactly why
+/// the pane is a canvas: the shape is the overview and a hand zooms in for the names.
+pub const TREE_ZOOM_MIN: f32 = 0.35;
+pub const TREE_ZOOM_MAX: f32 = 3.0;
+/// Below this zoom the secondary lines (`position_title`, the holder, the level) are dropped and only
+/// names draw: at an overview scale, four lines a post is a grey block, and the shape is what is read.
+pub const TREE_SECONDARY_MIN: f32 = 0.6;
+
 // ---------------------------------------------------------------------------
 // Type.
 // ---------------------------------------------------------------------------

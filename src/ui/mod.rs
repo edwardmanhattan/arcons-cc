@@ -98,6 +98,11 @@ pub struct Pane {
     /// filter it will draw with. The wall's data is shared — one picture, one socket, one fleet — and the
     /// *question* is not: two panes may ask about two hulls, and a press in one must not answer in the other.
     pub view: PaneView,
+    /// **The tree pane's camera** (#127): where the tree's own points sit in the pane. `None` on a map
+    /// pane, like the map thread above — a pane holds the camera its content has, and two tree panes
+    /// hold two. It is a value on the pane rather than in the drawing, so a gesture, a fit and a capture
+    /// all read the same camera.
+    pub tree: Option<crate::ui::tree::TreeCamera>,
     /// **The name the operator typed** (#83, #113). `None` means "nobody named this pane": the plate then
     /// draws the pane's own number from [`Pane::title`], because a title is not a name invented — a name is
     /// something somebody typed.
@@ -129,6 +134,7 @@ impl Pane {
             #[cfg(feature = "map")]
             frame_seen: None,
             view: PaneView::default(),
+            tree: None,
             name: None,
             #[cfg(feature = "map")]
             drag_origin: None,
@@ -139,6 +145,9 @@ impl Pane {
     pub fn tree(id: ViewId, camera: Camera, organisation: Option<i64>) -> Self {
         Self {
             content: PaneContent::Tree { organisation },
+            // A tree pane is a canvas (#127): it starts unfitted, and the first layout fits the whole
+            // forest into it. A map pane has no tree camera at all, which is why this is `Some` here only.
+            tree: Some(crate::ui::tree::TreeCamera::default()),
             ..Self::new(id, camera)
         }
     }

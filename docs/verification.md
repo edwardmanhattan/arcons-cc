@@ -182,6 +182,23 @@ the scene also proves the control reaches a handler rather than being decoration
 each button's own rectangle for ink and measures the popover's fill against `tokens::FILTER_SIZE`; removing
 either toggle leaves a button-shaped hole and the line names the pane.
 
+`pane-tree-narrow` and `pane-tree-zoom` are the **tree pane as a canvas** (#127). The first is the
+operator's report made a capture: the same forest in a **320 pt** pane, where 1:1 would cut it, with the
+camera untouched — so the fit runs and the assertion requires **every post and every connector inside the
+pane's own rectangle** (8 posts, 7 connectors; the recorded forest is 784 pt wide, so the fit is ≈0.37).
+The second is a hand's camera: zoomed to 2.0 with the recorded fleet command's centre put at the known
+pane point (300, 280), and the assertion requires that node's plate at the point `view::tree_point` maps
+it to, and **fewer posts on screen than the tree has** — a fit would show all of them. The third is the
+only gesture the gate can drive that `cargo test` cannot: `fixtures/scripts/pane-tree-pan.json` presses a
+post and drags it, and the assertion requires that post's plate to have moved by exactly the travel —
+absolute panning, not a sum of per-event deltas, and a drag that reached no canvas would leave the tree at
+the fit. The transform is one
+`El::scale`/`El::offset` over the laid-out tree, never a per-node re-layout, so the drawing, the text and
+the hit test cannot disagree; `cargo test ui::tree` holds the arithmetic (a fit puts 784 pt inside a 320 pt
+pane; a wheel zoom keeps the point under the pointer still, clamp included). Below
+`tokens::TREE_SECONDARY_MIN` the secondary lines are dropped and only names draw, which is what keeps an
+overview a shape rather than a grey block.
+
 `pane-menu` is a wall with **one** pane and its right-click menu open (#77) — the one shape the menu was
 never drawn on, and the only wall that needs it, because "Focus on new pane" is the only route to a second
 pane. The assertion checks the menu's box against `ui::menu_origin` and that it stays inside the picture.

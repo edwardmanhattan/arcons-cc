@@ -18,13 +18,14 @@
 //!
 //! Everything that moves is Rune's own kit: `El::matched`/`matched_crop` for a node that changes
 //! place, `El::shape` + `rune::shape::Shape` for the orthogonal connectors (`src/ui/symbol.rs` is the
-//! precedent), `rune::Icon`/`El::icon` for a post's icon and its echelon mark, and `El::scroll` for a
-//! tree taller or wider than its pane. Every size and colour is a [`tokens`] token.
+//! precedent), `rune::Icon`/`El::icon` for a post's icon and its echelon mark, and — since #127 —
+//! `El::scale`/`El::offset` for the **canvas**: one transform over the laid-out tree, so a narrow pane
+//! fits the whole forest instead of scrolling or cutting it. Every size and colour is a [`tokens`] token.
 //!
-//! **The geometry is one function.** [`layout`] answers where every node and every elbow is, and
-//! `verify` calls the same function the view draws from — the discipline `Layout::rects` and
-//! `map::geometry::project` keep, for the same reason: a tree drawn in one place and asserted in
-//! another is a capture that agrees with itself.
+//! **The geometry is one function.** [`layout`] answers where every node and every elbow is in tree
+//! space, [`crate::ui::view::tree_point`] answers where tree space lands in the pane, and `verify` calls
+//! both — the discipline `Layout::rects` and `map::geometry::project` keep, for the same reason: a tree
+//! drawn in one place and asserted in another is a capture that agrees with itself.
 
 use rune::{El, col, el, row, shape::Shape, text};
 
@@ -113,6 +114,98 @@ pub struct Tree {
     pub links: Vec<Link>,
     pub width: f32,
     pub height: f32,
+}
+
+/// **A tree pane's camera** (#127): where the tree's own points sit in the pane.
+///
+/// The transform is one function (`view::tree_point`): `pane = tree * zoom + pan`. It is a value on the
+/// pane, like the map's [`crate::map::geometry::Camera`], so two tree panes keep two views — and it is
+/// applied with Rune's `El::scale`/`El::offset` over the already-laid-out tree, never by recomputing
+/// every node's rectangle and font size. Layout keeps the unscaled size, so a zoom does not re-flow the
+/// tree, text rasterizes at the scaled size once it rests, and hit testing follows the scaled rect.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TreeCamera {
+    /// The pane-space point the tree's own origin is drawn at.
+    pub pan: (f32, f32),
+    pub zoom: f32,
+    /// **Has a hand taken the camera?** Until it has, a resize re-fits — which is the sentence #127
+    /// exists to make true: narrowing a pane shows the whole forest instead of cutting it.
+    pub touched: bool,
+    /// The pane's own size, as the last layout pass measured it. The fit is a function of this and the
+    /// tree, and a gesture needs it before it may recompute one.
+    pub(crate) size: (f32, f32),
+    /// The pan a drag started on, so a pan is absolute rather than a sum of deltas.
+    pub(crate) drag_origin: Option<(f32, f32)>,
+}
+
+impl Default for TreeCamera {
+    fn default() -> Self {
+        Self {
+            pan: (0.0, 0.0),
+            zoom: 1.0,
+            touched: false,
+            size: (0.0, 0.0),
+            drag_origin: None,
+        }
+    }
+}
+
+impl TreeCamera {
+    /// This camera moved by a travel in pane points: a drag, where the tree follows the hand.
+    pub fn panned(mut self, by: (f32, f32)) -> Self {
+        self.pan = (self.pan.0 + by.0, self.pan.1 + by.1);
+        self.touched = true;
+        self
+    }
+
+    /// A camera a hand has moved to a place and a zoom. Scenes and tests set one directly; a gesture
+    /// goes through the handlers below, which are the only code that changes a camera on a wall.
+    pub fn moved_to(pan: (f32, f32), zoom: f32) -> Self {
+        Self {
+            pan,
+            zoom: zoom.clamp(tokens::TREE_ZOOM_MIN, tokens::TREE_ZOOM_MAX),
+            touched: true,
+            ..Self::default()
+        }
+    }
+}
+
+/// **The fit**: the whole tree inside the pane, centred under the pane's chrome, at the largest zoom
+/// that keeps every node and connector on screen.
+///
+/// `TREE_TOP` is left clear at the top so the supreme command is not drawn under the pane's title and
+/// buttons, and `TREE_PAD` around the rest so a plate on the edge is not clipped by the frame. The zoom
+/// is clamped into the token range: for the recorded 784 pt forest in a 320 pt pane the fit is ≈0.38,
+/// which is small enough to read the *shape* and is why the pane is a canvas.
+pub fn fit(tree: &Tree, pane: (f32, f32)) -> TreeCamera {
+    let avail_w = (pane.0 - tokens::TREE_PAD * 2.0).max(1.0);
+    let avail_h = (pane.1 - tokens::TREE_TOP - tokens::TREE_PAD).max(1.0);
+    let zoom = (avail_w / tree.width.max(1.0))
+        .min(avail_h / tree.height.max(1.0))
+        .clamp(tokens::TREE_ZOOM_MIN, tokens::TREE_ZOOM_MAX);
+    let pan = (
+        (pane.0 - tree.width * zoom) / 2.0,
+        tokens::TREE_TOP + (avail_h - tree.height * zoom) / 2.0,
+    );
+    TreeCamera {
+        pan,
+        zoom,
+        touched: false,
+        size: pane,
+        drag_origin: None,
+    }
+}
+
+/// The camera a pane draws with: **the hand's when a hand has taken it, the fit until then**.
+///
+/// `rect` is the pane's rectangle, so a resize that arrives before the next gesture is honoured by the
+/// drawing even though no handler ran. `verify` calls this same function, so a capture and its assertion
+/// cannot disagree about where a node is drawn.
+pub fn camera_for(pane: &crate::ui::Pane, tree: &Tree, rect: Rect) -> TreeCamera {
+    match pane.tree {
+        Some(camera) if camera.touched => camera,
+        _ => fit(tree, (rect.w, rect.h)),
+    }
 }
 
 /// The posts under a forest of roots, in the order the wire sent them.
@@ -371,28 +464,22 @@ pub fn tree_for(state: &State, pane: ViewId) -> Option<Tree> {
     Some(layout(supreme.as_ref(), &roots))
 }
 
-/// Where the tree's canvas starts inside its pane: the scroll viewport's padding.
-///
-/// One function, used by the view and by `verify` — the reason `view::name_probe` and
-/// `view::chrome_buttons` exist: a capture and its assertion that compute an offset twice come to
-/// disagree about where a post is.
-pub fn canvas_origin() -> (f32, f32) {
-    (tokens::TREE_PAD, tokens::TREE_TOP)
-}
-
 /// The part of a node's plate that is **always** fill when the plate is drawn: its bottom-left corner,
 /// inside the padding and below the last line of text.
 ///
 /// `verify` asks this rectangle for the plate's colour. Asking the whole plate would pass on a node
-/// drawn as text with no surface behind it, which is the falsifier "one node per post" needs.
-pub fn node_probe(rect: Rect) -> Rect {
-    let side = tokens::GAP / 2.0;
+/// drawn as text with no surface behind it, which is the falsifier "one node per post" needs. The probe
+/// is scaled with the plate, because the plate's padding is: at an overview zoom a fixed 4 pt probe
+/// would reach into the text.
+pub fn node_probe(rect: Rect, zoom: f32) -> Rect {
+    let zoom = if zoom > 0.0 { zoom } else { 1.0 };
+    let side = (tokens::GAP / 2.0 * zoom).max(0.75);
     Rect {
         x: rect.x + side,
         // A plate is as tall as its lines plus its padding (`plate_height`), so the last line ends above
         // this corner: the probe sits in the plate's bottom padding, which is fill whether the post says
         // two lines or four.
-        y: rect.y + rect.h - side - tokens::HAIRLINE,
+        y: rect.y + rect.h - side - tokens::HAIRLINE * zoom,
         w: side,
         h: side,
     }
@@ -409,51 +496,66 @@ pub fn link_probe(link: &Link) -> (f32, f32) {
     ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
 }
 
-/// A tree pane's content: the scroll viewport over the tree, and the card a selected post asked for.
+/// A tree pane's content: **a canvas** over the tree, and the card a selected post asked for.
+///
+/// The canvas is sized to the pane (never to the tree) and the laid-out tree inside it is drawn with one
+/// transform — `El::scale(zoom).origin(0, 0).offset(pan)` — so layout keeps the tree's own size and the
+/// drawing, text rasterisation and hit testing all follow the same camera (`view::tree_point`). A root
+/// sized to the *tree* would lay out a wide canvas in a narrow pane and clip it, which is the bug this
+/// ticket is about, moved.
 pub fn content(state: &State, pane: ViewId, rect: Rect, tree: &Tree) -> El {
-    let (canvas_x, canvas_y) = canvas_origin();
-    let mut canvas = el()
-        .key(format!("tree-canvas-{pane}"))
+    let camera = state
+        .pane(pane)
+        .map(|pane| camera_for(pane, tree, rect))
+        .unwrap_or_else(|| fit(tree, (rect.w, rect.h)));
+    let mut world = el()
+        .key(format!("tree-world-{pane}"))
+        .absolute(0.0, 0.0)
         .w(tree.width.max(1.0))
-        .h(tree.height.max(1.0));
+        .h(tree.height.max(1.0))
+        // The pivot is the tree's own origin, so `pane = tree * zoom + pan` holds exactly and the wheel
+        // can keep the point under the pointer still.
+        .origin(0.0, 0.0)
+        .scale(camera.zoom)
+        .offset(camera.pan.0, camera.pan.1);
     // **Connectors under the nodes**, so a run that meets a plate ends under it rather than across its
     // text.
     for link in &tree.links {
-        canvas = canvas.child(link_element(pane, link));
+        world = world.child(link_element(pane, link));
     }
     for node in &tree.nodes {
-        canvas = canvas.child(node_element(state, pane, node));
+        world = world.child(node_element(state, pane, node, camera.zoom));
     }
-    let viewport = col()
-        .key(format!("tree-{pane}"))
+    // The canvas root is the pane's size and clips; the tree may overflow it in either direction, and a
+    // pan is what reveals the rest. Every gesture is on this element and on each node, because Rune
+    // routes a press to the nearest element under the pointer that handles one: a drag that started on a
+    // post must pan the canvas rather than fall through to nothing.
+    let mut body = el()
+        .key(format!("tree-canvas-{pane}"))
         .w_full()
         .h_full()
-        .pt(canvas_y)
-        .px(canvas_x)
-        .pb(canvas_x)
-        // A viewport needs a bounded height; the pane is that bound (`h_full` inside it), and a deep or
-        // wide tree scrolls inside the pane rather than drawing past its edge. Both axes, because a
-        // forest is as wide as its branches and a branch may be the one that overflows.
-        .scroll_xy()
-        .child(canvas);
-    let mut body = col()
-        .key(format!("tree-body-{pane}"))
-        .w_full()
-        .h_full()
-        .child(viewport);
+        .clip_rounded(0.0)
+        .on_drag(move |state: &mut State, drag, _tx| tree_drag(state, pane, drag))
+        .on_wheel(move |state: &mut State, event: rune::WheelEvent, _tx| {
+            tree_wheel(state, pane, &event)
+        })
+        .on_double_press(move |state: &mut State| fit_now(state, pane))
+        .on_layout(move |state: &mut State, [_, _, w, h]| note_size(state, pane, (w, h)))
+        .child(world);
     // **A post that is a hull selects it in this pane and shows its card** (`PaneView`, #99). The card
-    // is drawn in the pane's own points, anchored to the post that was pressed — a tree pane has no
-    // marker to hang it from.
+    // is drawn in the pane's own points and is **not scaled**: it is chrome about the post, and a card
+    // zoomed to 38 % is a card nobody reads. It is anchored where the post's camera puts its edge.
     if let Some(card) = state.card_in(pane) {
         let anchor = tree
             .nodes
             .iter()
             .find(|node| node.id_unit == Some(card.unit.id_unit))
             .map(|node| {
-                (
-                    f64::from(canvas_x + node.rect.x + node.rect.w),
-                    f64::from(canvas_y + node.rect.y + node.rect.h / 2.0),
-                )
+                let (x, y) = crate::ui::view::tree_point(
+                    &camera,
+                    (node.rect.right(), node.rect.y + node.rect.h / 2.0),
+                );
+                (f64::from(x), f64::from(y))
             })
             .unwrap_or((0.0, 0.0));
         let placement = crate::units::card::place(anchor, (f64::from(rect.w), f64::from(rect.h)));
@@ -462,8 +564,141 @@ pub fn content(state: &State, pane: ViewId, rect: Rect, tree: &Tree) -> El {
     body
 }
 
+/// The camera a gesture starts from: the hand's, or the fit when no hand has taken it.
+fn gesture_camera(state: &State, pane: ViewId) -> Option<(Tree, TreeCamera)> {
+    let stored = state.pane(pane)?.tree?;
+    let tree = tree_for(state, pane)?;
+    let camera = if stored.touched {
+        stored
+    } else {
+        fit(&tree, stored.size)
+    };
+    Some((tree, camera))
+}
+
+/// Put a camera back on the pane and redraw. The one way a gesture changes the view.
+fn set_camera(state: &mut State, pane: ViewId, camera: TreeCamera) {
+    if let Some(pane) = state.pane_mut(pane) {
+        pane.tree = Some(camera);
+    }
+    state.layout_dirty = true;
+}
+
+/// A drag on a tree pane **pans** it: a canvas that moves when a hand drags it, the feel the map has.
+///
+/// Absolute rather than incremental on purpose: [`rune::Drag::dx`]/`dy` are travel since the press in
+/// window points, so the pan is the origin plus that travel. Summing per-event deltas would compound and
+/// the tree would run away from the pointer.
+fn tree_drag(state: &mut State, pane: ViewId, drag: &rune::Drag) {
+    let Some((_, camera)) = gesture_camera(state, pane) else {
+        return;
+    };
+    match drag.phase {
+        rune::Phase::Down => {
+            // Remember where the hand took hold. A press that never moves is a click on a post, and
+            // leaves `touched` false, so a resize still re-fits.
+            set_camera(
+                state,
+                pane,
+                TreeCamera {
+                    drag_origin: Some(camera.pan),
+                    ..camera
+                },
+            );
+        }
+        rune::Phase::Move => {
+            let origin = camera.drag_origin.unwrap_or(camera.pan);
+            set_camera(
+                state,
+                pane,
+                TreeCamera {
+                    pan: (origin.0 + drag.dx, origin.1 + drag.dy),
+                    touched: true,
+                    drag_origin: Some(origin),
+                    ..camera
+                },
+            );
+        }
+        rune::Phase::Up => {
+            set_camera(
+                state,
+                pane,
+                TreeCamera {
+                    drag_origin: None,
+                    ..camera
+                },
+            );
+        }
+    }
+}
+
+/// How much one point of wheel travel changes the tree's zoom, in log-zoom. A wheel is a gesture, not a
+/// measurement: the map's own constant is in ground zoom levels and means nothing on a text canvas.
+const WHEEL_ZOOM_PER_PT: f32 = 0.002;
+
+/// Zoom by `factor` about a **pane point**, so the tree point under it stays under it.
+///
+/// One function, used by the wheel and by the test that holds the promise: the point under the pointer
+/// is the point the operator is looking at, and a zoom that moved it would be a zoom about the corner.
+pub fn zoom_about(camera: TreeCamera, at: (f32, f32), factor: f32) -> TreeCamera {
+    let under = crate::ui::view::tree_from_pane(&camera, at);
+    let zoom = (camera.zoom * factor).clamp(tokens::TREE_ZOOM_MIN, tokens::TREE_ZOOM_MAX);
+    TreeCamera {
+        pan: (at.0 - under.0 * zoom, at.1 - under.1 * zoom),
+        zoom,
+        touched: true,
+        drag_origin: None,
+        ..camera
+    }
+}
+
+/// A wheel step **zooms about the pointer**, so the post under the cursor stays under it — the map's
+/// gesture, so the wall has one way to zoom.
+fn tree_wheel(state: &mut State, pane: ViewId, event: &rune::WheelEvent) -> bool {
+    let Some((_, camera)) = gesture_camera(state, pane) else {
+        return false;
+    };
+    if event.dy == 0.0 {
+        return false;
+    }
+    let next = zoom_about(
+        camera,
+        (event.x, event.y),
+        (-event.dy * WHEEL_ZOOM_PER_PT).exp(),
+    );
+    if (next.zoom - camera.zoom).abs() < 1e-4 {
+        return true;
+    }
+    set_camera(state, pane, next);
+    true
+}
+
+/// A double press **fits** the tree again, and gives the camera back to the fit until a hand moves it.
+fn fit_now(state: &mut State, pane: ViewId) {
+    let Some((tree, camera)) = gesture_camera(state, pane) else {
+        return;
+    };
+    set_camera(state, pane, fit(&tree, camera.size));
+}
+
+/// The pane's own size, as the layout pass measured it. The fit is recomputed from this on every draw
+/// until a hand takes the camera, so a resize never needs a handler to be right.
+fn note_size(state: &mut State, pane: ViewId, size: (f32, f32)) {
+    let Some(camera) = state.pane_mut(pane).and_then(|pane| pane.tree.as_mut()) else {
+        return;
+    };
+    if (camera.size.0 - size.0).abs() > 0.5 || (camera.size.1 - size.1).abs() > 0.5 {
+        camera.size = size;
+        state.layout_dirty = true;
+    }
+}
+
 /// One post's plate.
-fn node_element(state: &State, pane: ViewId, node: &Placed) -> El {
+///
+/// `zoom` is the camera's, and it decides one thing here: **below `TREE_SECONDARY_MIN` only the name
+/// draws**. Four lines a post at an overview scale is a grey block, and the shape is what is read; the
+/// plate keeps its measured height so the tree does not re-flow, it simply carries less.
+fn node_element(state: &State, pane: ViewId, node: &Placed, zoom: f32) -> El {
     let selected = node.id_unit.is_some() && state.selected_in(pane) == node.id_unit;
     let id_unit = node.id_unit;
     let mut body = col()
@@ -491,7 +726,12 @@ fn node_element(state: &State, pane: ViewId, node: &Placed) -> El {
                 tokens::card_edge()
             },
         )
-        .on_press(move |state: &mut State| press_post(state, pane, id_unit));
+        .on_press(move |state: &mut State| press_post(state, pane, id_unit))
+        // A drag that starts **on a post** still pans the canvas (#127): Rune routes a gesture to the
+        // nearest element under the pointer that handles one, so the handler has to be here as well as
+        // on the canvas, or dragging a plate would do nothing.
+        .on_drag(move |state: &mut State, drag, _tx| tree_drag(state, pane, drag))
+        .on_double_press(move |state: &mut State| fit_now(state, pane));
 
     // What the structure calls the box, with the post's own icon when the wire names one.
     let mut label = row().w_full().gap(tokens::CARD_GAP).items_center();
@@ -507,30 +747,34 @@ fn node_element(state: &State, pane: ViewId, node: &Placed) -> El {
     );
     body = body.child(label);
 
-    // The post that runs the box, when the wire records one.
-    if let Some(title) = &node.title {
-        body = body.child(
-            text(title.clone())
-                .font(tokens::LABEL)
-                .color(tokens::ink_dim())
-                .truncate(),
-        );
-    }
-    // The person appointed, when somebody is. A vacant post draws no name rather than an invented one.
-    if let Some(holder) = &node.holder {
-        body = body.child(
-            text(holder.clone())
-                .font(tokens::LABEL)
-                .color(tokens::ink_dim())
-                .truncate(),
-        );
-    }
-    // The post's level, when it states one: the catalogue's mark and the level's own name. A post with
-    // no level draws neither — a rank of 0 is never sent, so nothing here may default to one (`INV-01`).
-    if let Some(echelon) = &node.echelon {
-        body = body.child(echelon_row(Some(echelon.clone())));
-    } else if let Some(rank) = node.echelon_rank {
-        body = body.child(echelon_row(Some(rank.to_string())));
+    // At an overview zoom the name is the post. The secondary lines come back as the hand zooms in.
+    if zoom >= tokens::TREE_SECONDARY_MIN {
+        // The post that runs the box, when the wire records one.
+        if let Some(title) = &node.title {
+            body = body.child(
+                text(title.clone())
+                    .font(tokens::LABEL)
+                    .color(tokens::ink_dim())
+                    .truncate(),
+            );
+        }
+        // The person appointed, when somebody is. A vacant post draws no name rather than an invented one.
+        if let Some(holder) = &node.holder {
+            body = body.child(
+                text(holder.clone())
+                    .font(tokens::LABEL)
+                    .color(tokens::ink_dim())
+                    .truncate(),
+            );
+        }
+        // The post's level, when it states one: the catalogue's mark and the level's own name. A post
+        // with no level draws neither — a rank of 0 is never sent, so nothing here may default to one
+        // (`INV-01`).
+        if let Some(echelon) = &node.echelon {
+            body = body.child(echelon_row(Some(echelon.clone())));
+        } else if let Some(rank) = node.echelon_rank {
+            body = body.child(echelon_row(Some(rank.to_string())));
+        }
     }
     body
 }
@@ -710,6 +954,129 @@ mod tests {
             flattened.nodes.len(),
             tree.nodes.len(),
             "flattening keeps every post, so the root count is the only difference"
+        );
+    }
+
+    /// **The gestures the canvas promises, on the state they promise it for** (#127): a wheel zooms
+    /// about the pointer, and a double press gives the camera back to the fit. The drag is the same
+    /// arithmetic with a travel instead of a wheel; `rune::Drag`'s fields are the runtime's, so a drag is
+    /// the one gesture only a pointer capture can drive.
+    #[test]
+    fn a_wheel_zooms_about_the_pointer_and_a_double_press_fits_again() {
+        let mut state = scene::state_for("pane-tree");
+        let tree_id = state
+            .pane_rects()
+            .into_iter()
+            .map(|(id, _)| id)
+            .find(|id| state.pane(*id).is_some_and(|pane| !pane.content.is_map()))
+            .expect("the scene's tree pane");
+        let rect = state
+            .pane_rects()
+            .into_iter()
+            .find(|(id, _)| *id == tree_id)
+            .expect("its rectangle")
+            .1;
+        let tree = tree_for(&state, tree_id).expect("its tree");
+        // The size a layout pass would have recorded: the handlers need it before they may re-fit.
+        if let Some(camera) = state.pane_mut(tree_id).and_then(|pane| pane.tree.as_mut()) {
+            camera.size = (rect.w, rect.h);
+        }
+        let fitted = camera_for(state.pane(tree_id).expect("pane"), &tree, rect);
+        assert!(!fitted.touched);
+        let at = (300.0, 200.0);
+        let under = crate::ui::view::tree_from_pane(&fitted, at);
+        let event = rune::WheelEvent::new(0.0, -50.0).at(at.0, at.1);
+        assert!(
+            tree_wheel(&mut state, tree_id, &event),
+            "the wheel is taken"
+        );
+        let zoomed = state
+            .pane(tree_id)
+            .and_then(|pane| pane.tree)
+            .expect("the camera");
+        assert!(zoomed.touched, "a hand has taken the camera");
+        assert!(
+            zoomed.zoom > fitted.zoom,
+            "wheel-up zooms in: {} -> {}",
+            fitted.zoom,
+            zoomed.zoom
+        );
+        let after = crate::ui::view::tree_point(&zoomed, under);
+        assert!(
+            (after.0 - at.0).abs() < 0.5 && (after.1 - at.1).abs() < 0.5,
+            "the point under the pointer moved from {at:?} to {after:?}"
+        );
+        fit_now(&mut state, tree_id);
+        let refit = state
+            .pane(tree_id)
+            .and_then(|pane| pane.tree)
+            .expect("the camera");
+        assert!(
+            !refit.touched,
+            "a double press gives the camera back to the fit"
+        );
+        assert!(
+            (refit.zoom - fitted.zoom).abs() < 1e-4,
+            "the fit is the same fit: {} vs {}",
+            refit.zoom,
+            fitted.zoom
+        );
+    }
+
+    /// **A fit puts a wide forest inside a narrow pane.** The recorded forest is 784 pt wide; a 320 pt
+    /// pane at 1:1 cuts it. The fit shrinks it and centres it under the pane's chrome, which is the
+    /// operator's ask (#127) and the reason the canvas is allowed below the hand's comfort zoom.
+    #[test]
+    fn a_fit_puts_a_wide_forest_inside_a_narrow_pane() {
+        let tree = Tree {
+            nodes: Vec::new(),
+            links: Vec::new(),
+            width: 784.0,
+            height: 396.0,
+        };
+        let pane = (320.0, 650.0);
+        let camera = fit(&tree, pane);
+        assert!(!camera.touched, "a fit is not a hand's camera");
+        assert!(
+            camera.zoom < 1.0,
+            "784 pt does not fit 320 pt at 1:1: {}",
+            camera.zoom
+        );
+        assert!((camera.zoom - 296.0 / 784.0).abs() < 1e-4, "{camera:?}");
+        let (x, y) = crate::ui::view::tree_point(&camera, (0.0, 0.0));
+        let (right, bottom) = crate::ui::view::tree_point(&camera, (tree.width, tree.height));
+        assert!(
+            x >= crate::ui::tokens::TREE_PAD - 0.5
+                && y >= crate::ui::tokens::TREE_TOP - 0.5
+                && right <= pane.0 - crate::ui::tokens::TREE_PAD + 0.5
+                && bottom <= pane.1 - crate::ui::tokens::TREE_PAD + 0.5,
+            "the whole tree is inside the pane: ({x}, {y})..({right}, {bottom}) of {pane:?}"
+        );
+    }
+
+    /// **A wheel zoom keeps the tree point under the pointer still** — the map's gesture, on the tree's
+    /// transform. The camera is a value, so this is arithmetic with no window.
+    #[test]
+    fn a_zoom_about_a_point_keeps_that_point_still() {
+        let camera = TreeCamera::moved_to((70.0, -40.0), 0.9);
+        let at = (300.0, 200.0);
+        let under = crate::ui::view::tree_from_pane(&camera, at);
+        let next = zoom_about(camera, at, 1.7);
+        assert!(next.touched);
+        assert!((next.zoom - 1.53).abs() < 1e-4, "{next:?}");
+        let after = crate::ui::view::tree_point(&next, under);
+        assert!(
+            (after.0 - at.0).abs() < 0.01 && (after.1 - at.1).abs() < 0.01,
+            "the point under the pointer moved from {at:?} to {after:?}"
+        );
+        // The zoom is clamped into the token range, and a clamp still pivots on the pointer.
+        let floor = zoom_about(camera, at, 0.0001);
+        assert_eq!(floor.zoom, crate::ui::tokens::TREE_ZOOM_MIN);
+        let under_floor = crate::ui::view::tree_from_pane(&camera, at);
+        let after_floor = crate::ui::view::tree_point(&floor, under_floor);
+        assert!(
+            (after_floor.0 - at.0).abs() < 0.01 && (after_floor.1 - at.1).abs() < 0.01,
+            "a clamped zoom still pivots on the pointer: {after_floor:?}"
         );
     }
 

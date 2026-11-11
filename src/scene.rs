@@ -667,6 +667,97 @@ fn pane_tree(state: &mut State) {
     }
 }
 
+/// The share of the panel the `pane-tree-narrow` scene leaves to the **map**: 320 pt of 1280, the
+/// width the ticket's proof names.
+pub const TREE_NARROW_MAP_SHARE: f32 = 0.75;
+
+/// The post the `pane-tree-zoom` scene puts under a known point: the Navy's fleet command, a node with
+/// children in the recorded structure. Its id is the wire's; the scene looks the node up, so a fixture
+/// that renumbers it fails loudly rather than drawing a different tree.
+pub const TREE_ZOOM_NODE: i64 = 4;
+
+/// The zoom `pane-tree-zoom` holds, and the pane-local point the node's centre is put at.
+pub const TREE_ZOOM_IN: f32 = 2.0;
+pub const TREE_ZOOM_AT: (f32, f32) = (300.0, 280.0);
+
+/// The `pane-tree-narrow` scene (#127): **the chain of command in a narrow pane**.
+///
+/// 320 pt of the window is a quarter of the wall, and at 1:1 the recorded forest is 784 pt wide — which is
+/// the operator's report: narrowing the pane cut the tree. This scene's camera is untouched, so the fit
+/// runs and the whole forest is drawn inside the pane. Nothing here sets a zoom: the fit is the claim.
+fn pane_tree_narrow(state: &mut State) {
+    pane_tree(state);
+    let Some(tree) = state
+        .layout
+        .ids()
+        .into_iter()
+        .find(|id| state.pane(*id).is_some_and(|pane| !pane.content.is_map()))
+    else {
+        return;
+    };
+    // **The border this pane is on**, found from the pane rather than from a point: after `pane_tree`
+    // the split is at 34 %, so a press at the middle finds nothing. A scene that guessed the line's
+    // position would silently draw the wide wall it is here to avoid.
+    let viewport = state.pane_viewport();
+    if let Some(border) = state
+        .layout
+        .borders(viewport)
+        .into_iter()
+        .find(|border| border.a == tree || border.b == tree)
+    {
+        state.layout.set_ratio(&border, TREE_NARROW_MAP_SHARE);
+    }
+}
+
+/// The point the `pane-tree-pan` script takes hold of, and the travel it drags: **inside the recorded
+/// fleet command's plate** at `pane-tree`'s fit, so the drag starts on a post — which is the routing a
+/// canvas has to get right, because Rune hands a gesture to the nearest element under the pointer.
+pub const TREE_PAN_AT: (f32, f32) = (748.0, 470.0);
+pub const TREE_PAN_BY: (f32, f32) = (-120.0, -40.0);
+
+/// The `pane-tree-pan` scene (#127): the fitted tree, and a **pointer** drags it.
+///
+/// The camera is untouched in the state the scene builds; `fixtures/scripts/pane-tree-pan.json` presses
+/// the known post and drags, so the capture is the witness that a drag reaches the canvas, that a drag
+/// starting on a post pans rather than falling through, and that the pan is absolute (the travel, not a
+/// sum of per-event deltas).
+fn pane_tree_pan(state: &mut State) {
+    pane_tree(state);
+}
+
+/// The `pane-tree-zoom` scene (#127): **the same forest, zoomed in, with a known post under a known
+/// point** — so a capture can ask where the transform puts a node and get the same answer the drawing
+/// used. The camera is `touched`, which is what a hand's zoom leaves behind and what a resize must not
+/// undo.
+fn pane_tree_zoom(state: &mut State) {
+    pane_tree(state);
+    let Some(tree_id) = state
+        .pane_rects()
+        .into_iter()
+        .map(|(id, _)| id)
+        .find(|id| state.pane(*id).is_some_and(|pane| !pane.content.is_map()))
+    else {
+        return;
+    };
+    let Some(tree) = crate::ui::tree::tree_for(state, tree_id) else {
+        return;
+    };
+    let Some(node) = tree.nodes.iter().find(|node| node.id == TREE_ZOOM_NODE) else {
+        return;
+    };
+    let centre = (
+        node.rect.x + node.rect.w / 2.0,
+        node.rect.y + node.rect.h / 2.0,
+    );
+    let pan = (
+        TREE_ZOOM_AT.0 - centre.0 * TREE_ZOOM_IN,
+        TREE_ZOOM_AT.1 - centre.1 * TREE_ZOOM_IN,
+    );
+    if let Some(pane) = state.pane_mut(tree_id) {
+        pane.tree = Some(crate::ui::tree::TreeCamera::moved_to(pan, TREE_ZOOM_IN));
+    }
+}
+
 /// The scene registry, handed to `AppSpec::scenes`.
 pub const SCENES: &[Scene] = &[
     ("empty", empty),
@@ -694,6 +785,12 @@ pub const SCENES: &[Scene] = &[
     // The chain of command (#116): a tree pane beside a map pane. A forest is a forest, the supreme
     // command is the root above it, and the tree draws nothing that projects.
     ("pane-tree", pane_tree),
+    // The tree pane is a canvas (#127): a narrow pane fits the whole forest, and a zoomed one puts a
+    // known post under a known point.
+    ("pane-tree-narrow", pane_tree_narrow),
+    ("pane-tree-zoom", pane_tree_zoom),
+    // The canvas by **pointer**: a drag on a post pans the tree (a script makes the gesture).
+    ("pane-tree-pan", pane_tree_pan),
 ];
 
 /// Look a scene up by the name `scripts/capture.sh` was given.
@@ -796,7 +893,13 @@ mod tests {
                 "settings-dismiss",
                 "pane-menu",
                 // The chain of command (#116): a tree pane beside a map pane.
-                "pane-tree"
+                "pane-tree",
+                // The tree is a canvas (#127): the whole forest fits a 320 pt pane, and a zoomed camera
+                // puts a known post under a known point.
+                "pane-tree-narrow",
+                "pane-tree-zoom",
+                // The canvas by a pointer: a drag on a post pans it.
+                "pane-tree-pan"
             ]
         );
         for name in names() {
@@ -952,6 +1055,109 @@ mod tests {
             drawn.links.len(),
             7,
             "one connector per parent-to-child run"
+        );
+
+        // **The tree pane is a canvas** (#127). Narrow: the camera is untouched, so the pane fits the
+        // whole forest — every post inside the pane's own rectangle, which is the operator's ask. The
+        // recorded forest is 784 pt wide, so the fit has to shrink it into a 320 pt pane.
+        let narrow = state_for("pane-tree-narrow");
+        let narrow_tree = narrow
+            .pane_rects()
+            .into_iter()
+            .find(|(id, _)| narrow.pane(*id).is_some_and(|pane| !pane.content.is_map()))
+            .expect("the narrow scene has a tree pane");
+        let narrow_rect = narrow_tree.1;
+        assert!(
+            (narrow_rect.w - 320.0).abs() < 0.5,
+            "the narrow pane is a quarter of the window, got {}",
+            narrow_rect.w
+        );
+        let narrow_drawn = crate::ui::tree::tree_for(&narrow, narrow_tree.0).expect("the tree");
+        let narrow_camera = crate::ui::tree::camera_for(
+            narrow.pane(narrow_tree.0).expect("the pane"),
+            &narrow_drawn,
+            narrow_rect,
+        );
+        assert!(
+            !narrow_camera.touched,
+            "no hand has taken the narrow camera"
+        );
+        assert!(
+            narrow_camera.zoom < 1.0,
+            "the fit shrinks a 784 pt forest into a 320 pt pane, got {}",
+            narrow_camera.zoom
+        );
+        assert!(
+            (narrow_camera.zoom - crate::ui::tokens::TREE_ZOOM_MIN).abs() > 1e-6,
+            "the fit is inside the token range, not clamped at its floor: {narrow_camera:?}"
+        );
+        for node in &narrow_drawn.nodes {
+            let (x, y) = crate::ui::view::tree_point(&narrow_camera, (node.rect.x, node.rect.y));
+            let (w, h) = (
+                node.rect.w * narrow_camera.zoom,
+                node.rect.h * narrow_camera.zoom,
+            );
+            assert!(
+                x >= -0.5
+                    && y >= -0.5
+                    && x + w <= narrow_rect.w + 0.5
+                    && y + h <= narrow_rect.h + 0.5,
+                "post {} is outside the narrow pane at ({x}, {y}, {w}, {h}) of {}×{} — narrowing the pane \
+                 cut the tree, which is the behaviour this scene refuses",
+                node.id,
+                narrow_rect.w,
+                narrow_rect.h
+            );
+        }
+
+        // Zoomed: a hand has taken the camera, and the known post's centre is at the known point. The
+        // zoom is large enough that not every post is on screen, which is what makes it a zoom and not
+        // another fit.
+        let zoomed = state_for("pane-tree-zoom");
+        let zoomed_tree = zoomed
+            .pane_rects()
+            .into_iter()
+            .find(|(id, _)| zoomed.pane(*id).is_some_and(|pane| !pane.content.is_map()))
+            .expect("the zoomed scene has a tree pane");
+        let zoomed_camera = zoomed
+            .pane(zoomed_tree.0)
+            .and_then(|pane| pane.tree)
+            .expect("the zoomed pane has a camera");
+        assert!(zoomed_camera.touched, "a hand has taken the zoomed camera");
+        assert_eq!(zoomed_camera.zoom, TREE_ZOOM_IN);
+        let zoomed_drawn = crate::ui::tree::tree_for(&zoomed, zoomed_tree.0).expect("the tree");
+        let known = zoomed_drawn
+            .nodes
+            .iter()
+            .find(|node| node.id == TREE_ZOOM_NODE)
+            .expect("the known post");
+        let (x, y) = crate::ui::view::tree_point(
+            &zoomed_camera,
+            (
+                known.rect.x + known.rect.w / 2.0,
+                known.rect.y + known.rect.h / 2.0,
+            ),
+        );
+        assert!(
+            (x - TREE_ZOOM_AT.0).abs() < 0.01 && (y - TREE_ZOOM_AT.1).abs() < 0.01,
+            "the known post is at the known point, got ({x}, {y})"
+        );
+        let on_screen = zoomed_drawn
+            .nodes
+            .iter()
+            .filter(|node| {
+                let (x, y) =
+                    crate::ui::view::tree_point(&zoomed_camera, (node.rect.x, node.rect.y));
+                x + node.rect.w * zoomed_camera.zoom >= 0.0
+                    && y + node.rect.h * zoomed_camera.zoom >= 0.0
+                    && x <= zoomed_tree.1.w
+                    && y <= zoomed_tree.1.h
+            })
+            .count();
+        assert!(
+            on_screen < zoomed_drawn.nodes.len(),
+            "a zoom of {TREE_ZOOM_IN} leaves posts outside the pane: {on_screen} of {} on screen",
+            zoomed_drawn.nodes.len()
         );
     }
 
