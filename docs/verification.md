@@ -133,7 +133,9 @@ into the cache: a capture then covers bytes → cache → marker, which is the r
 cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-chrome
                                  # panes-drag · panes-pan · panes-menu · panes-gaps · panes-gap-resize
                                  # panes-named · panes-max · panes-cards · panes-range · objects
-                                 # panes-filter · settings · settings-dismiss · pane-menu · pane-tree
+                                 # panes-filter · installations · settings · settings-dismiss
+                                 # pane-menu · pane-tree · pane-tree-narrow · pane-tree-zoom
+                                 # pane-tree-pan
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -165,6 +167,18 @@ a hidden domain hides its categories while a hidden category hides only itself, 
 order and counts are the backend's (a renamed domain on the wire draws the new name), an installation
 type is counted from the complete cache, and a toggle changes the pane that was pressed and not its
 neighbour.
+
+`installations` is the **places, not the hulls** (#109): a pier, a naval base and a radar station on
+two panes at two zooms on the same water, with the base's card open in the focused pane. The types and
+the rows arrive through `ui::apply_reply`, so the capture covers wire data → cache → mark. The assertion
+requires one **facility** mark per located facility in **each** pane at its own projection — a layer drawn
+from the wall's camera is tens of pixels out in the neighbour (`INV-04`) — and no mark for the row with no
+position (`INV-02`), because an unlocated facility is in the cache and not on the map. It also checks the
+selection is the pane's: the selected facility carries the focused pane's ring and its card draws the
+row's name, while the neighbour rings nothing. `cargo test ui::installations` holds what a capture cannot:
+`symbol_code` resolves through the manifest to an asset key (and an unknown code, or a kind with no code,
+draws the facility shape — never a hull's symbol), the filter hides a layer or one type, and selecting a
+facility closes a hull's card and selects in that pane only.
 
 `panes-range` is the same wall stripped to **two panes at two zooms on the same hull** (#115): the focused
 pane at `PHOTO_ZOOM`, where a ship is its photograph, and its neighbour at a chart zoom, where it is a

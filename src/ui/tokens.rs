@@ -44,6 +44,9 @@ pub const MARKER_TARGET: f32 = 24.0;
 /// missing picture falls back to (#110). The same 24 pt as a hull's symbol — a buoy is read from the
 /// same distance across the room, and it is not a hit target.
 pub const OBJECT_MARK: f32 = 24.0;
+/// An installation's mark (#109): the box its artwork — or the generic facility shape — is drawn in.
+/// The same 24 pt as a hull and an object, because a base is read from the same distance across the room.
+pub const INSTALLATION_MARK: f32 = 24.0;
 /// The card's edge. Stronger than a panel hairline: it has to hold its shape over light water.
 pub const CARD_BORDER: f32 = 1.0;
 
@@ -249,6 +252,13 @@ pub fn name_plate() -> Color {
 /// exactly the pixels the wall draws.
 pub fn focus_edge() -> Color {
     oklch(0.72, 0.008, 250.0)
+}
+
+/// **A facility's ink** (#109): a warm neutral, so a base reads as furniture on the water and never as
+/// the accent that means "this is happening now". **Opaque on purpose**, for the reason [`focus_edge`]
+/// records: an assertion written against a translucent token would compare a blend the wall never draws.
+pub fn facility_ink() -> Color {
+    oklch(0.74, 0.055, 82.0)
 }
 
 /// The connectors between posts in a chain of command (#116): a neutral line, a step above the

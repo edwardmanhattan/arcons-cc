@@ -1,0 +1,54 @@
+{
+  "status_code": 200,
+  "message": "Successful",
+  "data": [
+    {
+      "id": 1,
+      "id_installation_type": 5,
+      "type_name": "Dermaga",
+      "id_service_branch": 1,
+      "name": "Dermaga Sunda Kelapa",
+      "id_name": "Dermaga Sunda Kelapa",
+      "description_en": "Berth or dockyard.",
+      "note": "Berth 3",
+      "latitude": -6.2,
+      "longitude": 106.45,
+      "is_active": true
+    },
+    {
+      "id": 2,
+      "id_installation_type": 3,
+      "type_name": "Pangkalan",
+      "id_service_branch": 1,
+      "name": "Pangkalan Tanjung Priok",
+      "id_name": "Pangkalan Tanjung Priok",
+      "description_en": "Naval base.",
+      "latitude": -5.98,
+      "longitude": 106.66,
+      "is_active": true
+    },
+    {
+      "id": 3,
+      "id_installation_type": 4,
+      "type_name": "Satrad",
+      "id_service_branch": 3,
+      "name": "Satrad Cengkareng",
+      "id_name": "Satrad Cengkareng",
+      "description_en": "Radar station.",
+      "note": "Radar watch",
+      "latitude": -5.74,
+      "longitude": 106.88,
+      "is_active": true
+    },
+    {
+      "id": 4,
+      "id_installation_type": 1,
+      "type_name": "Posko",
+      "id_service_branch": 2,
+      "name": "Posko Tanpa Lokasi",
+      "id_name": "Posko Tanpa Lokasi",
+      "description_en": "Command post.",
+      "is_active": true
+    }
+  ]
+}

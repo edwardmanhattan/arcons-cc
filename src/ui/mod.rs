@@ -20,6 +20,7 @@
 
 pub mod filter;
 pub mod icons;
+pub mod installations;
 pub mod markers;
 pub mod objects;
 pub mod symbol;
@@ -182,6 +183,10 @@ pub struct PaneView {
     /// stays shared; the exclusions are the pane's, so two panes on one water can show the bases and
     /// the buoys.
     pub filter: Filter,
+    /// **The facility this pane is asking about** (#109). A facility is not a `Unit`, so it is not
+    /// `selected`: the hull's card and the facility's card are two answers to two questions, and a
+    /// pane has one card. Selecting either clears the other.
+    pub installation: Option<i64>,
 }
 
 /// The socket queue's patience: how long the fixes it delivered waited for a frame (#1).
@@ -980,6 +985,11 @@ impl State {
         self.pane(pane).and_then(|pane| pane.view.card.as_ref())
     }
 
+    /// **The facility this pane is asking about**, if any (#109).
+    pub fn installation_in(&self, pane: ViewId) -> Option<i64> {
+        self.pane(pane).and_then(|pane| pane.view.installation)
+    }
+
     /// Select a hull **in one pane**: build that pane's card from the picture and ask the reads thread for
     /// the rest.
     ///
@@ -992,6 +1002,8 @@ impl State {
         }
         if let Some(pane) = self.pane_mut(pane) {
             pane.view.selected = Some(id_unit);
+            // One pane, one card: a hull's card replaces the facility's (#109).
+            pane.view.installation = None;
         } else {
             return;
         }
@@ -1031,6 +1043,8 @@ impl State {
             pane.view.selected = None;
             pane.view.card = None;
             pane.view.last_age.clear();
+            // A facility's card is this pane's card too (#109): closing the card closes both.
+            pane.view.installation = None;
         }
     }
 
@@ -2236,6 +2250,27 @@ fn projections(
         images: &state.pictures,
     };
     let mut layer = markers::layer(&placed, frame, scale, &pictures, id);
+    // **The installations are a layer of their own** (#109): the places, not the hulls. Projected
+    // against **this** pane's frame (`INV-04`), asked of this pane's filter once, and drawn under the
+    // objects so a buoy's label reads over a base rather than under it.
+    let placed_facilities = installations::place(
+        &state.installations,
+        &state.installation_types,
+        &state.manifest,
+        frame,
+        filter,
+    );
+    let selected_facility = state.installation_in(id);
+    if let Some(facilities) = installations::layer(
+        &placed_facilities,
+        frame,
+        scale,
+        &state.assets,
+        selected_facility,
+        id,
+    ) {
+        layer = layer.child(facilities);
+    }
     // **The tactical objects are a layer of their own** (#110), projected against **this** pane's
     // frame (`INV-04`): a tiled wall draws the same water's buoys in every pane showing it. Drawn
     // after the hulls so a buoy's label reads over the picture rather than under a hull passing it.
@@ -2245,19 +2280,28 @@ fn projections(
     if let Some(objects) = objects::layer(&placed_objects, frame, scale, &state.assets, id) {
         layer = layer.child(objects);
     }
+    let points = if scale > 0.0 { f64::from(scale) } else { 1.0 };
+    let viewport = (
+        f64::from(frame.width) / points,
+        f64::from(frame.height) / points,
+    );
     if let Some(card) = state.card_in(id)
         && let Some(marker) = placed
             .iter()
             .find(|marker| marker.id_unit == card.unit.id_unit)
     {
-        let points = if scale > 0.0 { f64::from(scale) } else { 1.0 };
         let anchor = (marker.x / points, marker.y / points);
-        let viewport = (
-            f64::from(frame.width) / points,
-            f64::from(frame.height) / points,
-        );
         let placement = crate::units::card::place(anchor, viewport);
         layer = layer.child(unitcard::card(card, placement, state.now()));
+    }
+    // **The facility card** (#109): what the row carries, anchored to its mark in this pane. Drawn
+    // only when the facility is still in the layer — a hidden layer draws no floating card.
+    if let Some(selected) = selected_facility
+        && let Some(mark) = placed_facilities.iter().find(|mark| mark.id == selected)
+    {
+        let anchor = (mark.x / points, mark.y / points);
+        let placement = installations::card_placement(anchor, viewport);
+        layer = layer.child(installations::card(mark, placement));
     }
     layer
 }
@@ -3398,7 +3442,7 @@ fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool
         return true;
     }
     let focused = state.layout.focused();
-    if state.selected_in(focused).is_none() {
+    if state.selected_in(focused).is_none() && state.installation_in(focused).is_none() {
         return false;
     }
     state.clear_selection(focused);
@@ -3727,17 +3771,36 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     // the way a hull's picture is. Only the symbols the map actually places are fetched, a few per
     // frame; an unsigned entry is logged once and draws the generic mark rather than failing a read.
     if let Some(backend) = &state.backend {
+        // **Both layers name symbols**: a placement embeds its own code, and a facility's code is its
+        // *kind's* (#109). One list, deduplicated, so a code both layers use is fetched once.
+        let mut codes: Vec<String> = state
+            .placements
+            .iter()
+            .map(|placement| placement.symbol.code.clone())
+            .collect();
+        for installation in &state.installations {
+            if let Some(code) = state
+                .installation_types
+                .iter()
+                .find(|kind| kind.id == installation.id_installation_type)
+                .and_then(|kind| kind.symbol_code.clone())
+            {
+                codes.push(code);
+            }
+        }
+        codes.sort();
+        codes.dedup();
         let mut asked = 0;
-        for placement in &state.placements {
+        for code in &codes {
             if asked >= ASSETS_PER_FRAME {
                 break;
             }
-            let code = &placement.symbol.code;
+            let code = code.as_str();
             let Some(entry) = state.manifest.get(code) else {
-                // A placement's symbol is always in the manifest the library serves. A code that is
-                // not is a library the wall's cache has not caught up with: still draw something,
-                // and say so once. The empty-manifest case is "not read yet", not a missing symbol.
-                if !state.manifest.is_empty() && state.generic_logged.insert(code.clone()) {
+                // A placed symbol is always in the manifest the library serves. A code that is not is
+                // a library the wall's cache has not caught up with: still draw something, and say so
+                // once. The empty-manifest case is "not read yet", not a missing symbol.
+                if !state.manifest.is_empty() && state.generic_logged.insert(code.to_string()) {
                     tracing::warn!(
                         symbol = %code,
                         "the symbol is not in the cached manifest: the map draws the generic mark"
