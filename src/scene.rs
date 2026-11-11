@@ -312,18 +312,27 @@ pub const PANES_DRAGGED: f32 = 0.58;
 /// Where the `pane-menu` scene right-clicks: the menu's own point, in the pane's points.
 pub const MENU_AT: (f32, f32) = (300.0, 220.0);
 
+/// Which pane `panes-max` maximises: the middle one — not the first — so the capture says the picture is
+/// the pane that was asked for rather than whichever pane happened to be first.
+pub const PANES_MAXIMISED: usize = 1;
+
 /// The `panes-max` scene (#85): one pane **full size over the wall**, the tiling still behind it.
 ///
-/// The pane is the middle one — not the first — so the capture says the picture is the pane that was asked
-/// for rather than whichever pane happened to be first, and `verify` projects its hulls against a frame the
-/// size of the *panel*, which is the claim: a maximised pane is a bigger rectangle, not a different pane.
+/// The maximise is **a press on the pane's own toggle** (`fixtures/scripts/panes-max.json`), not a call
+/// to the function behind it (#111): the capture is the witness that the icon is drawn where a hand can
+/// reach it and that its press reaches `full_size_from_menu`. If the button is missing or in the wrong
+/// place, the pane stays in its slot and the assertion below has a frame the size of a slot and a
+/// maximised pane it cannot find. `verify` projects the hulls against a frame the size of the *panel*,
+/// which is the claim: a maximised pane is a bigger rectangle, not a different pane.
 fn panes_max(state: &mut State) {
     panes(state);
-    let Some(id) = state.pane_rects().get(1).map(|(id, _)| *id) else {
-        return;
-    };
-    // The gesture, not a shortcut: the same function the menu row and the close plate call.
-    crate::ui::full_size_for_scene(state, id);
+}
+
+/// The `panes-chrome` scene (#111): the tiled wall with **both corner controls in every pane**, and the
+/// filter panel open on the focused one. The open panel is the proof that the toggle is a control and
+/// not decoration; the two buttons are sampled where `view::chrome_buttons` puts them.
+fn panes_chrome(state: &mut State) {
+    panes(state);
 }
 
 /// The `panes-named` scene (#83): three panes, two of them **named** — one short enough to read and one long
@@ -456,6 +465,7 @@ pub const SCENES: &[Scene] = &[
     ("card-open", card_open),
     ("photo", photo),
     ("panes", panes),
+    ("panes-chrome", panes_chrome),
     ("panes-drag", panes_drag),
     ("panes-pan", panes_pan),
     ("panes-menu", panes_menu),
@@ -544,6 +554,7 @@ mod tests {
                 "card-open",
                 "photo",
                 "panes",
+                "panes-chrome",
                 "panes-drag",
                 // The only scene whose picture is made by an **input event** rather than by a call
                 // (`fixtures/scripts/panes-pan.json`), so it is also the only witness a dropped

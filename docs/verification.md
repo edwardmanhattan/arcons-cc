@@ -130,9 +130,10 @@ into the cache: a capture then covers bytes → cache → marker, which is the r
 **The gate renders every scene the binary lists**, and the list comes from the binary:
 
 ```sh
-cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-drag · panes-pan
-                                 # panes-menu · panes-gaps · panes-gap-resize · panes-named · panes-max
-                                 # panes-cards · panes-range · settings · settings-dismiss · pane-menu
+cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-chrome
+                                 # panes-drag · panes-pan · panes-menu · panes-gaps · panes-gap-resize
+                                 # panes-named · panes-max · panes-cards · panes-range · settings
+                                 # settings-dismiss · pane-menu
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -149,6 +150,13 @@ representation in both.
 A tiled wall also says so in its header (`40 units · panes=3`) and in its log (`pane_frames=[12, 3, 3]`): a
 wall quietly drawing three of four panes is a line in a file, not a report (#71).
 
+`panes-chrome` is the same wall with **both corner controls in every pane** (#111): a filter toggle and a
+maximise toggle at `view::chrome_buttons`, drawn after the markers and after the name plate. The capture
+opens the filter panel because `fixtures/scripts/panes-chrome.json` presses the focused pane's toggle, so
+the scene also proves the control reaches a handler rather than being decoration. The assertion samples
+each button's own rectangle for ink and measures the popover's fill against `tokens::FILTER_SIZE`; removing
+either toggle leaves a button-shaped hole and the line names the pane.
+
 `pane-menu` is a wall with **one** pane and its right-click menu open (#77) — the one shape the menu was
 never drawn on, and the only wall that needs it, because "Focus on new pane" is the only route to a second
 pane. The assertion checks the menu's box against `ui::menu_origin` and that it stays inside the picture.
@@ -161,12 +169,15 @@ element, a point measured in the element's coordinates when the layout asks in t
 press inside pane 2 was read as 2 pt from the *window's* left edge). With the drag dropped, the border
 returns to half and three assertions go red — measured, not assumed.
 
-`panes-max` is the same wall with one pane **full size over it** (#85). The assertion projects that pane's hull
-against a frame the size of the **panel** — not its slot's — which is the whole claim: a full-size pane is the
-same pane with a bigger rectangle. Rendered with the slot's frame instead, it is red: `no marker ink at
-(640, 372)`. The tiling behind is asserted structurally (`rects.len()` is still the number of panes), and the
-engine's half of it — the map thread actually rendering at the window's size and back — is an `#[ignore]`d
-test, `a_pane_resizes_to_full_size_and_back`, run with `cargo test --features map --lib -- --ignored`.
+`panes-max` is the same wall with one pane **full size over it** (#85), and since #111 the maximise is a press
+on the pane's own **toggle** (`fixtures/scripts/panes-max.json`), not a call to the function behind it. The
+assertion projects that pane's hull against a frame the size of the **panel** — not its slot's — which is the
+whole claim: a full-size pane is the same pane with a bigger rectangle. Rendered with the slot's frame instead,
+it is red: `no marker ink at (640, 372)`. A toggle that is missing, or whose press reaches no handler, leaves
+the pane in its slot and the assertion finds no full-size picture. The tiling behind is asserted structurally
+(`rects.len()` is still the number of panes), and the engine's half of it — the map thread actually rendering at
+the window's size and back — is an `#[ignore]`d test, `a_pane_resizes_to_full_size_and_back`, run with
+`cargo test --features map --lib -- --ignored`.
 
 `panes-named` is the same wall with **two panes named and one not** (#83): a short name, a name long enough to
 be cut, and a pane somebody never named. The assertion probes `ui::view::name_probe` — the rectangle the plate
@@ -195,7 +206,8 @@ assertion measures the sheet's box against `tokens::SHEET_SIZE` and requires ink
 assertion samples each row of the menu from `tokens::MENU_ROW` rather than from the surface's declared size, so
 a surface shorter than its items is caught: the second label still draws, it just hangs off the plate — which
 is what the ticket meant by "a menu sized for one row clips the second", and what the first attempt at the
-assertion missed by asking the same function that drew it.
+assertion missed by asking the same function that drew it. Since #111 the menu has **two rows** on one pane and
+**three** on a tiled wall: `Full size` / `Back to the wall` left it for the pane chrome's maximise toggle.
 
 `panes-drag` is the same wall with a pane **lifted** (#70, #84): one pane dimmed in its slot, and the pane in
 the air **drawn on the slot it will land in** — `Layout::preview`'s rectangle, the pane's own camera projected

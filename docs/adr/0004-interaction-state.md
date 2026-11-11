@@ -45,6 +45,7 @@ pub enum Interaction {
     Lifted(PaneDrag),                       // a pane is in the air (#70, #84)
     Resizing(view::Border),                 // a border is held (#69)
     Menu { pane: ViewId, at: (f32, f32) },  // a pane's menu (#77, #81, #83)
+    Filtering { pane: ViewId },             // a pane's filter panel (#111)
     Renaming(Rename),                       // a name sheet (#83)
     Settings,                               // the settings sheet (#82, #98)
 }
@@ -70,25 +71,31 @@ here: they live on the pane (`PaneView`, #99), because a wall has one interactio
 `+` is taken, `·` is refused. Read a row as "the wall is in this state"; a column as "the operator asks for
 this".
 
-| from \ begin | Lift | Resize | Menu | Rename | Settings |
-| --- | --- | --- | --- | --- | --- |
-| **Idle** | + | + | + | + | + |
-| **Lifted** | + (re-aim) | · | · | · | · |
-| **Resizing** | · | + (re-grip) | · | · | · |
-| **Menu** | + | + | + (move) | + | + |
-| **Renaming** | · | · | · | + | · |
-| **Settings** | · | · | · | · | + |
+| from \ begin | Lift | Resize | Menu | Filter | Rename | Settings |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Idle** | + | + | + | + | + | + |
+| **Lifted** | + (re-aim) | · | · | · | · | · |
+| **Resizing** | · | + (re-grip) | · | · | · | · |
+| **Menu** | + | + | + (move) | + | + | + |
+| **Filtering** | · | · | · | + (move) | · | · |
+| **Renaming** | · | · | · | · | + | · |
+| **Settings** | · | · | · | · | · | + |
 
 The rules behind the cells:
 
-- **One hold at a time.** A lift and a border both hold the pointer, so neither can start over the other.
-  Rune hands a drag to one element anyway; this says so where the state is, not where the pointer is.
+- **One hold at a time.** A lift, a border and a filter panel all hold the pointer, so none can start over
+  another. Rune hands a drag to one element anyway; this says so where the state is, not where the pointer
+  is.
 - **A menu holds nothing**, so a press elsewhere closes it and whatever the press means then happens: a
-  lift, a border, a rename seeded from the row the operator pressed, the settings sheet from the header.
+  lift, a border, a filter panel from its toggle, a rename seeded from the row the operator pressed, the
+  settings sheet from the header.
+- **A filter panel holds the pointer but is not modal.** It is a choice about the picture, so the picture
+  stays visible: no scrim, no dimming, no keyboard. A press outside dismisses it and does nothing else.
 - **A sheet holds the keyboard** (renaming) or the pointer (settings), and is modal, so nothing starts behind
   it. A sheet cannot open behind another sheet.
 - **Re-entering is a move, not a second copy.** A menu re-asked on another pane moves; a lift re-aimed
-  updates its drop; the settings sheet asked for twice is still one sheet.
+  updates its drop; a filter panel re-asked on another pane moves; the settings sheet asked for twice is
+  still one sheet.
 
 **What is deliberately *not* in this machine: `Maximised`.** A pane drawn full size over the tiling is a
 **layout** fact — `Layout::maximised` — and not a thing the wall is holding:
@@ -97,7 +104,8 @@ The rules behind the cells:
   Escape from a card leaves it up);
 - it has its own way back (`Back to the wall`, the `max-close` plate, and Escape after the holds are released);
 - the tiling behind it is untouched, so "maximised while renaming" is two independent facts rather than a
-  state pair to enumerate — which halves the table.
+  state pair to enumerate — which halves the table. The pane chrome's maximise toggle (#111) is a second
+  way to ask for the same layout fact, not a seventh hold.
 
 ## What this buys
 
