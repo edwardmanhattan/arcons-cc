@@ -18,6 +18,7 @@
 //! Without `--features map` the map element is absent and the panel says so: the engine is optional
 //! so the gate stays free of C++ and of a network. `--probe-map` is the headless witness.
 
+pub mod filter;
 pub mod icons;
 pub mod markers;
 pub mod objects;
@@ -28,6 +29,7 @@ pub mod unitcard;
 pub mod view;
 mod viewpoint;
 
+pub use filter::Filter;
 pub use view::{Dir, Layout, Rect, ViewId};
 
 use std::process::ExitCode;
@@ -160,9 +162,9 @@ impl Pane {
 /// `projections()` — the one function that draws "markers + card against this frame" — drew the same card
 /// in every pane, and a press in one pane opened a card in all of them.
 ///
-/// **`filter` is deliberately here before it is used.** The operator's next ask is per-pane filters
-/// (ships in pane 1, planes in pane 2, altitude in pane 3). Another field added later would be the same
-/// mistake a second time: the pane's state is one thing, so it has one home.
+/// **The filter is here** (#112), beside the selection and the range, because the pane's state is one
+/// thing: a wall-wide filter would be #99's shared selection in a new costume — press one pane's toggle
+/// and every pane loses its buoys.
 #[derive(Clone, Debug, Default)]
 pub struct PaneView {
     /// The hull this pane is asking about. One per pane (`INV-10` per pane, not per wall).
@@ -176,17 +178,10 @@ pub struct PaneView {
     /// (`units::mark`). One latch per pane (#115): each pane has its own zoom, so each pane has its own
     /// representation — zooming one pane into a hull's picture must not switch its neighbour.
     pub range: crate::units::mark::Range,
-    /// Which hulls this pane draws (all of them, for now). The operator's next ticket: a pane per
-    /// question — ships, planes, altitide — and the data stays shared.
+    /// **What this pane hides** (#112): the three layers and the backend's two vocabularies. The data
+    /// stays shared; the exclusions are the pane's, so two panes on one water can show the bases and
+    /// the buoys.
     pub filter: Filter,
-}
-
-/// What a pane draws. `All` today; the vocabulary exists so a filter is a value and not a boolean.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Filter {
-    /// Every hull the wall knows about.
-    #[default]
-    All,
 }
 
 /// The socket queue's patience: how long the fixes it delivered waited for a frame (#1).
@@ -441,6 +436,16 @@ pub struct State {
     pub manifest:
         std::collections::HashMap<String, crate::data::types::TacticalObjectManifestEntry>,
     pub placements: Vec<crate::data::types::TacticalObjectPlacement>,
+    /// **The facility vocabulary and the facilities** (#109's reads, cached at init for #112's panel and
+    /// for the layer #109 draws). `GET /installations` is unpaginated, so this is the complete set and a
+    /// type's count is the cache's, not a page's. Neither list is re-read per frame: a refresh is a
+    /// deliberate read.
+    pub installation_types: Vec<crate::data::types::InstallationType>,
+    pub installations: Vec<crate::data::types::Installation>,
+    /// **The tactical-object picker's vocabulary** (`GET /tactical-objects/facets`), read once at init:
+    /// the panel's domain and category rows and the **server's** counts for them. `None` is "not read
+    /// yet", which draws no vocabulary rows rather than an empty vocabulary.
+    pub facets: Option<crate::data::types::TacticalObjectFacets>,
     /// Decoded artwork, by the manifest's `asset_key`. The same `ImageCache` route a hull's picture
     /// takes: bytes arrive as a reply, decode off the UI thread, one handle per key (`#110`).
     pub assets: std::collections::HashMap<String, rune::Image>,
@@ -531,6 +536,9 @@ impl Default for State {
             asked_images: std::collections::HashSet::new(),
             manifest: std::collections::HashMap::new(),
             placements: Vec::new(),
+            installation_types: Vec::new(),
+            installations: Vec::new(),
+            facets: None,
             assets: std::collections::HashMap::new(),
             assets_pending: std::collections::HashSet::new(),
             asked_assets: std::collections::HashSet::new(),
@@ -941,6 +949,7 @@ impl State {
             let marker = crate::ui::markers::place(
                 &self.picture,
                 &frame,
+                &pane.view.filter,
                 self.now(),
                 self.stale_after,
                 pane.view.range,
@@ -1536,12 +1545,10 @@ fn rename_sheet(state: &State) -> El {
         .child(sheet)
 }
 
-/// What the filter panel is called, and the one layer the wall has until #112.
+/// What the filter panel is called. Its rows are the backend's (#112), not a list written here.
 pub const FILTER_TITLE: &str = "Filter";
-pub const FILTER_HULLS: &str = "Hulls";
-pub const FILTER_ON: &str = "on";
 
-/// The filter panel (#111): a popover anchored to a pane's filter toggle, **not a modal**.
+/// The filter panel (#111, #112): a popover anchored to a pane's filter toggle, **not a modal**.
 ///
 /// A filter is a choice about the picture, so the picture has to stay visible while it is made — the
 /// scrim a sheet draws would hide the water the operator is choosing for. The panel is nevertheless a
@@ -1551,11 +1558,28 @@ pub const FILTER_ON: &str = "on";
 /// It is attached at the root rather than inside the pane because a pane clips its picture; a panel
 /// hanging outside its pane's right edge would be cut off, and the right-hand pane is exactly where the
 /// toggle sits nearest the window's edge.
+///
+/// **The rows are a projection of the backend's vocabulary** (`filter::rows`): three layer switches, the
+/// facility types from `/installation-types`, and the domains and categories from
+/// `/tactical-objects/facets` with the server's counts. The panel **scrolls inside itself** rather than
+/// growing past the pane, because a vocabulary's length is not ours to decide and a panel that grew over
+/// the water would hide the thing it filters.
 fn filter_panel(state: &State, body: El) -> El {
     let Some(pane) = state.filtering() else {
         return body;
     };
-    let (w, h) = tokens::FILTER_SIZE;
+    let rows = state
+        .pane(pane)
+        .map(|pane| {
+            filter::rows(
+                &pane.view.filter,
+                state.facets.as_ref(),
+                &state.installation_types,
+                &state.installations,
+            )
+        })
+        .unwrap_or_default();
+    let (w, h) = tokens::filter_size(rows.len());
     let panel = col()
         .key("filter-panel")
         // Anchored to the toggle's own key, below it and right-aligned: the panel grows towards the
@@ -1576,26 +1600,18 @@ fn filter_panel(state: &State, body: El) -> El {
         // catcher below and close the panel the operator was reading.
         .on_press(|_: &mut State| {})
         .child(text(FILTER_TITLE).font(tokens::TITLE).color(tokens::ink()))
-        // One layer, in words. The layers and their toggles arrive with #112; this is the shell.
         .child(
-            row()
-                .key("filter-row-hulls")
-                .h(tokens::MENU_ROW)
+            col()
+                .key("filter-rows")
                 .w_full()
-                .items_center()
-                .gap(tokens::GAP)
-                .child(
-                    text(FILTER_HULLS)
-                        .font(tokens::LABEL)
-                        .color(tokens::ink())
-                        .grow(1.0),
-                )
-                .child(
-                    text(FILTER_ON)
-                        .key("filter-hulls-value")
-                        .font(tokens::LABEL)
-                        .color(tokens::accent()),
-                ),
+                .grow(1.0)
+                // A scroll viewport needs a bounded height in every flex ancestor, or it grows to its
+                // content and never overflows (`El::scroll`'s own rule).
+                .min_h(tokens::FILTER_SCROLL_MIN_H)
+                .scroll(rune::ScrollSpec {
+                    stick_bottom: false,
+                })
+                .children(rows.iter().map(|entry| filter_row(pane, entry))),
         );
     body.child(
         // The catcher is the panel's parent and the press that dismisses it. It is transparent and not
@@ -1609,6 +1625,48 @@ fn filter_panel(state: &State, body: El) -> El {
             })
             .child(panel),
     )
+}
+
+/// One row of the filter panel: a label from the vocabulary, its count and state, and the press that
+/// flips **this pane's** filter.
+///
+/// The press calls [`filter::toggle_in`], the one function behind every row, so a row cannot be added
+/// that changes the wall instead of the pane. The state is also in words (`on` / `off`), not only in the
+/// label's colour: a wall is read from across a room.
+fn filter_row(pane: ViewId, entry: &filter::Row) -> El {
+    let target = entry.target;
+    let label_ink = if entry.hidden {
+        tokens::ink_dim()
+    } else {
+        tokens::ink()
+    };
+    let value_ink = if entry.hidden {
+        tokens::ink_dim()
+    } else {
+        tokens::accent()
+    };
+    let indent = if entry.depth > 0 {
+        tokens::FILTER_INDENT
+    } else {
+        0.0
+    };
+    row()
+        .key(format!("filter-row-{}", entry.key))
+        .h(tokens::FILTER_ROW)
+        .w_full()
+        .items_center()
+        .gap(tokens::GAP)
+        .px(indent)
+        .on_press(move |state: &mut State| {
+            filter::toggle_in(state, pane, target);
+        })
+        .child(
+            text(entry.label.clone())
+                .font(tokens::LABEL)
+                .color(label_ink)
+                .grow(1.0),
+        )
+        .child(text(entry.value()).font(tokens::LABEL).color(value_ink))
 }
 
 /// The key of the filter toggle the panel anchors to. A maximised pane draws a second toggle over the
@@ -2125,6 +2183,7 @@ fn ghost(state: &State, scale: f32, body: El) -> El {
     let placed = markers::place(
         &state.picture,
         &frame,
+        &pane.view.filter,
         state.now(),
         state.stale_after,
         pane.view.range,
@@ -2159,9 +2218,15 @@ fn projections(
         .pane(id)
         .map(|pane| pane.view.range)
         .unwrap_or_default();
+    let default_filter = Filter::default();
+    let filter = state
+        .pane(id)
+        .map(|pane| &pane.view.filter)
+        .unwrap_or(&default_filter);
     let placed = markers::place(
         &state.picture,
         frame,
+        filter,
         state.now(),
         state.stale_after,
         range,
@@ -2174,7 +2239,9 @@ fn projections(
     // **The tactical objects are a layer of their own** (#110), projected against **this** pane's
     // frame (`INV-04`): a tiled wall draws the same water's buoys in every pane showing it. Drawn
     // after the hulls so a buoy's label reads over the picture rather than under a hull passing it.
-    let placed_objects = objects::place(&state.placements, &state.manifest, frame);
+    // **The layer's own filter** (#112): the placement function asks the pane's filter, so a hidden
+    // domain or category is absent from this pane's layer and every other layer is untouched.
+    let placed_objects = objects::place(&state.placements, &state.manifest, frame, filter);
     if let Some(objects) = objects::layer(&placed_objects, frame, scale, &state.assets, id) {
         layer = layer.child(objects);
     }
@@ -3212,6 +3279,59 @@ pub(crate) fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool
                 "the supreme command did not read: the chain of command is drawn without its root"
             );
         }
+        // **The filter's vocabularies** (#112). None of these is re-read per frame: they are the
+        // backend's vocabulary, and the panel is a projection of it. A failed read is one log line and
+        // an empty (or shorter) vocabulary, never a panel that invents rows.
+        crate::data::Reply::InstallationTypes(Ok(types)) => {
+            tracing::info!(
+                types = types.len(),
+                endpoint = "GET /installation-types",
+                "the facility vocabulary was cached"
+            );
+            state.installation_types.clone_from(types);
+            changed = true;
+        }
+        crate::data::Reply::InstallationTypes(Err(error)) => {
+            tracing::warn!(
+                endpoint = "GET /installation-types",
+                error = %error,
+                "the facility vocabulary did not read: the filter draws no facility rows"
+            );
+        }
+        crate::data::Reply::Installations(Ok(places)) => {
+            tracing::info!(
+                facilities = places.len(),
+                endpoint = "GET /installations",
+                "the facilities were cached: the complete set, so a type's count is the cache's"
+            );
+            state.installations.clone_from(places);
+            changed = true;
+        }
+        crate::data::Reply::Installations(Err(error)) => {
+            tracing::warn!(
+                endpoint = "GET /installations",
+                error = %error,
+                "the facilities did not read: the filter's type counts are short until a refresh"
+            );
+        }
+        crate::data::Reply::TacticalObjectFacets(Ok(facets)) => {
+            tracing::info!(
+                total = facets.total,
+                domains = facets.domains.len(),
+                categories = facets.categories.len(),
+                endpoint = "GET /tactical-objects/facets",
+                "the filter vocabulary was cached: the counts are the server's"
+            );
+            state.facets = Some(facets.clone());
+            changed = true;
+        }
+        crate::data::Reply::TacticalObjectFacets(Err(error)) => {
+            tracing::warn!(
+                endpoint = "GET /tactical-objects/facets",
+                error = %error,
+                "the filter vocabulary did not read: the panel draws the layers only"
+            );
+        }
         _ => {}
     }
     changed
@@ -3411,6 +3531,13 @@ fn setup(state: &mut State, waker: rune::Waker) {
         // deliberate, not per frame, so neither is asked again by `poll`.
         backend.request(crate::data::Command::TacticalObjectManifest);
         backend.request(crate::data::Command::TacticalObjectPlacements);
+        // **The filter panel's vocabularies, and the facilities' cache** (#112): the facility types and
+        // the complete installation list (they are unpaginated, so the counts are the cache's), and the
+        // tactical-object facets (their counts are the server's). Read once at init, like the manifest:
+        // a refresh is deliberate, and a pane does not re-read the vocabulary when it opens.
+        backend.request(crate::data::Command::InstallationTypes);
+        backend.request(crate::data::Command::Installations);
+        backend.request(crate::data::Command::TacticalObjectFacets);
     }
     // **Where the wall opens** (#108): one read, off this thread, for the pane that exists now. The
     // first frame draws the seed camera whether or not it has answered — a late read is not a blank

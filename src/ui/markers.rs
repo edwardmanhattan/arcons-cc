@@ -51,14 +51,22 @@ pub struct Placed {
 ///
 /// Pure, so the placement can be asserted without a window: the test that no marker exists for a
 /// silent hull asks this function, and the test that a marker lands on its projection asks it too.
+///
+/// **The pane's filter is the placement's, not the layer's caller's** (#112): a pane that hides the live
+/// feed's layer gets no markers from this function, so there is no second place where "hulls are off"
+/// could be forgotten and no `if` inside the element builder.
 pub fn place(
     picture: &crate::units::Picture,
     frame: &Rendered,
+    filter: &crate::ui::filter::Filter,
     now: Instant,
     stale_after: std::time::Duration,
     range: crate::units::mark::Range,
     sizes: &dyn Fn(i64) -> Option<crate::units::mark::Size>,
 ) -> Vec<Placed> {
+    if filter.hides_hulls() {
+        return Vec::new();
+    }
     picture
         .units()
         .iter()
@@ -300,6 +308,7 @@ mod tests {
         let placed = place(
             &picture,
             &frame(),
+            &crate::ui::filter::Filter::default(),
             Instant::now(),
             crate::units::STALE_AFTER,
             crate::units::mark::Range::Symbol,
@@ -317,6 +326,31 @@ mod tests {
         );
     }
 
+    /// **A pane that hides the live feed's layer gets no markers** (#112). The layer switch is the
+    /// placement function's question, so nothing downstream has a second chance to draw one.
+    #[test]
+    fn a_hidden_hull_layer_places_nothing() {
+        let mut picture = Picture::default();
+        picture.replace_from_feed(&[entry(8, Some(fix(-6.1, 106.9, 5.0, false)))]);
+        let filter = crate::ui::filter::Filter {
+            hulls: true,
+            ..crate::ui::filter::Filter::default()
+        };
+        let placed = place(
+            &picture,
+            &frame(),
+            &filter,
+            Instant::now(),
+            crate::units::STALE_AFTER,
+            crate::units::mark::Range::Symbol,
+            &|_| None,
+        );
+        assert!(
+            placed.is_empty(),
+            "the hulls layer is off, so this pane draws no markers: {placed:?}"
+        );
+    }
+
     #[test]
     fn a_marker_lands_exactly_where_the_map_projects_its_fix() {
         // INV-04 seen from the drawing side: the placement is the frame's own projection, within a
@@ -327,6 +361,7 @@ mod tests {
         let placed = place(
             &picture,
             &frame,
+            &crate::ui::filter::Filter::default(),
             Instant::now(),
             crate::units::STALE_AFTER,
             crate::units::mark::Range::Symbol,
@@ -357,6 +392,7 @@ mod tests {
         let placed = place(
             &picture,
             &frame(),
+            &crate::ui::filter::Filter::default(),
             Instant::now(),
             crate::units::STALE_AFTER,
             crate::units::mark::Range::Symbol,
@@ -389,6 +425,7 @@ mod tests {
         let placed = place(
             &picture,
             &frame(),
+            &crate::ui::filter::Filter::default(),
             Instant::now(),
             crate::units::STALE_AFTER,
             crate::units::mark::Range::Symbol,
