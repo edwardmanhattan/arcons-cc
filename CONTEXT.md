@@ -17,7 +17,7 @@ up in the wrong ocean. This file defines the vocabulary; the code uses it exactl
 | **Backfilled** | Reconstructed from an offline backlog. Real, the newest thing known, and **it did not just happen**. | "current", "live", "late" |
 | **Measured** | A Fix a beacon reported. `speed_kn` and `course_deg` exist or they do not. | "actual", "true" |
 | **Derived** | A position computed along an order rather than reported by a beacon. Never mixed with Measured silently. | "estimated" as a synonym for both |
-| **Interaction** | What the wall is *holding* right now: nothing, a lifted pane, a border, a menu, a rename, the settings sheet. One value (`Interaction`), so two holds at once is unrepresentable (#101). | "mode", "dialog state", a set of booleans |
+| **Interaction** | What the wall is *holding* right now: nothing, a lifted pane, a border, a menu, a filter panel, a rename, the settings sheet. One value (`Interaction`), so two holds at once is unrepresentable (#101). | "mode", "dialog state", a set of booleans |
 | **Pane** | One rectangle of the wall: its own camera, its own map thread, its own frame. | "window", "viewport", "split" |
 | **Pane view** | What *that* pane is looking at: its selection, its card, its symbol-or-picture range, and (soon) its filter. `PaneView`. | the wall's selection — there is no such thing |
 
@@ -34,11 +34,14 @@ up in the wrong ocean. This file defines the vocabulary; the code uses it exactl
   (`INV-06`).
 - **No history exists** on `live-feed`. After a reconnect, re-read before trusting a marker
   (`INV-09`).
-- **A menu holds nothing; a sheet holds the keyboard or the pointer.** That is the difference the
-  interaction table turns on (`docs/adr/0004-interaction-state.md`): a menu is dismissed by the press
-  that starts the next thing, and a sheet must be dismissed before anything else can start.
+- **A menu holds nothing; a filter panel holds the pointer; a sheet holds the keyboard or the pointer.**
+  That is the difference the interaction table turns on (`docs/adr/0004-interaction-state.md`): a menu is
+  dismissed by the press that starts the next thing, a filter panel is dismissed by a press outside it
+  (the picture stays visible — that is why it is not a sheet), and a sheet must be dismissed before
+  anything else can start.
 - **A maximised pane is layout, not interaction.** It survives every menu, sheet and gesture coming
-  and going, which is why it lives on the `Layout` and the table stays six rows.
+  and going, which is why it lives on the `Layout` and the table stays seven rows — a filter panel is a
+  hold, but a full-size pane is not.
 - **The data is shared; the question is not.** One Feed, one socket, one Picture — but which hull a
   pane is asking about is that pane's, so a card in one pane is not a card in another (`INV-10`).
   A wall-wide selection was the first version and it drew the same card in every pane.

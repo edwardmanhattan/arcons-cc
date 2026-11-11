@@ -62,6 +62,13 @@ pub const PANE_EDGE_BAND: f32 = 0.3;
 /// A pane's handle: the mark you grab to move a pane, and its size in points. Small enough not to
 /// cover the water, large enough to find without aiming.
 pub const PANE_HANDLE: (f32, f32) = (28.0, 4.0);
+/// A pane's chrome buttons: the filter and maximise toggles in its top-right corner (#111). A square the
+/// size of a touch target — the same 24 pt rule as a marker (`MARKER_TARGET`) — because a control found
+/// by aiming is a control an operator on a wall does not use.
+pub const PANE_BUTTON: f32 = 24.0;
+/// The filter panel's shell: wide enough for a layer's words and as tall as its title and one row. The
+/// layers arrive in #112; this box is the surface they will fill, so the shell is measured now.
+pub const FILTER_SIZE: (f32, f32) = (216.0, 120.0);
 /// A pane menu's own size, in points. A context menu is a **surface with a known box** on this wall, not
 /// an intrinsic one: the drag of a menu's corner is not a gesture the operator has, and a known box is
 /// what lets the menu be clamped inside the pane it was asked on without measuring the text first (#77).

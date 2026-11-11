@@ -18,6 +18,7 @@
 //! Without `--features map` the map element is absent and the panel says so: the engine is optional
 //! so the gate stays free of C++ and of a network. `--probe-map` is the headless witness.
 
+pub mod icons;
 pub mod markers;
 pub mod symbol;
 pub mod tokens;
@@ -64,7 +65,9 @@ pub struct Pane {
     /// filter it will draw with. The wall's data is shared — one picture, one socket, one fleet — and the
     /// *question* is not: two panes may ask about two hulls, and a press in one must not answer in the other.
     pub view: PaneView,
-    /// What the operator called this pane (#83). `None` draws nothing: a name nobody typed is not a name.
+    /// **The name the operator typed** (#83, #113). `None` means "nobody named this pane": the plate then
+    /// draws the pane's own number from [`Pane::title`], because a title is not a name invented — a name is
+    /// something somebody typed.
     ///
     /// It lives on the pane and not in `settings.toml`, because a pane does not survive a restart yet — a
     /// saved layout (which panes, at which cameras, in what tiling) is its own ticket, and a name that
@@ -73,6 +76,15 @@ pub struct Pane {
 }
 
 impl Pane {
+    /// **What the plate says** (#113): the name the operator typed, or the pane's own number.
+    ///
+    /// The number comes from the pane's **id**, not its position: a re-tile keeps an id and a close does
+    /// not renumber the others, so a wall can honestly show `pane-01` and `pane-03` after the second pane
+    /// was closed. Renumbering by position would rename panes whenever they were dragged.
+    pub fn title(&self) -> String {
+        self.name.clone().unwrap_or_else(|| default_title(self.id))
+    }
+
     pub fn new(id: ViewId, camera: Camera) -> Self {
         Self {
             id,
@@ -240,6 +252,14 @@ impl Rename {
         edit.focused = true;
         Rename { pane, edit }
     }
+}
+
+/// **The only place the default title's form is written** (#113): `pane-01`, `pane-02`, … from the pane's
+/// id, zero-padded to two digits so a wall of nine panes does not draw a column of ragged edges.
+///
+/// Past 99 it simply grows (`pane-100`): a wall with a hundred panes is not a wall this app is for.
+pub fn default_title(id: ViewId) -> String {
+    format!("pane-{id:02}")
 }
 
 /// What a name shows: trimmed, cut to `tokens::NAME_MAX_CHARS` with a drawn ellipsis. `None` for a name
@@ -520,6 +540,15 @@ impl State {
         }
     }
 
+    /// The pane whose filter panel is open — `None` when no panel is. The panel is anchored to that
+    /// pane's toggle, so the pane is all the state needs.
+    pub fn filtering(&self) -> Option<ViewId> {
+        match self.interaction {
+            Interaction::Filtering { pane } => Some(pane),
+            _ => None,
+        }
+    }
+
     /// The lifted pane and its drop, if one is in the air.
     pub fn dragging(&self) -> Option<PaneDrag> {
         match self.interaction {
@@ -575,6 +604,7 @@ impl State {
             Begin::Lift(drag) => Interaction::Lifted(drag),
             Begin::Resize(border) => Interaction::Resizing(border),
             Begin::Menu { pane, at } => Interaction::Menu { pane, at },
+            Begin::Filter { pane } => Interaction::Filtering { pane },
             Begin::Rename(rename) => Interaction::Renaming(rename),
             Begin::Settings => Interaction::Settings,
         };
@@ -935,6 +965,9 @@ pub enum Interaction {
     Resizing(view::Border),
     /// A pane's menu is open (#77, #81, #83). Passive: it holds nothing, so a press elsewhere closes it.
     Menu { pane: ViewId, at: (f32, f32) },
+    /// A pane's filter panel is open (#111). **The pointer is the panel's**, but it is not modal: the
+    /// picture stays visible behind it, and a press outside dismisses it.
+    Filtering { pane: ViewId },
     /// A pane is being named (#83). **The keyboard is the sheet's**, and the sheet is modal.
     Renaming(Rename),
     /// The settings sheet is open (#82, #98). Modal, and it holds the pointer.
@@ -949,6 +982,7 @@ pub enum Begin {
     Lift(PaneDrag),
     Resize(view::Border),
     Menu { pane: ViewId, at: (f32, f32) },
+    Filter { pane: ViewId },
     Rename(Rename),
     Settings,
 }
@@ -970,6 +1004,12 @@ impl Begin {
             }
             // A menu opens where nothing has the pointer; from another menu it moves.
             (Begin::Menu { .. }, Interaction::Idle | Interaction::Menu { .. }) => true,
+            // A filter panel is a hold, but not a modal one: it opens from nothing or from a menu (which
+            // holds nothing), and a second ask moves it. Once it is open the pointer is its.
+            (
+                Begin::Filter { .. },
+                Interaction::Idle | Interaction::Menu { .. } | Interaction::Filtering { .. },
+            ) => true,
             // Naming comes from the menu ("Name this pane…") and from the wall, never from behind a sheet.
             (Begin::Rename(_), Interaction::Idle | Interaction::Menu { .. }) => true,
             // The settings sheet replaces a menu — the header's own control is the way in — and replaces
@@ -991,6 +1031,7 @@ impl std::fmt::Debug for Interaction {
             Interaction::Lifted(_) => "Lifted",
             Interaction::Resizing(_) => "Resizing",
             Interaction::Menu { .. } => "Menu",
+            Interaction::Filtering { .. } => "Filtering",
             Interaction::Renaming(_) => "Renaming",
             Interaction::Settings => "Settings",
         };
@@ -1081,8 +1122,8 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .color(link_colour),
         )
         // The one piece of chrome on the wall that is a control: everything else is the picture. It is a
-        // word, not an icon, because there is no icon set on this wall and a glyph nobody can name is a
-        // button nobody presses (#82).
+        // word because there is room for one here, and a word needs no catalogue to read (#82). The pane
+        // chrome's icons say their meaning in help text for the same reason (#111).
         .child(
             text(SETTINGS_LABEL)
                 .key("settings-open")
@@ -1114,6 +1155,10 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
     // **Only when open**: an empty child is still a child, and the root's own gap would take 8 pt off the
     // picture to lay it out — which is what a capture noticed (#82) before a golden was regenerated.
     let mut root = root.child(picture(state, scale));
+    // The filter panel is a popover, not a child of the pane: a pane clips its picture, so an overlay
+    // inside it would be cut off at the pane's edge and a panel next to the right-hand pane would be a
+    // sliver. It is attached here, after its anchor, so Rune can place it beside the toggle.
+    root = filter_panel(state, root);
     if state.settings_open() {
         root = root.child(settings_sheet(state, scale));
     }
@@ -1123,8 +1168,8 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
     root
 }
 
-/// What the header's one control says. A word, because a wall has no icon set and an unnameable glyph is
-/// an unpressable button (#82).
+/// What the header's one control says. A word, because there is room for one and a word needs no catalogue
+/// to read (#82); the pane chrome's icons carry their meaning in help text (#111).
 pub const SETTINGS_LABEL: &str = "settings";
 
 /// What the settings sheet calls its one setting, and what the row says when it is on and off.
@@ -1290,6 +1335,103 @@ fn rename_sheet(state: &State) -> El {
         .child(sheet)
 }
 
+/// What the filter panel is called, and the one layer the wall has until #112.
+pub const FILTER_TITLE: &str = "Filter";
+pub const FILTER_HULLS: &str = "Hulls";
+pub const FILTER_ON: &str = "on";
+
+/// The filter panel (#111): a popover anchored to a pane's filter toggle, **not a modal**.
+///
+/// A filter is a choice about the picture, so the picture has to stay visible while it is made — the
+/// scrim a sheet draws would hide the water the operator is choosing for. The panel is nevertheless a
+/// hold: a transparent catcher behind it makes the press outside dismiss it and do nothing else, which
+/// is what `Interaction::Filtering` records and `tests/transitions.rs` checks.
+///
+/// It is attached at the root rather than inside the pane because a pane clips its picture; a panel
+/// hanging outside its pane's right edge would be cut off, and the right-hand pane is exactly where the
+/// toggle sits nearest the window's edge.
+fn filter_panel(state: &State, body: El) -> El {
+    let Some(pane) = state.filtering() else {
+        return body;
+    };
+    let (w, h) = tokens::FILTER_SIZE;
+    let panel = col()
+        .key("filter-panel")
+        // Anchored to the toggle's own key, below it and right-aligned: the panel grows towards the
+        // water, not over the hull the operator is about to filter.
+        .anchored(
+            filter_anchor(state, pane),
+            rune::Side::Bottom,
+            rune::Align::End,
+            tokens::GAP,
+        )
+        .size(w, h)
+        .padding(tokens::PAD)
+        .gap(tokens::GAP)
+        .radius(tokens::PANEL_RADIUS)
+        .fill(tokens::bg())
+        .border(tokens::HAIRLINE, tokens::card_edge())
+        // A press that lands on the panel is not a press outside it: without this it would reach the
+        // catcher below and close the panel the operator was reading.
+        .on_press(|_: &mut State| {})
+        .child(text(FILTER_TITLE).font(tokens::TITLE).color(tokens::ink()))
+        // One layer, in words. The layers and their toggles arrive with #112; this is the shell.
+        .child(
+            row()
+                .key("filter-row-hulls")
+                .h(tokens::MENU_ROW)
+                .w_full()
+                .items_center()
+                .gap(tokens::GAP)
+                .child(
+                    text(FILTER_HULLS)
+                        .font(tokens::LABEL)
+                        .color(tokens::ink())
+                        .grow(1.0),
+                )
+                .child(
+                    text(FILTER_ON)
+                        .key("filter-hulls-value")
+                        .font(tokens::LABEL)
+                        .color(tokens::accent()),
+                ),
+        );
+    body.child(
+        // The catcher is the panel's parent and the press that dismisses it. It is transparent and not
+        // `modal`: the wall is dimmed by nothing and inert only for the pointer, which is the hold the
+        // filter claims.
+        el().key("filter-catcher")
+            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .on_press(|state: &mut State| {
+                state.end();
+                state.layout_dirty = true;
+            })
+            .child(panel),
+    )
+}
+
+/// The key of the filter toggle the panel anchors to. A maximised pane draws a second toggle over the
+/// tiled one, and Rune anchors to the first node with the key: without the `-max-` key the panel would
+/// hang off the hidden toggle in the slot behind the scrim instead of the one the operator pressed.
+fn filter_anchor(state: &State, pane: ViewId) -> String {
+    if state.maximised() == Some(pane) {
+        format!("filter-max-{pane}")
+    } else {
+        format!("filter-{pane}")
+    }
+}
+
+/// A press on the filter toggle: open the panel, or close it if this pane's is already open.
+fn toggle_filter(state: &mut State, pane: ViewId) {
+    state.layout.focus(pane);
+    if state.filtering() == Some(pane) {
+        state.end();
+    } else {
+        state.begin(Begin::Filter { pane });
+    }
+    state.layout_dirty = true;
+}
+
 /// The gap switch: `on` is a real gap, `off` is panes that share a border — the look the wall had before
 /// settings existed, so the default draws what a wall drew yesterday.
 ///
@@ -1394,19 +1536,26 @@ fn maximised(state: &State, scale: f32, body: El) -> El {
         );
     }
     sheet = sheet.child(projections(state, id, &frame, scale));
-    if let Some(plate) = name_plate(pane) {
-        sheet = sheet.child(plate);
-    }
-    // The way back, said in words and pressable: a wall has no title bar to close and no icon set to
-    // draw an × with.
+    sheet = sheet.child(name_plate(pane));
+    // The same chrome row, and the maximise toggle says "back to the wall" because that is what the
+    // press will do (#111). It is the pane's own toggle, not a second control invented for this shape.
+    sheet = sheet.child(pane_chrome(state, id, rect));
+    // The way back in words, below the icons: a wall has no title bar to close, and a word beside an
+    // arrow is the meaning the arrow cannot say on its own.
     sheet = sheet.child(
         text(MAX_CLOSE)
             .key("max-close")
             .font(tokens::LABEL)
             .color(tokens::ink())
             // **Anchored to the top-right**, so the words fit whatever they say: an absolute x derived from
-            // the label's own width is a plate that clips itself the first time the words change.
-            .pin(None, Some(tokens::GAP / 2.0), Some(tokens::GAP), None)
+            // the label's own width is a plate that clips itself the first time the words change. Below the
+            // chrome row, because the icons own the corner.
+            .pin(
+                None,
+                Some(tokens::GAP / 2.0 + tokens::PANE_BUTTON + tokens::GAP / 2.0),
+                Some(tokens::GAP),
+                None,
+            )
             .h(tokens::NAME_H)
             .px(tokens::GAP)
             .radius(tokens::NAME_H / 2.0)
@@ -1515,15 +1664,20 @@ fn single_pane(state: &State, id: ViewId, rect: Rect, scale: f32, body: El) -> E
     let Some(pane) = state.pane(id) else {
         return body;
     };
-    let Some(frame) = pane.frame else {
-        return body;
-    };
-    let mut layer = body.child(projections(state, id, &frame, scale));
-    // The name is chrome on the wall as it was, too: a one-pane wall with a name is a pane somebody named.
-    if let Some(plate) = state.pane(id).and_then(name_plate) {
-        layer = layer.child(plate);
+    let mut layer = body;
+    // A pane whose map has not drawn yet has no markers, but it **still has a title**: the plate is chrome
+    // over the picture, not part of it. A tiled pane draws its plate before its first frame for the same
+    // reason, and one pane is not a special case of "every pane has a title" (#113).
+    if let Some(frame) = pane.frame {
+        layer = layer.child(projections(state, id, &frame, scale));
     }
-    layer
+    // **Every pane has a title, including the only one** (#113): a lone pane draws `pane-01` in the corner.
+    // The control must not appear from nowhere the first time the wall is split, and it is drawn after the
+    // markers so a press on it is a press on the label rather than on a hull underneath.
+    layer = layer.child(name_plate(pane));
+    // The controls are chrome too, and on a one-pane wall they are its whole chrome: the wall the
+    // operator's screenshot marked is not necessarily a tiled one (#111).
+    layer.child(pane_chrome(state, id, rect))
 }
 
 /// One pane: its picture, its markers, its own frame, the handle that moves it, and the ring that says
@@ -1588,14 +1742,67 @@ fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
     if let Some(frame) = state.pane(id).and_then(|pane| pane.frame) {
         layer = layer.child(projections(state, id, &frame, scale));
     }
-    // The plate is chrome over the picture, and the handle goes on top of it: a grab must never be a press
-    // on the label either (#83).
-    if let Some(plate) = state.pane(id).and_then(name_plate) {
-        layer = layer.child(plate);
+    // **Chrome is drawn after the markers, in this order** (#113). The plate is a press target now — a
+    // press on the label opens the rename sheet — and the handle is the grab target at the top centre.
+    // Drawing the plate before the handle, and both after the markers, is what makes a press on the label
+    // a rename rather than a hull selection or a lift, and a grab on the handle a lift rather than a
+    // rename. The ordering is load-bearing, not tidy.
+    if let Some(pane) = state.pane(id) {
+        layer = layer.child(name_plate(pane));
     }
-    // The handle is drawn **last**, over the markers: it is the element a grab lands on, and a grab must
-    // never be a press on the hull underneath it.
+    // **Chrome, after the markers and after the plate** (#111): the filter and maximise controls are
+    // pressed by a hand, so a press must land on them rather than on a hull or a name underneath.
+    layer = layer.child(pane_chrome(state, id, rect));
+    // The handle is drawn **last**, over everything: it is the element a grab lands on, and a grab must
+    // never be a press on the hull — or on a button — underneath it.
     layer.child(handle(id, rect))
+}
+
+/// A pane's chrome row (#111): the filter toggle, then the maximise toggle, in its top-right corner.
+///
+/// **Drawn after the markers and after the name plate**, and before the handle. That order is the whole
+/// contract: a press on a control must never reach the hull underneath it, and a grab on the handle must
+/// never be a press on a button. The row is one element so the two controls cannot drift apart; their
+/// rectangles come from [`view::chrome_buttons`], which `verify` samples.
+///
+/// The icon says what the press will do — outpacing arrows while the pane is in its slot, inwards when it
+/// is full size — and its meaning is also in the help text, which is where a word fits.
+fn pane_chrome(state: &State, pane: ViewId, rect: Rect) -> El {
+    let (filter, _maximise) = view::chrome_buttons(rect);
+    let full = state.maximised() == Some(pane);
+    let filter_button = rune::icon(&icons::FILTER, tokens::PANE_BUTTON)
+        .key(filter_anchor(state, pane))
+        .color(tokens::ink())
+        .help("Filter this pane")
+        .on_press(move |state: &mut State| toggle_filter(state, pane));
+    let (icon, help) = if full {
+        (&icons::RESTORE, "Back to the wall")
+    } else {
+        (&icons::MAXIMISE, "Full size")
+    };
+    let maximise_button = rune::icon(icon, tokens::PANE_BUTTON)
+        .key(format!("maximise-{pane}"))
+        .color(tokens::ink())
+        .help(help)
+        .on_press(move |state: &mut State| toggle_full_size(state, pane));
+    row()
+        .key(format!("pane-chrome-{pane}"))
+        // Pane-local: `chrome_buttons` answers in the pane's own rectangle, and the row is drawn inside
+        // the pane, which is already at `rect.x`/`rect.y` (#84's offset lesson).
+        .absolute(filter.x - rect.x, filter.y - rect.y)
+        .gap(tokens::GAP / 2.0)
+        .child(filter_button)
+        .child(maximise_button)
+}
+
+/// The maximise toggle's press: one press, the same two functions the menu row used to call. Whichever
+/// way the pane is, the button does the thing its icon shows.
+fn toggle_full_size(state: &mut State, pane: ViewId) {
+    if state.maximised() == Some(pane) {
+        restore_full_size(state);
+    } else {
+        full_size_from_menu(state, pane);
+    }
 }
 
 /// A pane's handle: a small bar at the top of the pane, and the gesture that lifts the pane.
@@ -1770,28 +1977,46 @@ fn projections(
     layer
 }
 
-/// A pane's name, on its own border (#83): a plate in the top-left corner, left of the handle.
+/// A pane's **title**, on its own border (#83, #113): a plate in the top-left corner, left of the handle.
+///
+/// **Every pane draws one.** The plate is what the operator clicks to type a new name, so a fresh pane has
+/// a control rather than a gap: it says the pane's own number (`pane-01`) until somebody names it. A name
+/// the operator typed is still the only thing stored on the pane; the number is [`Pane::title`]'s answer,
+/// not a name invented in `Pane.name`.
 ///
 /// **Inside the pane, not straddling its edge**: a pane clips its picture (`clip_rounded`), so a plate
-/// half outside would be cut in half — and a name is chrome, which belongs *on* the picture rather than
-/// hanging off it. Unnamed panes draw nothing at all: a placeholder is a promise of a name nobody made.
-fn name_plate(pane: &Pane) -> Option<El> {
-    let shown = shown_name(pane.name.as_deref().unwrap_or_default())?;
-    Some(
-        row()
-            .key(format!("pane-name-{}", pane.id))
-            // The same offsets `view::name_probe` measures against: the plate sits half a gap in from the
-            // pane's corner, so the probe lands on it rather than on the pane beside it.
-            .absolute(tokens::GAP / 2.0, tokens::GAP / 2.0)
-            .h(tokens::NAME_H)
-            .max_w(tokens::NAME_MAX_W)
-            .items_center()
-            .px(tokens::GAP)
-            .radius(tokens::NAME_H / 2.0)
-            .fill(tokens::name_plate())
-            .border(tokens::HAIRLINE, tokens::hairline())
-            .child(text(shown).font(tokens::LABEL).color(tokens::ink_dim())),
-    )
+/// half outside would be cut in half — and a title is chrome, which belongs *on* the picture rather than
+/// hanging off it.
+///
+/// Its press calls the same [`begin_rename`] the menu row calls, so there is one way into the sheet and no
+/// second path to keep in step. It is drawn after the markers and before the handle in [`pane`]: the
+/// ordering is load-bearing now that the plate is a press target — a press on the label must be a rename,
+/// never a grab, and a grab on the handle must never be a press on the label.
+fn name_plate(pane: &Pane) -> El {
+    let id = pane.id;
+    let title = pane.title();
+    // A title is short by construction, so the ellipsis remains a property of typed names only. The
+    // fallback covers a `name` that is empty once trimmed: it is not a name, so the pane keeps its number.
+    let shown = shown_name(&title).unwrap_or_else(|| default_title(id));
+    row()
+        .key(format!("pane-name-{id}"))
+        // The same offsets `view::name_probe` measures against: the plate sits half a gap in from the
+        // pane's corner, so the probe lands on it rather than on the pane beside it.
+        .absolute(tokens::GAP / 2.0, tokens::GAP / 2.0)
+        .h(tokens::NAME_H)
+        .max_w(tokens::NAME_MAX_W)
+        .items_center()
+        .px(tokens::GAP)
+        .radius(tokens::NAME_H / 2.0)
+        .fill(tokens::name_plate())
+        .border(tokens::HAIRLINE, tokens::hairline())
+        .on_press(move |state: &mut State| begin_rename(state, id))
+        .child(
+            text(shown)
+                .key(format!("pane-title-{id}"))
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim()),
+        )
 }
 
 /// One pane's picture: the map's pixels, its failure, or the placeholder.
@@ -2013,12 +2238,13 @@ fn begin_rename(state: &mut State, pane: ViewId) {
     state.begin(Begin::Rename(Rename::new(pane, current.as_deref())));
 }
 
-/// `Full size`: the pane is drawn over the wall and its map renders at the window's size (#85).
+/// The maximise action: the pane is drawn over the wall and its map renders at the window's size (#85).
 ///
 /// **It is still in its slot.** The tiling is untouched, the other panes keep their cameras and their
 /// cadence, and restoring puts the picture back exactly as it was — this is "one pane for a moment", not
 /// "make this the only pane", which is what a tiled wall's operator actually wants when the traffic gets
-/// dense.
+/// dense. The name says "from menu" because that is where #85 put it; since #111 the chrome's maximise
+/// toggle calls the same function, in one press.
 fn full_size_from_menu(state: &mut State, pane: ViewId) {
     state.end();
     if !state.layout.maximise(pane) {
@@ -2036,12 +2262,6 @@ fn full_size_from_menu(state: &mut State, pane: ViewId) {
 /// Public only for `scene`, so a capture is of the wall's own path and not of a second one written for it.
 pub fn full_size_for_scene(state: &mut State, pane: ViewId) {
     full_size_from_menu(state, pane);
-}
-
-/// `Back to the wall`: the pane goes back to the size its slot says, and its map thread with it.
-fn restore_from_menu(state: &mut State, _pane: ViewId) {
-    state.end();
-    restore_full_size(state);
 }
 
 fn restore_full_size(state: &mut State) {
@@ -2117,6 +2337,9 @@ impl MenuItem {
 
 /// The menu a pane offers. Ordered: the thing that grows the wall first, the thing that shrinks it last —
 /// where the destructive action is not the one under the pointer by accident.
+///
+/// **Full size left the menu in #111.** It is the pane chrome's one-press toggle now; a row here was a
+/// right-click, a row read, and a press — three actions for a thing an operator does constantly.
 pub fn menu_items(state: &State, pane: ViewId) -> Vec<MenuItem> {
     let mut items = vec![MenuItem {
         label: MENU_SPLIT,
@@ -2128,21 +2351,6 @@ pub fn menu_items(state: &State, pane: ViewId) -> Vec<MenuItem> {
         key: "menu-rename",
         action: begin_rename,
     });
-    // Full size, and the way back: one row that says which it will do, and it is offered on the wall a
-    // maximised pane is over as well as on the pane itself (#85).
-    if state.maximised().is_some() {
-        items.push(MenuItem {
-            label: MENU_RESTORE,
-            key: "menu-restore",
-            action: restore_from_menu,
-        });
-    } else {
-        items.push(MenuItem {
-            label: MENU_FULL_SIZE,
-            key: "menu-full-size",
-            action: full_size_from_menu,
-        });
-    }
     if state.layout.len() > 1 {
         items.push(MenuItem {
             label: MENU_CLOSE,
@@ -2177,8 +2385,6 @@ pub fn menu_origin(rect: Rect, at: (f32, f32), size: (f32, f32)) -> (f32, f32) {
 /// What the pane menu offers.
 pub const MENU_SPLIT: &str = "Focus on new pane";
 pub const MENU_RENAME: &str = "Name this pane…";
-pub const MENU_FULL_SIZE: &str = "Full size";
-pub const MENU_RESTORE: &str = "Back to the wall";
 pub const MENU_CLOSE: &str = "Close pane";
 /// What the maximised pane's own close plate says, and the header's note about it (#85).
 pub const MAX_CLOSE: &str = "back to the wall";
@@ -2687,7 +2893,7 @@ fn tick_card_age(state: &mut State) -> bool {
 /// policy, and it could only be read by reading it. Now it is a match on the state the wall is in, which is
 /// the same information the operator sees, and the order is the enum's:
 ///
-/// 1. whatever `interaction` holds — a rename, a lift, the settings sheet, a menu;
+/// 1. whatever `interaction` holds — a rename, a lift, the settings sheet, a menu, a filter panel;
 /// 2. a maximised pane, which is a **layout** fact rather than a state of being held (a pane drawn over the
 ///    tiling is not a gesture): Escape is the way back the close plate also offers;
 /// 3. the focused pane's card, which is the pane's own state (#99) and so goes last and only there.
@@ -4557,9 +4763,129 @@ mod tests {
         state.renaming_mut().expect("open").edit.text = "   ".to_string();
         commit_rename(&mut state);
         assert_eq!(state.pane(id).and_then(|pane| pane.name.as_deref()), None);
+        assert_eq!(
+            state.pane(id).expect("the pane").title(),
+            default_title(id),
+            "an unnamed pane still has a title: its own number"
+        );
+    }
+
+    /// #113: the title is the typed name or the pane's own number, and the number is the pane's **id**,
+    /// zero-padded to two digits. The form is written in one place, so this is its one literal check.
+    #[test]
+    fn a_panes_title_is_its_name_or_its_id() {
+        for (id, expected) in [
+            (1, "pane-01"),
+            (2, "pane-02"),
+            (9, "pane-09"),
+            (10, "pane-10"),
+            (23, "pane-23"),
+            (99, "pane-99"),
+            (100, "pane-100"),
+        ] {
+            assert_eq!(
+                default_title(id),
+                expected,
+                "the default title is the pane's id, zero-padded to two digits"
+            );
+        }
+        let mut pane = Pane::new(7, crate::map::geometry::Camera::START);
+        assert_eq!(pane.title(), "pane-07");
+        pane.name = shown_name("  Surabaya approaches ");
+        assert_eq!(
+            pane.title(),
+            "Surabaya approaches",
+            "a name somebody typed is the title"
+        );
+    }
+
+    /// #113: **every pane draws its title, and the plate is the control**. The press goes through the
+    /// same `begin_rename` the menu row calls, and a default title is not a name: the sheet opens empty.
+    #[test]
+    fn every_pane_has_a_title_and_pressing_it_types_a_new_one() {
+        // A lone pane draws `pane-01` too: a control that appears only once the wall is split appears
+        // from nowhere. The frame is deliberately absent here: a pane whose map has not drawn yet still
+        // has its title, because the plate is chrome rather than part of the picture.
+        let single = crate::scene::state_for("picture");
         assert!(
-            state.pane(id).and_then(name_plate).is_none(),
-            "an unnamed pane draws no plate"
+            single.frame().is_none(),
+            "this is the before-first-frame case"
+        );
+        let single_rt = frame_once(single);
+        assert!(
+            single_rt.find("pane-name-1").is_some(),
+            "a one-pane wall draws its title"
+        );
+        assert_eq!(
+            single_rt
+                .elements()
+                .iter()
+                .find(|element| element.key.as_deref() == Some("pane-title-1"))
+                .and_then(|element| element.text.as_deref()),
+            Some("pane-01"),
+            "the lone pane's title is its own number"
+        );
+
+        let mut rt = frame_once(crate::scene::state_for("panes-named"));
+        let ids = rt.state.layout.ids();
+        assert_eq!(ids.len(), 3);
+        // The scene's third pane is the one nobody named, and its id is 3: `pane-03`, not `pane-01`.
+        assert_eq!(
+            rt.state.pane(ids[2]).expect("the third pane").title(),
+            "pane-03"
+        );
+        let expected = [
+            "Surabaya approaches".to_string(),
+            shown_name("the strait at first light, and the traffic separation scheme")
+                .expect("a long name is still a name"),
+            "pane-03".to_string(),
+        ];
+        for (id, expected) in ids.iter().zip(expected) {
+            let key = format!("pane-name-{id}");
+            let (x, y) = rt
+                .find(&key)
+                .unwrap_or_else(|| panic!("pane {id} draws no title plate"));
+            let picked = rt
+                .element_at(x, y)
+                .unwrap_or_else(|| panic!("nothing is at pane {id}'s plate"));
+            let title_key = format!("pane-title-{id}");
+            assert!(
+                matches!(
+                    picked.key(),
+                    Some(found) if found == key.as_str() || found == title_key.as_str()
+                ),
+                "the plate is chrome over the markers: a press on the label must reach the label, \
+                 not a hull or the handle (got {:?})",
+                picked.key()
+            );
+            let drawn = rt
+                .elements()
+                .iter()
+                .find(|element| element.key.as_deref() == Some(title_key.as_str()))
+                .and_then(|element| element.text.clone());
+            assert_eq!(
+                drawn.as_deref(),
+                Some(expected.as_str()),
+                "pane {id}'s title"
+            );
+        }
+
+        // Press the unnamed pane's plate: the same sheet the menu row opens, with an empty field. A
+        // default title is not a name, so Enter on an untouched field leaves it unnamed.
+        let id = ids[2];
+        let (x, y) = rt.find(&format!("pane-name-{id}")).expect("the plate");
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        let rename = rt
+            .state
+            .rename()
+            .expect("a press on the plate opens the sheet");
+        assert_eq!(rename.pane, id);
+        assert_eq!(rename.edit.text, "", "a default title is not a name");
+        assert!(
+            rt.state.dragging().is_none(),
+            "a press on the label is a rename, never a lift"
         );
     }
 
@@ -4615,8 +4941,9 @@ mod tests {
         assert_eq!(state.pane_rects(), cells);
     }
 
-    /// #81: a wall with one pane offers one item, a tiled wall offers two, and the menu is as tall as the
-    /// items it has — the surface used to be `size()`d for one row, which clips the second.
+    /// #81/#111: a wall with one pane offers two items, a tiled wall three, and the menu is as tall as the
+    /// items it has — the surface used to be `size()`d for one row, which clips the second. `Full size`
+    /// left the menu for the pane chrome, so the row count is one lower than it was.
     #[test]
     fn the_menu_offers_close_only_when_there_is_something_to_close() {
         let one = crate::scene::state_for("pane-menu");
@@ -4626,7 +4953,7 @@ mod tests {
                 .iter()
                 .map(|item| item.label)
                 .collect::<Vec<_>>(),
-            vec![MENU_SPLIT, MENU_RENAME, MENU_FULL_SIZE],
+            vec![MENU_SPLIT, MENU_RENAME],
             "the last pane cannot be closed, so the menu does not offer it"
         );
 
@@ -4635,12 +4962,12 @@ mod tests {
         let items = crate::ui::menu_items(&tiled, pane);
         assert_eq!(
             items.iter().map(|item| item.label).collect::<Vec<_>>(),
-            vec![MENU_SPLIT, MENU_RENAME, MENU_FULL_SIZE, MENU_CLOSE]
+            vec![MENU_SPLIT, MENU_RENAME, MENU_CLOSE]
         );
         assert_eq!(
             tokens::menu_size(items.len()),
-            (tokens::MENU_WIDTH, tokens::MENU_ROW * 4.0),
-            "four rows, not one row's box clipped"
+            (tokens::MENU_WIDTH, tokens::MENU_ROW * 3.0),
+            "three rows, not one row's box clipped"
         );
     }
 
