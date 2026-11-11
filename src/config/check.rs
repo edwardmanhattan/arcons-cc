@@ -464,7 +464,7 @@ mod tests {
                 resources: vec![
                     crate::data::ResourceCheck {
                         name: "viewpoint",
-                        detail: Ok("no default view (unset, not 0,0)".into()),
+                        detail: Ok("the backend has not chosen a view (unset, not 0,0)".into()),
                     },
                     crate::data::ResourceCheck {
                         name: "symbols",
@@ -688,7 +688,7 @@ mod tests {
         scripted.resources = vec![
             crate::data::ResourceCheck {
                 name: "viewpoint",
-                detail: Ok("no default view (unset, not 0,0)".into()),
+                detail: Ok("the backend has not chosen a view (unset, not 0,0)".into()),
             },
             crate::data::ResourceCheck {
                 name: "placements",
