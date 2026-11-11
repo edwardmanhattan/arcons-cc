@@ -18,8 +18,9 @@ up in the wrong ocean. This file defines the vocabulary; the code uses it exactl
 | **Measured** | A Fix a beacon reported. `speed_kn` and `course_deg` exist or they do not. | "actual", "true" |
 | **Derived** | A position computed along an order rather than reported by a beacon. Never mixed with Measured silently. | "estimated" as a synonym for both |
 | **Interaction** | What the wall is *holding* right now: nothing, a lifted pane, a border, a menu, a filter panel, a rename, the settings sheet. One value (`Interaction`), so two holds at once is unrepresentable (#101). | "mode", "dialog state", a set of booleans |
-| **Pane** | One rectangle of the wall: its own camera, its own map thread, its own frame. | "window", "viewport", "split" |
+| **Pane** | One rectangle of the wall. It is a **map** (its own camera, map thread and frame) or a **tree** (the chain of command, which has none and projects nothing). | "window", "viewport", "split" |
 | **Pane view** | What *that* pane is looking at: its selection, its card, its symbol-or-picture range, and (soon) its filter. `PaneView`. | the wall's selection — there is no such thing |
+| **Post** | One box of a standing structure: what the structure calls it (`name`), the position that runs it (`position_title`), and the person appointed (`commander`, absent when vacant). A post with an `id_unit` **is** a hull. | "node" in the domain, "unit" when it has no hull |
 
 ## The distinctions that decide code
 

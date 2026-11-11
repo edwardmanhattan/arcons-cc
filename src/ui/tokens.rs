@@ -99,6 +99,26 @@ pub fn menu_size(rows: usize) -> (f32, f32) {
 /// much that the hulls inside it cannot be seen.
 pub const PANE_LIFTED: f32 = 0.55;
 
+/// A tree pane's node (#116): the plate a post is drawn on. Wide enough for a box's name and the post
+/// that runs it at `LABEL`. Its **height is computed per post** — a plate is as tall as what it says,
+/// which is what keeps a two-line post from wearing a four-line plate's empty space.
+pub const TREE_NODE_W: f32 = 184.0;
+/// One line of a post's plate. `LABEL` at 12 pt draws 20 pt tall, measured from the capture; a layout
+/// that guessed 15 made every connector meet a plate in the wrong place.
+pub const TREE_LINE: f32 = 20.0;
+/// The space between two levels of the tree — where a connector's elbow runs — and between two
+/// sibling subtrees. The row gap is also the elbow's own room: a connector that turned at the child's
+/// edge would be a bracket, not a line.
+pub const TREE_ROW_GAP: f32 = 24.0;
+pub const TREE_COL_GAP: f32 = 16.0;
+/// The tree's own margin inside its pane, and the room the pane's chrome takes at the top: the tree
+/// starts below the title plate and the two corner buttons rather than under them.
+pub const TREE_PAD: f32 = 12.0;
+pub const TREE_TOP: f32 = 40.0;
+/// A connector's stroke, and the size of the icon a post or its level carries.
+pub const TREE_LINK_W: f32 = 1.5;
+pub const TREE_ICON: f32 = 14.0;
+
 // ---------------------------------------------------------------------------
 // Type.
 // ---------------------------------------------------------------------------
@@ -193,4 +213,13 @@ pub fn name_plate() -> Color {
 /// exactly the pixels the wall draws.
 pub fn focus_edge() -> Color {
     oklch(0.72, 0.008, 250.0)
+}
+
+/// The connectors between posts in a chain of command (#116): a neutral line, a step above the
+/// hairline so a run of them reads as a structure rather than as a border.
+///
+/// **Opaque on purpose**, for the reason [`focus_edge`] records: a translucent stroke is a blend, and
+/// an assertion written against this token would then compare a colour the wall never draws.
+pub fn tree_link() -> Color {
+    oklch(0.5, 0.01, 250.0)
 }

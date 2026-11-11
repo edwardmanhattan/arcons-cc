@@ -1571,6 +1571,176 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 }
             }
         }
+        "pane-tree" => {
+            // **The chain of command** (#116): a tree pane beside a map pane, one structure's forest
+            // under the supreme command. Four claims, each with a number:
+            //
+            // 1. **one node per post** — the plates are sampled where `tree::layout` puts them, and the
+            //    count comes from the wire data, not from the layout: a dropped node is a missing plate;
+            // 2. **connectors between them** — each run's elbow is sampled for the connector's own ink,
+            //    so a diagonal (or a run that never turned) is not a connector;
+            // 3. **no marker anywhere in the tree pane** — `INV-04` holds literally: a tree has no frame,
+            //    so nothing is projected into it, and the accent the map paints is absent there;
+            // 4. **the map pane beside it still draws its markers**, so the tree did not take the wall.
+            let Some((origin_x, origin_y, panel_w, panel_h)) =
+                image.find_panel_rect(ink(tokens::panel()))
+            else {
+                failures.push("pane-tree: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let state = scene::state_for("pane-tree");
+            let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
+            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let tree = rects
+                .iter()
+                .find(|(id, _)| state.pane(*id).is_some_and(|pane| !pane.content.is_map()));
+            let map = rects
+                .iter()
+                .find(|(id, _)| state.pane(*id).is_some_and(|pane| pane.content.is_map()));
+            let (Some((tree_id, tree_rect)), Some((_, map_rect))) = (tree.copied(), map.copied())
+            else {
+                failures.push(format!(
+                    "pane-tree: {} panes and no tree beside a map — the scene is one of each",
+                    rects.len()
+                ));
+                return Err(failures);
+            };
+            let Some(drawn) = crate::ui::tree::tree_for(&state, tree_id) else {
+                failures.push(format!("pane-tree: pane {tree_id} draws no tree"));
+                return Err(failures);
+            };
+            let (canvas_x, canvas_y) = crate::ui::tree::canvas_origin();
+
+            // **One node per post**, counted from the wire data the pane names. A layout that dropped a
+            // root, or a flattened forest, draws fewer plates than the server sent posts.
+            let expected = {
+                let ids: Vec<i64> = match state.pane(tree_id).map(|pane| &pane.content) {
+                    Some(crate::ui::PaneContent::Tree {
+                        organisation: Some(id),
+                    }) => vec![*id],
+                    Some(crate::ui::PaneContent::Tree { organisation: None }) => {
+                        state.organisations.iter().map(|row| row.id).collect()
+                    }
+                    _ => Vec::new(),
+                };
+                let mut count = usize::from(state.tni_command.is_some());
+                fn walk(nodes: &[crate::data::types::UnitOrganisationNode]) -> usize {
+                    nodes
+                        .iter()
+                        .map(|node| 1 + walk(&node.children))
+                        .sum::<usize>()
+                }
+                for id in ids {
+                    if let Some(detail) = state.organisation_trees.get(&id) {
+                        count += walk(&detail.nodes);
+                    }
+                }
+                count
+            };
+            if drawn.nodes.len() != expected {
+                failures.push(format!(
+                    "pane-tree: {} plates for {expected} posts — one node per post, and a forest's \
+                     roots are posts too (#116)",
+                    drawn.nodes.len()
+                ));
+            }
+            let plate = ink(tokens::name_plate());
+            let mut missing = Vec::new();
+            for node in &drawn.nodes {
+                let rect = crate::ui::Rect {
+                    x: tree_rect.x + canvas_x + node.rect.x,
+                    y: tree_rect.y + canvas_y + node.rect.y,
+                    w: node.rect.w,
+                    h: node.rect.h,
+                };
+                let probe = crate::ui::tree::node_probe(rect);
+                let at = crate::ui::Rect {
+                    x: origin_x as f32 + probe.x,
+                    y: origin_y as f32 + probe.y,
+                    w: probe.w,
+                    h: probe.h,
+                };
+                if !rect_has(image, at, plate, 4) {
+                    missing.push(node.label.clone());
+                }
+            }
+            if !missing.is_empty() {
+                failures.push(format!(
+                    "pane-tree: {} posts have no plate: {} — a node is a post drawn, not a name in a \
+                     list",
+                    missing.len(),
+                    missing.join(", ")
+                ));
+            } else {
+                lines.push(format!(
+                    "pane-tree: {expected} posts drawn, one plate each, in pane {tree_id}"
+                ));
+            }
+
+            // **Connectors between them**, sampled at each elbow's own point.
+            let link_ink = ink(tokens::tree_link());
+            let mut unlinked = Vec::new();
+            for link in &drawn.links {
+                let (x, y) = crate::ui::tree::link_probe(link);
+                let at = crate::ui::Rect {
+                    x: origin_x as f32 + tree_rect.x + canvas_x + x - 1.0,
+                    y: origin_y as f32 + tree_rect.y + canvas_y + y - 1.0,
+                    w: 3.0,
+                    h: 3.0,
+                };
+                if !rect_has(image, at, link_ink, 8) {
+                    unlinked.push(format!("{}→{}", link.from, link.to));
+                }
+            }
+            if !unlinked.is_empty() {
+                failures.push(format!(
+                    "pane-tree: {} of {} connectors are missing at their elbows: {} — a tree with no \
+                     lines is a list of names",
+                    unlinked.len(),
+                    drawn.links.len(),
+                    unlinked.join(", ")
+                ));
+            } else {
+                lines.push(format!(
+                    "pane-tree: {} connectors, each with its elbow drawn",
+                    drawn.links.len()
+                ));
+            }
+
+            // **No marker anywhere in the tree pane** (`INV-04`), and the map still has its own.
+            let accent = ink(tokens::accent());
+            let count_in = |rect: crate::ui::Rect, colour: [u8; 3]| -> usize {
+                let x0 = (origin_x + f64::from(rect.x)).max(0.0) as u32;
+                let y0 = (origin_y + f64::from(rect.y)).max(0.0) as u32;
+                let x1 = ((origin_x + f64::from(rect.x + rect.w)) as u32).min(image.width);
+                let y1 = ((origin_y + f64::from(rect.y + rect.h)) as u32).min(image.height);
+                (y0..y1)
+                    .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+                    .filter(|(x, y)| near(image.at(*x, *y), colour, 8))
+                    .count()
+            };
+            let in_tree = count_in(tree_rect, accent);
+            if in_tree > 0 {
+                failures.push(format!(
+                    "pane-tree: {in_tree} accent pixels inside the tree pane — a tree has no frame, so \
+                     it draws no marker and nothing that projects (INV-04)"
+                ));
+            } else {
+                lines.push("pane-tree: no marker ink in the tree pane".to_string());
+            }
+            let in_map = count_in(map_rect, accent);
+            if in_map == 0 {
+                failures.push(
+                    "pane-tree: no marker ink in the map pane — the tree must not take the wall's map \
+                     with it"
+                        .to_string(),
+                );
+            } else {
+                lines.push(format!(
+                    "pane-tree: the map pane still draws its markers ({in_map} accent px)"
+                ));
+            }
+        }
         "panes-drag" => {
             // **The gap is where the pane lands** (#70): it is drawn from `Layout::preview`, so this
             // checks the drawn rectangle against the preview — the same function the release calls.
@@ -1925,6 +2095,52 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                     "panes: {} panes, {expected} markers each",
                     rects.len()
                 ));
+            }
+        }
+        "pane-tree" => {
+            // **A tree pane is a pane, and it is not a map** (#116). It has no frame — so nothing is
+            // projected into it (`INV-04`) — and it draws one node per post of the structure it names,
+            // under the supreme command. The pane beside it is still a map with its own frame.
+            let rects = crate::ui::view::panes_on(
+                &state.layout,
+                state.pane_viewport(),
+                state.settings.pane_gap,
+            );
+            let trees: Vec<crate::ui::ViewId> = rects
+                .iter()
+                .filter(|(id, _)| state.pane(*id).is_some_and(|pane| !pane.content.is_map()))
+                .map(|(id, _)| *id)
+                .collect();
+            let maps: Vec<crate::ui::ViewId> = rects
+                .iter()
+                .filter(|(id, _)| state.pane(*id).is_some_and(|pane| pane.content.is_map()))
+                .map(|(id, _)| *id)
+                .collect();
+            if trees.len() != 1 || maps.len() != 1 {
+                failures.push(format!(
+                    "pane-tree: {} tree panes and {} map panes — the scene is one of each",
+                    trees.len(),
+                    maps.len()
+                ));
+            }
+            for id in &trees {
+                let pane = state.pane(*id).expect("the tree pane");
+                if pane.frame.is_some() {
+                    failures.push(format!(
+                        "pane-tree: tree pane {id} has a frame — INV-04 holds literally, and a tree \
+                         draws nothing that projects"
+                    ));
+                }
+                match crate::ui::tree::tree_for(&state, *id) {
+                    Some(tree) => lines.push(format!(
+                        "pane-tree: tree pane {id} draws {} posts and {} connectors, and has no frame",
+                        tree.nodes.len(),
+                        tree.links.len()
+                    )),
+                    None => failures.push(format!(
+                        "pane-tree: tree pane {id} draws no tree at all"
+                    )),
+                }
             }
         }
         "empty" => {
