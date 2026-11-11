@@ -34,6 +34,12 @@ fn every_state() -> Vec<(&'static str, Interaction)> {
                 at: 0.5,
                 start: 0.0,
                 span: 100.0,
+                rect: arcons_cc::ui::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
             }),
         ),
         (
@@ -67,6 +73,12 @@ fn every_begin() -> Vec<(&'static str, Begin)> {
                 at: 0.5,
                 start: 0.0,
                 span: 100.0,
+                rect: arcons_cc::ui::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
             }),
         ),
         (
@@ -174,6 +186,12 @@ fn a_hold_cannot_be_started_over_another_hold() {
             at: 0.5,
             start: 0.0,
             span: 100.0,
+            rect: arcons_cc::ui::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 100.0,
+            },
         })
     };
     let held = Interaction::Lifted(PaneDrag {
@@ -187,6 +205,12 @@ fn a_hold_cannot_be_started_over_another_hold() {
         at: 0.5,
         start: 0.0,
         span: 100.0,
+        rect: arcons_cc::ui::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 100.0,
+        },
     });
     assert!(!resize().allowed_from(&held), "not two gestures at once");
     assert!(!lift().allowed_from(&holding), "not two gestures at once");

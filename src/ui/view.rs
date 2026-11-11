@@ -202,6 +202,10 @@ pub struct Border {
     /// The split's length along that axis, and where it starts, so a pointer reads as a ratio.
     pub start: f32,
     pub span: f32,
+    /// The split's whole rectangle. The line runs across it on the **other** axis: a border between a
+    /// column of three panes and one beside it is as tall as that column, not as tall as the window. The
+    /// gutter drawn over it uses this, so a press in a nested split's gap cannot land on a pane below.
+    pub rect: Rect,
 }
 
 impl Border {
@@ -212,6 +216,56 @@ impl Border {
             return 0.5;
         }
         ((pointer - self.start) / self.span).clamp(0.05, 0.95)
+    }
+
+    /// Where the pointer is measured along this border: the split's own axis, in the viewport's points.
+    pub fn axis_of(&self, at: (f32, f32)) -> f32 {
+        match self.dir {
+            Dir::Horizontal => at.0,
+            Dir::Vertical => at.1,
+        }
+    }
+
+    /// The rectangle the line runs across: the split's extent on the axis a ratio is *not* measured on.
+    pub fn extent(&self) -> (f32, f32) {
+        match self.dir {
+            Dir::Horizontal => (self.rect.y, self.rect.bottom()),
+            Dir::Vertical => (self.rect.x, self.rect.right()),
+        }
+    }
+
+    /// The gutter over this border: a rectangle `gap` wide on the line, and as long as the split.
+    ///
+    /// One function, so the rectangle the eye reads as the space between two panes is the rectangle a
+    /// hand grabs (#114). At `gap = 0` it has no area: the panes meet, and the existing in-pane grip is
+    /// the only target.
+    pub fn gutter(&self, gap: f32) -> Rect {
+        let half = (gap / 2.0).max(0.0);
+        match self.dir {
+            Dir::Horizontal => Rect {
+                x: self.at - half,
+                y: self.rect.y,
+                w: (half * 2.0).max(0.0),
+                h: self.rect.h.max(0.0),
+            },
+            Dir::Vertical => Rect {
+                x: self.rect.x,
+                y: self.at - half,
+                w: self.rect.w.max(0.0),
+                h: (half * 2.0).max(0.0),
+            },
+        }
+    }
+
+    /// Whether a viewport point is on the line, within `reach` of it and of the line's own extent.
+    fn hits(&self, at: (f32, f32), reach: f32) -> bool {
+        let across = self.axis_of(at);
+        let along = match self.dir {
+            Dir::Horizontal => at.1,
+            Dir::Vertical => at.0,
+        };
+        let (from, to) = self.extent();
+        (across - self.at).abs() <= reach && along >= from - reach && along <= to + reach
     }
 }
 
@@ -408,14 +462,14 @@ impl Layout {
         set
     }
 
-    /// The border nearest a point in the viewport's points, if the point is within `grip / 2` of it.
+    /// Every border between two panes, with the line each one draws and the rectangle it spans.
     ///
-    /// The **deepest** border wins: in a three-pane layout the split between two panes and the outer
-    /// split can be a pixel apart at a corner, and the one the operator sees under the pointer is the
-    /// inner one.
-    pub fn border_at(&self, viewport: Viewport, at: (f32, f32), grip: f32) -> Option<Border> {
-        let mut found = None;
-        find_border(
+    /// **One walk of the tree**, used by the gutter elements (#114) and by [`Layout::border_at`]. A
+    /// border is not something the view can find any other way: an id names one pane, and a pane has a
+    /// border on each of its sides.
+    pub fn borders(&self, viewport: Viewport) -> Vec<Border> {
+        let mut out = Vec::new();
+        collect_borders(
             &self.root,
             Rect {
                 x: 0.0,
@@ -423,11 +477,23 @@ impl Layout {
                 w: viewport.w as f32,
                 h: viewport.h as f32,
             },
-            at,
-            grip.max(1.0) / 2.0,
-            &mut found,
+            &mut out,
         );
-        found
+        out
+    }
+
+    /// The border under a point in the viewport's points, if the point is within `grip / 2` of it.
+    ///
+    /// **Exactly one border runs across almost every point**: a nested split's line stops at its own
+    /// rectangle, which is what `Border::extent` is for. Where two lines cross, the outer split is the
+    /// one a press takes — the order the depth-first walk this replaced ended in.
+    pub fn border_at(&self, viewport: Viewport, at: (f32, f32), grip: f32) -> Option<Border> {
+        let reach = grip.max(1.0) / 2.0;
+        // Outermost first, which is the order the old depth-first walk ended in: where two lines cross
+        // the outer split is the one a press grabs, and anywhere else exactly one border is on the line.
+        self.borders(viewport)
+            .into_iter()
+            .find(|border| border.hits(at, reach))
     }
 
     /// What a pane released at a point would do: swap with the pane under the middle of the pointer,
@@ -652,51 +718,31 @@ fn set_ratio_on(node: Node, border: &Border, ratio: f32, set: &mut bool) -> Node
     }
 }
 
-/// Depth-first, so the last border found at a point is the innermost one.
-fn find_border(node: &Node, rect: Rect, at: (f32, f32), reach: f32, found: &mut Option<Border>) {
+/// Every split's line, outer first and inner after it. [`Layout::border_at`] takes the first match, as
+/// the depth-first walk it replaced ended on the outer split; the gutters are drawn in this order, so a
+/// nested split's handle sits over the one it belongs to.
+fn collect_borders(node: &Node, rect: Rect, out: &mut Vec<Border>) {
     let Node::Split { dir, ratio, a, b } = node else {
         return;
     };
-    let inside = at.0 >= rect.x - reach
-        && at.0 <= rect.right() + reach
-        && at.1 >= rect.y - reach
-        && at.1 <= rect.bottom() + reach;
-    if !inside {
-        return;
-    }
     let (a_rect, b_rect) = split_rects(*dir, *ratio, rect);
-    find_border(a, a_rect, at, reach, found);
-    find_border(b, b_rect, at, reach, found);
     // `at`/`start`/`span` are the split's own axis — what a ratio is measured along. The line's
-    // *extent* is the other axis, and only the hit test uses it.
+    // *extent* is the other axis, and is the whole of `rect` on it.
     let (line, start, span) = match dir {
         Dir::Horizontal => (b_rect.x.min(rect.right()), rect.x, rect.w),
         Dir::Vertical => (b_rect.y.min(rect.bottom()), rect.y, rect.h),
     };
-    let (along_from, along_to) = match dir {
-        Dir::Horizontal => (rect.y, rect.bottom()),
-        Dir::Vertical => (rect.x, rect.right()),
-    };
-    let across = match dir {
-        Dir::Horizontal => at.0,
-        Dir::Vertical => at.1,
-    };
-    let along = match dir {
-        Dir::Horizontal => at.1,
-        Dir::Vertical => at.0,
-    };
-    let on_line = (across - line).abs() <= reach;
-    let on_span = along >= along_from - reach && along <= along_to + reach;
-    if on_line && on_span {
-        *found = Some(Border {
-            a: first_leaf(a),
-            b: first_leaf(b),
-            dir: *dir,
-            at: line,
-            start,
-            span,
-        });
-    }
+    out.push(Border {
+        a: first_leaf(a),
+        b: first_leaf(b),
+        dir: *dir,
+        at: line,
+        start,
+        span,
+        rect,
+    });
+    collect_borders(a, a_rect, out);
+    collect_borders(b, b_rect, out);
 }
 
 fn swap_leaves(node: Node, a: ViewId, b: ViewId) -> Node {
@@ -1205,6 +1251,80 @@ mod tests {
             .expect("the border inside the right half");
         assert_eq!(deepest.dir, Dir::Vertical, "{deepest:?}");
         assert_eq!((deepest.a, deepest.b), (right, bottom));
+    }
+
+    /// #114: **the gutter is the resize handle.** Every split has one rectangle, `gap` wide on the line,
+    /// and it covers exactly the space the panes leave between them — no more, so it cannot steal a
+    /// press from a pane beside a nested split, and no less, so a hand anywhere in the gap reaches it.
+    #[test]
+    fn a_gutter_is_the_whole_gap_and_spans_only_its_own_split() {
+        let vp = viewport();
+        let mut layout = Layout::single();
+        let left = layout.ids()[0];
+        let right = layout.split(left, Dir::Horizontal).unwrap();
+        let _bottom = layout.split(right, Dir::Vertical).unwrap();
+        let gap = tokens::GAP;
+
+        let borders = layout.borders(vp);
+        assert_eq!(borders.len(), 2, "one border per split: {borders:?}");
+        let outer = borders
+            .iter()
+            .find(|border| border.dir == Dir::Horizontal)
+            .expect("the border between the left pane and the right column");
+        assert_eq!((outer.a, outer.b), (left, right));
+        let inner = borders
+            .iter()
+            .find(|border| border.dir == Dir::Vertical)
+            .expect("the border inside the right column");
+        assert_eq!(inner.a, right);
+
+        for border in &borders {
+            let gutter = border.gutter(gap);
+            match border.dir {
+                // A side-by-side split's line is vertical: the gutter is as tall as the split's own
+                // rectangle, not as tall as the window.
+                Dir::Horizontal => {
+                    assert!((gutter.w - gap).abs() < 0.001, "{gutter:?}");
+                    assert!((gutter.h - border.rect.h).abs() < 0.001, "{gutter:?}");
+                    assert!((gutter.x + gutter.w / 2.0 - border.at).abs() < 0.001);
+                }
+                Dir::Vertical => {
+                    assert!((gutter.h - gap).abs() < 0.001, "{gutter:?}");
+                    assert!((gutter.w - border.rect.w).abs() < 0.001, "{gutter:?}");
+                    assert!((gutter.y + gutter.h / 2.0 - border.at).abs() < 0.001);
+                }
+            }
+            // The gutter is the hole the inset panes leave: it overlaps no pane at all, so a press in
+            // the gap lands on the gutter and a press on a pane still reaches the pane.
+            for (_, pane) in panes_on(&layout, vp, gap) {
+                let overlap_w = (gutter.right().min(pane.right()) - gutter.x.max(pane.x)).max(0.0);
+                let overlap_h =
+                    (gutter.bottom().min(pane.bottom()) - gutter.y.max(pane.y)).max(0.0);
+                assert!(
+                    overlap_w * overlap_h < 0.0001,
+                    "the gutter {gutter:?} covers the pane {pane:?}"
+                );
+            }
+        }
+
+        // A point on the inner line **inside the right column** is the inner split, even though the
+        // outer line runs past it: the extent is what keeps a nested split's gutter from reaching the
+        // pane below.
+        let inside = layout
+            .border_at(vp, (inner.rect.x + 100.0, inner.at), gap)
+            .expect("no border on the inner line");
+        assert_eq!(inside.dir, Dir::Vertical, "{inside:?}");
+        assert_eq!((inside.a, inside.b), (inner.a, inner.b));
+
+        // With no gap there is no width to hold: the panes meet and the in-pane grip is the only target,
+        // which is the wall every golden before #82 renders.
+        for border in &borders {
+            let gutter = border.gutter(0.0);
+            match border.dir {
+                Dir::Horizontal => assert_eq!(gutter.w, 0.0, "{gutter:?}"),
+                Dir::Vertical => assert_eq!(gutter.h, 0.0, "{gutter:?}"),
+            }
+        }
     }
 
     /// #84: a pane picked up takes hold where the hand closed. The handle is a 28 × 4 box at the top
