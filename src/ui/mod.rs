@@ -20,6 +20,7 @@
 
 pub mod icons;
 pub mod markers;
+pub mod objects;
 pub mod symbol;
 pub mod tokens;
 pub mod unitcard;
@@ -385,6 +386,24 @@ pub struct State {
     pub pictures_pending: std::collections::HashSet<i64>,
     /// Hulls whose picture has been asked for, so a missing one is not re-asked every frame.
     pub asked_images: std::collections::HashSet<i64>,
+    /// **The tactical-object cache (#110)**, read once at init because a placement embeds its symbol
+    /// and a manifest is the offline library: a page of a cache manifest is an incomplete cache.
+    /// `manifest` is keyed by symbol `code`; `placements` are the operational marks (`id_game IS NULL`).
+    pub manifest:
+        std::collections::HashMap<String, crate::data::types::TacticalObjectManifestEntry>,
+    pub placements: Vec<crate::data::types::TacticalObjectPlacement>,
+    /// Decoded artwork, by the manifest's `asset_key`. The same `ImageCache` route a hull's picture
+    /// takes: bytes arrive as a reply, decode off the UI thread, one handle per key (`#110`).
+    pub assets: std::collections::HashMap<String, rune::Image>,
+    /// Assets handed to the cache that have not been drawn yet, so the frame a decode lands on redraws.
+    pub assets_pending: std::collections::HashSet<String>,
+    /// Assets already asked for, and assets whose URL expired or was refused: the latter draw the
+    /// generic mark for the life of the process rather than asking again every frame.
+    pub asked_assets: std::collections::HashSet<String>,
+    pub asset_failures: std::collections::HashSet<String>,
+    /// Symbols that cannot draw their artwork — an unsigned `asset_url`, or a code the manifest does
+    /// not carry — logged once each so a wall with no pictures is a line in the log, not a mystery.
+    pub generic_logged: std::collections::HashSet<String>,
     /// How many register reads have failed in a row. Never reset by the passage of time: a wall that cannot
     /// read `/units` should be able to say how long it has not been able to.
     pub register_attempts: u32,
@@ -448,6 +467,13 @@ impl Default for State {
             pictures: std::collections::HashMap::new(),
             pictures_pending: std::collections::HashSet::new(),
             asked_images: std::collections::HashSet::new(),
+            manifest: std::collections::HashMap::new(),
+            placements: Vec::new(),
+            assets: std::collections::HashMap::new(),
+            assets_pending: std::collections::HashSet::new(),
+            asked_assets: std::collections::HashSet::new(),
+            asset_failures: std::collections::HashSet::new(),
+            generic_logged: std::collections::HashSet::new(),
             camera_reported: false,
             register_attempts: 0,
             register_retry_at: None,
@@ -484,6 +510,17 @@ impl State {
         let image = self.image_cache().load(bytes);
         self.pictures.insert(id_unit, image);
         self.pictures_pending.insert(id_unit);
+    }
+
+    /// The same route for a tactical object's artwork, keyed by the manifest's `asset_key` (#110).
+    ///
+    /// The key is what survives: a presigned `asset_url` expires, and a re-signed URL names the same
+    /// bytes. The frame the decode lands on is remembered for the same reason a hull's picture is —
+    /// a decode that finishes between two polls changes nothing the loop would otherwise see (#51).
+    pub fn offer_asset(&mut self, asset_key: &str, bytes: std::sync::Arc<[u8]>) {
+        let image = self.image_cache().load(bytes);
+        self.assets.insert(asset_key.to_string(), image);
+        self.assets_pending.insert(asset_key.to_string());
     }
 
     pub fn now(&self) -> std::time::Instant {
@@ -1966,6 +2003,13 @@ fn projections(
         images: &state.pictures,
     };
     let mut layer = markers::layer(&placed, frame, scale, &pictures, id);
+    // **The tactical objects are a layer of their own** (#110), projected against **this** pane's
+    // frame (`INV-04`): a tiled wall draws the same water's buoys in every pane showing it. Drawn
+    // after the hulls so a buoy's label reads over the picture rather than under a hull passing it.
+    let placed_objects = objects::place(&state.placements, &state.manifest, frame);
+    if let Some(objects) = objects::layer(&placed_objects, frame, scale, &state.assets, id) {
+        layer = layer.child(objects);
+    }
     if let Some(card) = state.card_in(id)
         && let Some(marker) = placed
             .iter()
@@ -2800,6 +2844,75 @@ pub(crate) fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool
             state.offer_picture(*id_unit, std::sync::Arc::from(bytes.as_slice()));
             changed = true;
         }
+        crate::data::Reply::TacticalObjectManifest(Ok(manifest)) => {
+            // **The offline library, cached by code** (#110). An unsigned entry is kept: a signing
+            // failure omits the URL, not the entry, because the map still needs to know the symbol
+            // exists and what it is called.
+            state.manifest.clear();
+            let mut unsigned = 0;
+            for entry in &manifest.symbols {
+                if entry.asset_url.is_none() {
+                    unsigned += 1;
+                }
+                state.manifest.insert(entry.code.clone(), entry.clone());
+            }
+            tracing::info!(
+                version = manifest.version,
+                symbols = manifest.symbols.len(),
+                unsigned,
+                "the tactical-object manifest was cached"
+            );
+            changed = true;
+        }
+        crate::data::Reply::TacticalObjectManifest(Err(error)) => {
+            // A refresh is deliberate, not per frame: say it once and draw no objects rather than
+            // asking again every frame for a read the account may not be allowed.
+            tracing::warn!(
+                endpoint = "GET /tactical-objects/manifest",
+                error = %error,
+                "the tactical-object manifest did not read: no object draws its artwork until a refresh"
+            );
+        }
+        crate::data::Reply::TacticalObjectPlacements(Ok(pages)) => {
+            state.placements.clone_from(&pages.rows);
+            tracing::info!(
+                marks = pages.rows.len(),
+                pages = pages.pages,
+                total = pages.total_records,
+                truncated = pages.truncated,
+                "the operational placements were read"
+            );
+            if pages.truncated {
+                tracing::warn!(
+                    marks = pages.rows.len(),
+                    "the placement read hit its page cap: the map draws part of the operational layer"
+                );
+            }
+            changed = true;
+        }
+        crate::data::Reply::TacticalObjectPlacements(Err(error)) => {
+            tracing::warn!(
+                endpoint = "GET /tactical-object-placements",
+                error = %error,
+                "the operational placements did not read: the map draws no tactical objects"
+            );
+        }
+        crate::data::Reply::TacticalAsset(asset_key, Ok(bytes)) => {
+            state.offer_asset(asset_key, std::sync::Arc::from(bytes.as_slice()));
+            changed = true;
+        }
+        crate::data::Reply::TacticalAsset(asset_key, Err(error)) => {
+            // **An expired URL is a re-sign, not an error state** (#110): log it once, keep the generic
+            // mark, and never turn a picture into a failed read. Asking again on every frame would
+            // hammer object storage with a URL that has already expired.
+            if state.asset_failures.insert(asset_key.clone()) {
+                tracing::warn!(
+                    asset = %asset_key,
+                    error = %error,
+                    "the tactical object's artwork did not arrive: the generic mark is drawn until a refresh"
+                );
+            }
+        }
         crate::data::Reply::Image(id_unit, Err(error)) => {
             // A picture that cannot be fetched draws the symbol, says why **in the log**, and is asked
             // for again after a growing wait. The old code printed to stderr — which a wall with
@@ -3046,6 +3159,13 @@ fn setup(state: &mut State, waker: rune::Waker) {
         // The card's three reads run here, on the reads thread, never on the UI thread.
         state.backend = crate::data::Backend::spawn(config.minos.clone()).ok();
     }
+    if let Some(backend) = &state.backend {
+        // **The tactical-object cache, read once at init** (#110): the manifest is the offline library
+        // (unpaginated on purpose), and the placements are the operational marks. A refresh is
+        // deliberate, not per frame, so neither is asked again by `poll`.
+        backend.request(crate::data::Command::TacticalObjectManifest);
+        backend.request(crate::data::Command::TacticalObjectPlacements);
+    }
     // **Where the wall opens** (#108): one read, off this thread, for the pane that exists now. The
     // first frame draws the seed camera whether or not it has answered — a late read is not a blank
     // wall — and the answer moves that pane and no other.
@@ -3229,12 +3349,58 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
         }
     }
 
+    // **The tactical-object artwork is fetched once per symbol** (#110), off the UI thread: the
+    // manifest names an `asset_key` and a presigned URL, and the decoded bytes are cached by the key
+    // the way a hull's picture is. Only the symbols the map actually places are fetched, a few per
+    // frame; an unsigned entry is logged once and draws the generic mark rather than failing a read.
+    if let Some(backend) = &state.backend {
+        let mut asked = 0;
+        for placement in &state.placements {
+            if asked >= ASSETS_PER_FRAME {
+                break;
+            }
+            let code = &placement.symbol.code;
+            let Some(entry) = state.manifest.get(code) else {
+                // A placement's symbol is always in the manifest the library serves. A code that is
+                // not is a library the wall's cache has not caught up with: still draw something,
+                // and say so once. The empty-manifest case is "not read yet", not a missing symbol.
+                if !state.manifest.is_empty() && state.generic_logged.insert(code.clone()) {
+                    tracing::warn!(
+                        symbol = %code,
+                        "the symbol is not in the cached manifest: the map draws the generic mark"
+                    );
+                }
+                continue;
+            };
+            let key = entry.asset_key.clone();
+            if state.assets.contains_key(&key)
+                || state.asked_assets.contains(&key)
+                || state.asset_failures.contains(&key)
+            {
+                continue;
+            }
+            let Some(url) = entry.asset_url.clone() else {
+                if state.generic_logged.insert(key) {
+                    tracing::warn!(
+                        symbol = %code,
+                        "the symbol's asset_url is unsigned: the map draws the generic mark"
+                    );
+                }
+                continue;
+            };
+            state.asked_assets.insert(key.clone());
+            backend.request(crate::data::Command::TacticalAsset(key, url));
+            asked += 1;
+        }
+    }
+
     // A picture still decoding is a reason to draw the next frame, and the frame a decode *lands* on is a
     // reason to draw one more. Both matter, and the second is the one that was missing (`#51`): a decode
     // that completes between two polls changes nothing the loop would otherwise notice, so a wall that
     // only redrew "while pending" kept the last tree — the symbol — forever. The waker now wakes the app
     // too, but a headless render is not waiting on one, and this costs two comparisons per frame.
     changed |= pictures_need_a_frame(&mut state.pictures_pending, &state.pictures);
+    changed |= assets_need_a_frame(&mut state.assets_pending, &state.assets);
     // A marker still travelling between two fixes needs the next frame drawn, and stops asking on its
     // own when the travel window ends: a wall at rest rebuilds nothing.
     if state.picture.travelling(state.now()) {
@@ -3335,6 +3501,29 @@ fn pictures_need_a_frame(
     }
     true
 }
+
+/// The same rule for a tactical object's artwork, keyed by the manifest's `asset_key` (#110).
+fn assets_need_a_frame(
+    pending: &mut std::collections::HashSet<String>,
+    assets: &std::collections::HashMap<String, rune::Image>,
+) -> bool {
+    if pending.is_empty() {
+        return false;
+    }
+    let landed: Vec<String> = pending
+        .iter()
+        .filter(|key| assets.get(*key).is_some_and(|asset| asset.is_ready()))
+        .cloned()
+        .collect();
+    for key in landed {
+        pending.remove(&key);
+    }
+    true
+}
+
+/// How many tactical-object assets are asked for in one frame. Off the UI thread either way, but a
+/// wall that fired all 56 at once would open 56 requests at boot for the sake of the three it draws.
+pub const ASSETS_PER_FRAME: usize = 4;
 
 /// How often the wall says what it has received. Long enough to be a heartbeat, short enough that a
 /// frozen picture is noticed inside a coffee break.

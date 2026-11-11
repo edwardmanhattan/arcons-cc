@@ -40,6 +40,10 @@ pub const SYMBOL: f32 = 24.0;
 pub const SYMBOL_STROKE: f32 = 0.072;
 /// A marker's hit target: at least 24 pt, because a touch target is a decision about fingers.
 pub const MARKER_TARGET: f32 = 24.0;
+/// A tactical object's mark: the box its artwork is drawn in, and the size of the generic diamond a
+/// missing picture falls back to (#110). The same 24 pt as a hull's symbol — a buoy is read from the
+/// same distance across the room, and it is not a hit target.
+pub const OBJECT_MARK: f32 = 24.0;
 /// The card's edge. Stronger than a panel hairline: it has to hold its shape over light water.
 pub const CARD_BORDER: f32 = 1.0;
 

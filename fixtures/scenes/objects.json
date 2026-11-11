@@ -1,0 +1,105 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": [
+    {
+      "id": 1,
+      "symbol": {
+        "id": 25,
+        "code": "LIGHTS_FIX",
+        "name": "Fixed Light",
+        "id_name": "Suar Tetap",
+        "description": "",
+        "category": {
+          "id": 2,
+          "name": "Kenavigasian",
+          "id_name": "Kenavigasian",
+          "sort_order": 1,
+          "domain": {
+            "id": 2,
+            "name": "Maritime",
+            "id_name": "Maritim",
+            "sort_order": 2
+          }
+        },
+        "sort_order": 250,
+        "is_active": true,
+        "is_seeded": true,
+        "asset_source": "seed",
+        "asset_url": "https://objects.example.test/minos/minos/tactical-objects/LIGHTS_FIX.svg?X-Amz-Expires=REDACTED"
+      },
+      "latitude": -5.999893031051341,
+      "longitude": 106.6417439213485,
+      "label": "",
+      "rotation_deg": 0,
+      "created_at": "2026-11-10T13:37:48.353749+07:00",
+      "updated_at": "2026-11-10T13:37:48.353749+07:00"
+    },
+    {
+      "id": 2,
+      "symbol": {
+        "id": 1,
+        "code": "BOYCAR_N",
+        "name": "North Cardinal Buoy",
+        "id_name": "Bui Kardinal Utara",
+        "description": "",
+        "category": {
+          "id": 2,
+          "name": "Kenavigasian",
+          "id_name": "Kenavigasian",
+          "sort_order": 1,
+          "domain": {
+            "id": 2,
+            "name": "Maritime",
+            "id_name": "Maritim",
+            "sort_order": 2
+          }
+        },
+        "sort_order": 10,
+        "is_active": true,
+        "is_seeded": true,
+        "asset_source": "seed",
+        "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BOYCAR_N.svg?X-Amz-Expires=REDACTED"
+      },
+      "latitude": -5.974625733662992,
+      "longitude": 106.7234547367782,
+      "label": "North Cardinal 3",
+      "rotation_deg": 0,
+      "created_at": "2026-11-10T13:37:48.353749+07:00",
+      "updated_at": "2026-11-10T13:37:48.353749+07:00"
+    },
+    {
+      "id": 3,
+      "symbol": {
+        "id": 9,
+        "code": "BOYLAT_STBD_CONE_GREEN",
+        "name": "Starboard Lateral Conical Buoy (Green)",
+        "id_name": "Bui Lateral Kerucut Hijau",
+        "description": "",
+        "category": {
+          "id": 2,
+          "name": "Kenavigasian",
+          "id_name": "Kenavigasian",
+          "sort_order": 1,
+          "domain": {
+            "id": 2,
+            "name": "Maritime",
+            "id_name": "Maritim",
+            "sort_order": 2
+          }
+        },
+        "sort_order": 90,
+        "is_active": true,
+        "is_seeded": true,
+        "asset_source": "seed",
+        "asset_url": "https://objects.example.test/minos/minos/tactical-objects/BOYLAT_STBD_CONE_GREEN.svg?X-Amz-Expires=REDACTED"
+      },
+      "latitude": -5.967113609323917,
+      "longitude": 106.60363509566491,
+      "label": "Green cone 7",
+      "rotation_deg": 45,
+      "created_at": "2026-11-10T13:37:48.353749+07:00",
+      "updated_at": "2026-11-10T13:37:48.353749+07:00"
+    }
+  ]
+}

@@ -78,6 +78,18 @@ filled in so each trap has one hull (hull 7 never reported, hull 11 is older tha
 threshold, hull 13 is backfilled, hull 17 has no course, hull 9 is a measured `0.0`). Say so rather
 than pretending a dev server produced it.
 
+`scenes/objects.json` is the `objects` scene's operational layer (#110): **derived from
+`rest/tactical-object-placements.json`**, the same three marks and the same coordinates, with two
+labels filled in ("North Cardinal 3", "Green cone 7") and the cone's bearing set to 45°. The third
+mark keeps the recording's `"label": ""`, which is the unlabelled case the capture asserts. Everything
+else — the envelope, every embedded symbol, every other key — is the recorded wire shape.
+
+`scenes/buoy.png`, `scenes/cone.png` and `scenes/light.png` are **stand-ins for the presigned SVG
+artwork**: the recorded `asset_url` points at object storage, and a scene may not open a socket
+(`INV-11`). Each is a 32 × 32 shape in one exact colour, so the assertion can find the decoded bytes at
+a placement's projected point rather than any ink at all. They are repository art, like `hull.png`,
+not wire data.
+
 `golden/<scene>.png` is one capture per scene, compared **byte for byte** (`INV-11`). It changes only
 through `scripts/capture.sh --update-goldens`, which a human runs after looking at the diff. A golden
 that changes in passing is a golden that has stopped being a check.

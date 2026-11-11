@@ -15,7 +15,9 @@
 
 use std::path::PathBuf;
 
-use crate::data::types::{Envelope, FeedPosition};
+use crate::data::types::{
+    Envelope, FeedPosition, Pages, TacticalObjectManifest, TacticalObjectPlacement,
+};
 use crate::map::geometry::Camera;
 use crate::ui::State;
 
@@ -229,6 +231,131 @@ fn panes_range(state: &mut State) {
     }
     if let Some(pane) = state.pane_mut(first) {
         pane.view.range = crate::units::mark::Range::Picture;
+    }
+}
+
+/// The buoy, the cone and the unlabelled light the `objects` scene draws, by placement id — the three
+/// rows of `fixtures/scenes/objects.json`, which is derived from the recorded operational map.
+pub const OBJECTS_BUOY: i64 = 2;
+pub const OBJECTS_CONE: i64 = 3;
+pub const OBJECTS_UNLABELLED: i64 = 1;
+
+/// The water both panes of `objects` look at: the middle of the three recorded marks.
+pub const OBJECTS_CENTRE: (f64, f64) = (-5.9835, 106.6636);
+
+/// **Two zooms on the same water** (near, far). A placement drawn against the wall's camera instead of
+/// its pane's lands tens of pixels away in the far pane, which is what makes the capture a proof of
+/// `INV-04` on this layer rather than a picture of three dots.
+pub const OBJECTS_ZOOMS: (f64, f64) = (10.6, 9.5);
+
+/// The stand-in artwork's ink, so an assertion can find the **decoded bytes** at a placement's point
+/// rather than any ink. The three PNGs are repository fixtures, like `hull.png`: the recorded
+/// `asset_url` is presigned and a scene may not open a socket (`INV-11`).
+pub const OBJECT_BUOY_INK: [u8; 3] = [58, 208, 122];
+pub const OBJECT_CONE_INK: [u8; 3] = [224, 85, 58];
+pub const OBJECT_LIGHT_INK: [u8; 3] = [245, 200, 66];
+
+pub const OBJECT_BUOY_PNG: &[u8] = include_bytes!("../fixtures/scenes/buoy.png");
+pub const OBJECT_CONE_PNG: &[u8] = include_bytes!("../fixtures/scenes/cone.png");
+pub const OBJECT_LIGHT_PNG: &[u8] = include_bytes!("../fixtures/scenes/light.png");
+
+/// `fixtures/scenes/objects.json` — the operational placements, wire-shaped. Derived from
+/// `rest/tactical-object-placements.json` by filling in two labels and a bearing (the recording wrote
+/// `""` and `0`); the envelope and every other key are the recorded ones.
+pub fn objects_fixture() -> Result<Vec<TacticalObjectPlacement>, String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/scenes/objects.json");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let envelope: Envelope<Vec<TacticalObjectPlacement>> = serde_json::from_str(&text)
+        .map_err(|error| format!("{} is not the placements envelope: {error}", path.display()))?;
+    Ok(envelope.data)
+}
+
+/// The recorded manifest, read straight from `fixtures/rest/`: the cache a wall would have.
+fn manifest_fixture() -> Result<TacticalObjectManifest, String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/rest/tactical-objects-manifest.json");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let envelope: Envelope<TacticalObjectManifest> = serde_json::from_str(&text)
+        .map_err(|error| format!("{} is not the manifest envelope: {error}", path.display()))?;
+    Ok(envelope.data)
+}
+
+/// The `objects` scene (#110): **a buoy, a cone and one unlabelled placement**, on a two-pane wall.
+///
+/// The manifest and the placements go through the same replies the wall takes, and the artwork through
+/// the same reply a fetched picture takes — so the capture covers wire data → cache → mark, not a
+/// shortcut into the cache (`#54`'s rule, applied to #110). The unlabelled mark is the recorded
+/// `"label": ""`, which must draw **no plate**; the other two carry labels somebody wrote.
+fn objects(state: &mut State) {
+    load(state);
+    let manifest = match manifest_fixture() {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            eprintln!("arcons-cc: scene: {error}");
+            return;
+        }
+    };
+    crate::ui::apply_reply(
+        state,
+        &crate::data::Reply::TacticalObjectManifest(Ok(Box::new(manifest.clone()))),
+    );
+    let rows = match objects_fixture() {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("arcons-cc: scene: {error}");
+            return;
+        }
+    };
+    let total = rows.len() as u64;
+    crate::ui::apply_reply(
+        state,
+        &crate::data::Reply::TacticalObjectPlacements(Ok(Pages {
+            rows,
+            pages: 1,
+            total_records: Some(total),
+            truncated: false,
+        })),
+    );
+    // **The artwork, by the manifest's own keys** — not by a path written here, so a change to the
+    // library's key is a missing asset rather than a scene that silently keeps drawing the old one.
+    for (code, bytes) in [
+        ("BOYCAR_N", OBJECT_BUOY_PNG),
+        ("BOYLAT_STBD_CONE_GREEN", OBJECT_CONE_PNG),
+        ("LIGHTS_FIX", OBJECT_LIGHT_PNG),
+    ] {
+        let key = manifest
+            .symbols
+            .iter()
+            .find(|entry| entry.code == code)
+            .map(|entry| entry.asset_key.clone());
+        if let Some(key) = key {
+            crate::ui::apply_reply(
+                state,
+                &crate::data::Reply::TacticalAsset(key, Ok(bytes.to_vec())),
+            );
+        }
+    }
+    wait_for_assets(state);
+    // **Two panes, the same water, two zooms**: the layer must be projected against each pane's own
+    // frame. The focused pane is the near one, so a wall-wide camera agrees with it and is wrong in
+    // its neighbour — the falsifier the assertion names.
+    let first = state.layout.focused();
+    state.set_camera(Camera::new(OBJECTS_CENTRE, OBJECTS_ZOOMS.0));
+    state.split_pane(first, Camera::new(OBJECTS_CENTRE, OBJECTS_ZOOMS.1));
+    state.layout.focus(first);
+}
+
+/// Wait, bounded, for the scene's decoded artwork — the same reason `wait_for_picture` waits: a
+/// capture that raced the decoder would draw generic marks on some runs and artwork on others
+/// (`INV-11`). A picture that cannot decode draws the generic mark rather than hanging.
+fn wait_for_assets(state: &mut State) {
+    for _ in 0..400 {
+        if state.assets.len() >= 3 && state.assets.values().all(|asset| asset.is_ready()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
     }
 }
 
@@ -478,6 +605,9 @@ pub const SCENES: &[Scene] = &[
     ("panes-max", panes_max),
     ("panes-cards", panes_cards),
     ("panes-range", panes_range),
+    // The operational layer (#110): a buoy, a cone and one unlabelled mark, on two panes at two
+    // zooms, so a wall-wide camera lands in the wrong place.
+    ("objects", objects),
     ("settings", settings_sheet),
     ("settings-dismiss", settings_dismiss),
     ("pane-menu", pane_menu),
@@ -574,6 +704,9 @@ mod tests {
                 // Two panes at two zooms on the same hull: the symbol-to-picture latch is the pane's,
                 // not the wall's (#115).
                 "panes-range",
+                // The operational layer (#110): two panes at two zooms on the same water, so a
+                // placement drawn from the wall's camera is in the wrong place in one of them.
+                "objects",
                 "settings",
                 // The one scene whose point is that something is **not** there: the sheet, after a press
                 // outside it (#98).
@@ -651,6 +784,45 @@ mod tests {
                 .is_some_and(|image| image.is_ready()),
             "the picture is decoded for the wall, so the neighbour could draw it too"
         );
+
+        // The operational layer (#110): the manifest is cached by code, the three recorded marks are
+        // loaded through the reply path, and the artwork is decoded before the first frame. One mark
+        // is unlabelled, which the capture proves draws no plate.
+        let objects = state_for("objects");
+        assert_eq!(objects.manifest.len(), 56, "the whole recorded manifest");
+        assert_eq!(objects.placements.len(), 3, "the recorded operational map");
+        let labelled = objects
+            .placements
+            .iter()
+            .filter(|mark| mark.label.as_deref().is_some_and(|label| !label.is_empty()))
+            .count();
+        assert_eq!(labelled, 2, "a buoy and a cone carry labels");
+        assert!(
+            objects
+                .placements
+                .iter()
+                .any(|mark| mark.id == OBJECTS_UNLABELLED && mark.label.as_deref() == Some("")),
+            "the recorded empty label is the unlabelled mark, not a plate"
+        );
+        assert_eq!(
+            objects.assets.len(),
+            3,
+            "one decoded handle per placed symbol"
+        );
+        assert!(
+            objects.assets.values().all(|asset| asset.is_ready()),
+            "the artwork is decoded before the first frame (INV-11)"
+        );
+        assert_eq!(objects.panes.len(), 2, "two panes at two zooms");
+        for (pane, zoom) in objects.panes.iter().zip([OBJECTS_ZOOMS.0, OBJECTS_ZOOMS.1]) {
+            assert_eq!(pane.camera.zoom, zoom, "each pane holds its own zoom");
+            assert!(
+                (pane.camera.center.0 - OBJECTS_CENTRE.0).abs() < 1e-9
+                    && (pane.camera.center.1 - OBJECTS_CENTRE.1).abs() < 1e-9,
+                "the same water, got {:?}",
+                pane.camera.center
+            );
+        }
     }
 
     #[test]

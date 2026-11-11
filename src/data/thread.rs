@@ -38,6 +38,9 @@ pub enum Command {
     Units,
     /// One hull's picture, by the presigned URL the register gave.
     Image(i64, String),
+    /// One tactical object's artwork, by the manifest's `asset_key` and its presigned URL. The key is
+    /// the cache's identity for the bytes: a URL expires, a key does not (`#110`).
+    TacticalAsset(String, String),
     /// Where the map opens, or an unset viewpoint.
     Viewpoint,
     /// The facility vocabulary.
@@ -75,6 +78,9 @@ pub enum Reply {
     Units(Result<crate::data::types::Register, Error>),
     /// One hull's picture bytes, fetched off the UI thread and decoded by the view's cache.
     Image(i64, Result<Vec<u8>, Error>),
+    /// One tactical object's artwork, keyed by the manifest's `asset_key` so the cache survives a
+    /// re-signed URL. A failure is a log line and the generic mark, never an error state (`#110`).
+    TacticalAsset(String, Result<Vec<u8>, Error>),
     Specifications(
         i64,
         Result<Vec<crate::data::types::UnitSpecification>, Error>,
@@ -190,6 +196,9 @@ async fn perform(http: &Http, command: Command) -> Reply {
         Command::Unit(id_unit) => Reply::Unit(id_unit, http.unit(id_unit).await.map(Box::new)),
         Command::Units => Reply::Units(http.units().await),
         Command::Image(id_unit, url) => Reply::Image(id_unit, http.image(&url).await),
+        Command::TacticalAsset(asset_key, url) => {
+            Reply::TacticalAsset(asset_key, http.image(&url).await)
+        }
         Command::Commander(id_unit) => Reply::Commander(id_unit, http.commander(id_unit).await),
         Command::Specifications(id_unit) => {
             Reply::Specifications(id_unit, http.specifications(id_unit).await)

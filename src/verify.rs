@@ -378,6 +378,20 @@ fn marker_in_panel(
     Ok((at, distance))
 }
 
+/// Whether any pixel inside `rect` is `colour` within `tolerance`.
+///
+/// The plate probe is a rectangle rather than a point because a rounded plate's fill is antialiased at
+/// its corner, and a point probe written against the token would fail on the rasteriser rather than on
+/// the drawing. A rectangle that is **entirely** fill when a plate is drawn, and entirely ground when
+/// none is, is the question `INV-01` asks.
+fn rect_has(image: &Image, rect: crate::ui::Rect, colour: [u8; 3], tolerance: u8) -> bool {
+    let x0 = rect.x.max(0.0) as u32;
+    let y0 = rect.y.max(0.0) as u32;
+    let x1 = (rect.x + rect.w).min(image.width as f32) as u32;
+    let y1 = (rect.y + rect.h).min(image.height as f32) as u32;
+    (y0..y1).any(|y| (x0..x1).any(|x| near(image.at(x, y), colour, tolerance)))
+}
+
 /// Check one scene's capture. Returns the lines it wants printed, or the failures.
 pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<String>> {
     let mut failures = Vec::new();
@@ -456,6 +470,107 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                     "photo: no picture ink within 30 px of the hull at ({x:.0}, {y:.0}) — the capture                      drew the symbol, so the decoded picture never reached the marker"
                 )),
             }
+        }
+        "objects" => {
+            // **The operational layer, projected against each pane's own frame** (#110, `INV-04`).
+            // Two panes at two zooms on the same water: the rectangles come from `Layout::rects`
+            // measured against the panel this capture actually has, exactly as `panes` does, so the
+            // view and the assertion cannot disagree about where a pane is. A layer drawn from the
+            // wall's camera agrees with the focused pane and is tens of pixels out in its neighbour,
+            // which is the falsifier the ticket names.
+            let Some((origin_x, origin_y, panel_w, panel_h)) =
+                image.find_panel_rect(ink(tokens::panel()))
+            else {
+                failures.push("objects: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let state = scene::state_for("objects");
+            let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
+            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            if rects.len() != 2 {
+                failures.push(format!(
+                    "objects: {} panes, and the capture is the case for two — a wall-wide camera \
+                     cannot be told from a pane's with one",
+                    rects.len()
+                ));
+                return Err(failures);
+            }
+            // The three marks the scene places, and the ink each one's decoded artwork carries.
+            let expected = [
+                (scene::OBJECTS_BUOY, scene::OBJECT_BUOY_INK, "buoy"),
+                (scene::OBJECTS_CONE, scene::OBJECT_CONE_INK, "cone"),
+                (
+                    scene::OBJECTS_UNLABELLED,
+                    scene::OBJECT_LIGHT_INK,
+                    "unlabelled light",
+                ),
+            ];
+            let plate = ink(tokens::name_plate());
+            for (index, (id, rect)) in rects.iter().enumerate() {
+                let Some(pane) = state.pane(*id) else {
+                    failures.push(format!("objects: pane {id} has no state"));
+                    continue;
+                };
+                // The frame a headless pane draws with: its own rectangle and its own camera, the
+                // rule `pane_laid_out` applies on the wall's behalf.
+                let frame = crate::ui::view::synthetic_frame(pane.camera, *rect, 1.0);
+                let placed = crate::ui::objects::place(&state.placements, &state.manifest, &frame);
+                if placed.len() != expected.len() {
+                    failures.push(format!(
+                        "objects: pane {index} draws {} placements, and the scene has {}",
+                        placed.len(),
+                        expected.len()
+                    ));
+                    continue;
+                }
+                for (placement, colour, what) in expected {
+                    let Some(mark) = placed.iter().find(|mark| mark.id == placement) else {
+                        failures.push(format!(
+                            "objects: pane {index} has no placement {placement} ({what})"
+                        ));
+                        continue;
+                    };
+                    let x = origin_x + f64::from(rect.x) + mark.x;
+                    let y = origin_y + f64::from(rect.y) + mark.y;
+                    match image.nearest_colour(x, y, colour, 6.0) {
+                        Some(distance) => lines.push(format!(
+                            "objects: pane {index}'s {what} within {distance:.1} px of \
+                             ({x:.0}, {y:.0})"
+                        )),
+                        None => failures.push(format!(
+                            "objects: no artwork ink within 6 px of ({x:.0}, {y:.0}) — pane \
+                             {index}'s projection of the {what}. A layer drawn against the wall's \
+                             camera lands elsewhere (INV-04), and a missing asset draws the generic \
+                             mark instead"
+                        )),
+                    }
+                    // **A label is optional, and an empty label is not a label** (`INV-01`): the
+                    // unlabelled placement must have no plate where the others have one. The probe
+                    // is the plate's own left padding, so an empty plate is caught rather than
+                    // passing because a surface was drawn around nothing.
+                    let probe = crate::ui::objects::label_probe((x, y));
+                    let has_plate = rect_has(image, probe, plate, 4);
+                    if mark.id == scene::OBJECTS_UNLABELLED {
+                        if has_plate {
+                            failures.push(format!(
+                                "objects: the unlabelled placement draws a label plate at \
+                                 ({:.0}, {:.0}) — an empty label is not a label (INV-01)",
+                                probe.x, probe.y
+                            ));
+                        }
+                    } else if !has_plate {
+                        failures.push(format!(
+                            "objects: the {what}'s label has no plate at ({:.0}, {:.0}) — a label \
+                             somebody wrote is drawn beside its mark",
+                            probe.x, probe.y
+                        ));
+                    }
+                }
+            }
+            lines.push(format!(
+                "objects: {} placements in two panes, the unlabelled one with no plate",
+                expected.len()
+            ));
         }
         "settings" => {
             // **The sheet is drawn, it is the size the token says, and it is on the wall** (#82). The
@@ -1858,6 +1973,44 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
         failures.push(
             "pane-menu: the scene has no menu open, so the capture shows nothing of it".into(),
         );
+    }
+
+    // **The operational layer is drawn in every pane** (#110): the data is the wall's, the frame is
+    // the pane's, and until #112 lands the filter there is nothing that may hide a placement in one
+    // pane and not another. A pane that drew no placement, or drew another pane's projection, is the
+    // bug the capture's pixel half names.
+    if scene == "objects" {
+        let expected = state.placements.len();
+        let rects = crate::ui::view::panes_on(
+            &state.layout,
+            state.pane_viewport(),
+            state.settings.pane_gap,
+        );
+        if rects.len() != 2 {
+            failures.push(format!(
+                "objects: {} panes for a scene that is the case for two",
+                rects.len()
+            ));
+        }
+        for (id, rect) in &rects {
+            let Some(pane) = state.pane(*id) else {
+                continue;
+            };
+            let frame = crate::ui::view::synthetic_frame(pane.camera, *rect, 1.0);
+            let placed = crate::ui::objects::place(&state.placements, &state.manifest, &frame);
+            if placed.len() != expected {
+                failures.push(format!(
+                    "objects: pane {id} draws {} placements for {expected} operational marks",
+                    placed.len()
+                ));
+            }
+        }
+        if failures.is_empty() {
+            lines.push(format!(
+                "objects: {expected} placements in {} panes",
+                rects.len()
+            ));
+        }
     }
 
     // **One card per pane, and its own** (#99): the selection belongs to a window, so the question is
