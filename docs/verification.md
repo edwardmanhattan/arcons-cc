@@ -131,13 +131,20 @@ into the cache: a capture then covers bytes → cache → marker, which is the r
 
 ```sh
 cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-drag · panes-pan
-                                 # panes-menu · panes-gaps · panes-named · panes-max · settings · pane-menu
+                                 # panes-menu · panes-gaps · panes-named · panes-max · panes-cards · panes-range
+                                 # settings · settings-dismiss · pane-menu
 scripts/verify.sh                # renders and asserts each one
 ```
 
 `panes` is the Multi View witness (#68): three panes at three cameras, each pane's frame its own
 rectangle, and the focused pane marked by its edge. Its assertion projects each hull against the pane
 it is drawn in, using the same `Layout::rects` the view lays the panes out with.
+
+`panes-range` is the same wall stripped to **two panes at two zooms on the same hull** (#115): the focused
+pane at `PHOTO_ZOOM`, where a ship is its photograph, and its neighbour at a chart zoom, where it is a
+symbol. Both panes hold the decoded bytes — the cache is the wall's — so the capture is about the *latch*:
+the assertion requires picture ink in one pane and symbol ink in the other, and a wall-wide range draws one
+representation in both.
 
 A tiled wall also says so in its header (`40 units · panes=3`) and in its log (`pane_frames=[12, 3, 3]`): a
 wall quietly drawing three of four panes is a line in a file, not a report (#71).
