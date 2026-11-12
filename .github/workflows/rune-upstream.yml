@@ -60,8 +60,12 @@ jobs:
           set -euo pipefail
           repo=https://github.com/anomalyco/rune
           compare="$repo/compare/$PINNED...$UPSTREAM"
-          commits=$(gh api "repos/anomalyco/rune/commits?sha=dev&per_page=8" \
-            --jq '.[] | "- `\(.sha[0:8])` \(.commit.message | split("\n")[0])"' || true)
+          # The commits **since the pin**, newest first — `commits?sha=dev` would list the eight
+          # newest overall, including ones the pin already has.
+          summary=$(gh api "repos/anomalyco/rune/compare/$PINNED...$UPSTREAM" \
+            --jq '"$TOTAL\n" + ([.commits | reverse | .[0:8][] | "- `\(.sha[0:8])` \(.commit.message | split("\n")[0])"] | join("\n"))' || true)
+          total=$(printf '%s\n' "$summary" | head -1)
+          commits=$(printf '%s\n' "$summary" | tail -n +2)
           body=$(cat <<EOF
           \`dev\` is at [\`${UPSTREAM:0:8}\`]($repo/commit/$UPSTREAM); the pin is [\`${PINNED:0:8}\`]($repo/commit/$PINNED).
 
