@@ -16,8 +16,9 @@
 use std::path::PathBuf;
 
 use crate::data::types::{
-    Envelope, FeedPosition, Installation, InstallationType, Pages, TacticalObjectFacets,
-    TacticalObjectManifest, TacticalObjectPlacement, TniCommandPost, UnitOrganisationDetail,
+    Envelope, FeedPosition, Installation, InstallationType, NewsQuery, Pages, StoryPage,
+    TacticalObjectFacets, TacticalObjectManifest, TacticalObjectPlacement, TniCommandPost,
+    UnitOrganisationDetail,
 };
 use crate::map::geometry::Camera;
 use crate::ui::State;
@@ -901,6 +902,158 @@ fn installations_layer(state: &mut State) {
     crate::ui::installations::press(state, first, INSTALLATIONS_BASE);
 }
 
+// ---------------------------------------------------------------------------------------------
+// The newsroom (#136): the strategic-environment feed, one page of stories at a time.
+// ---------------------------------------------------------------------------------------------
+
+/// The share of the panel the `newsroom` scene leaves to the **map**: the picture beside the feed, the
+/// way the operator's wall has both. Half is enough for four whole rows and the footer — the pane
+/// scrolls, so the capture shows what fits at the row height rather than pretending 25 rows fit.
+pub const NEWSROOM_MAP_SHARE: f32 = 0.46;
+
+/// One wire-shaped page of stories from `fixtures/scenes/`. The files are derived from the pinned spec
+/// (`fixtures/README.md` says why they are not recordings: the dev deployment holds no stories).
+pub fn newsroom_page_fixture(name: &str) -> Result<StoryPage, String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/scenes")
+        .join(name);
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let envelope: Envelope<Vec<crate::data::types::NewsStory>> = serde_json::from_str(&text)
+        .map_err(|error| format!("{} is not the story-list envelope: {error}", path.display()))?;
+    let pagination = envelope
+        .metadata
+        .ok_or_else(|| format!("{} carries no metadata", path.display()))?;
+    Ok(StoryPage {
+        rows: envelope.data,
+        pagination,
+    })
+}
+
+/// What this pane is waiting for: the query it asked, or a fresh ask if nothing is in flight.
+///
+/// A scene has no reads thread, so it plays that part — but through the pane's own functions, so the
+/// query the reply is checked against is the query the view would have sent.
+fn waiting(state: &mut State, pane: crate::ui::ViewId) -> Option<NewsQuery> {
+    let view = state.pane_mut(pane)?.news.as_mut()?;
+    Some(match view.asked {
+        Some(query) => query,
+        None => view.ask(),
+    })
+}
+
+/// Hand a pane the page the reads thread would have sent for the query it is waiting on.
+fn apply_page(state: &mut State, pane: crate::ui::ViewId, file: &str) -> bool {
+    let page = match newsroom_page_fixture(file) {
+        Ok(page) => page,
+        Err(error) => {
+            eprintln!("arcons-cc: scene: {error}");
+            return false;
+        }
+    };
+    let Some(query) = waiting(state, pane) else {
+        return false;
+    };
+    crate::ui::apply_reply(state, &crate::data::Reply::Stories(query, Ok(page)))
+}
+
+/// Split the wall so the focused pane keeps `share` of the panel: the layout's own border, found the way
+/// a press finds it, so a scene never positions panes with a second layout function.
+fn split_ratio(state: &mut State, share: f32) {
+    let viewport = state.pane_viewport();
+    let middle = (viewport.w as f32 / 2.0, viewport.h as f32 / 2.0);
+    if let Some(border) = state.layout.border_at(viewport, middle, state.pane_grip()) {
+        state.layout.set_ratio(&border, share);
+    }
+}
+
+/// The `newsroom` scene: **a map pane and the feed beside it**, the feed focused, page 1 of the
+/// international tab in the pane's state.
+///
+/// The pane comes from the header control's own function (`ui::open_newsroom_pane`), and the page arrives
+/// as the reply the reads thread sends — wire data → pane → rows, not a shortcut into the state.
+fn newsroom(state: &mut State) {
+    load(state);
+    let map = state.layout.focused();
+    let camera = state.camera_of(map);
+    if state
+        .split_pane_as(map, camera, crate::ui::PaneContent::Newsroom)
+        .is_none()
+    {
+        return;
+    }
+    split_ratio(state, NEWSROOM_MAP_SHARE);
+    let pane = state.layout.focused();
+    apply_page(state, pane, "newsroom-international-1.json");
+}
+
+/// The `newsroom-page-2` scene: **the operator pressed Next.** Page 1 is applied first, so the pager
+/// exists and knows there is a page 2; then the press goes through the pane's own `press_page`, and the
+/// reply moves the footer.
+fn newsroom_page_2(state: &mut State) {
+    load(state);
+    let map = state.layout.focused();
+    let camera = state.camera_of(map);
+    if state
+        .split_pane_as(map, camera, crate::ui::PaneContent::Newsroom)
+        .is_none()
+    {
+        return;
+    }
+    split_ratio(state, NEWSROOM_MAP_SHARE);
+    let pane = state.layout.focused();
+    apply_page(state, pane, "newsroom-international-1.json");
+    // The press is the view's, not a second way to set the page: `press_page` refuses a page the footer
+    // would draw as disabled, and the footer moves only when the reply lands.
+    let Some(query) = state
+        .pane_mut(pane)
+        .and_then(|pane| pane.news.as_mut())
+        .and_then(|view| view.press_page(1))
+    else {
+        return;
+    };
+    match newsroom_page_fixture("newsroom-international-2.json") {
+        Ok(page) => {
+            crate::ui::apply_reply(state, &crate::data::Reply::Stories(query, Ok(page)));
+        }
+        Err(error) => eprintln!("arcons-cc: scene: {error}"),
+    }
+}
+
+/// The `newsroom-scopes` scene: **two newsroom panes on two scopes.** The second pane's tab is pressed
+/// through the same `View::press_scope` the button calls, and the first pane's rows are untouched — the
+/// falsifier the ticket names is a wall-wide scope, which would switch both.
+fn newsroom_scopes(state: &mut State) {
+    let map = state.layout.focused();
+    let camera = state.camera_of(map);
+    let Some(first) = state.split_pane_as(map, camera, crate::ui::PaneContent::Newsroom) else {
+        return;
+    };
+    let Some(second) = state.split_pane_as(first, camera, crate::ui::PaneContent::Newsroom) else {
+        return;
+    };
+    // The feed is the wall: the map pane the wall opened with goes, and the two newsroom panes keep its
+    // space. Two panes, two tabs, one press — and the pane is forgotten by the state as well as by the
+    // layout, or the header counts a pane nothing draws (`close_from_menu` does both for the same reason).
+    state.layout.close(map);
+    state.panes.retain(|pane| pane.id != map);
+    state.layout.focus(second);
+    apply_page(state, first, "newsroom-international-1.json");
+    // The press: the second pane moves to Regional and asks page 1 of it.
+    if let Some(query) = state
+        .pane_mut(second)
+        .and_then(|pane| pane.news.as_mut())
+        .and_then(|view| view.press_scope(crate::data::types::NewsScope::Regional))
+    {
+        match newsroom_page_fixture("newsroom-regional-1.json") {
+            Ok(page) => {
+                crate::ui::apply_reply(state, &crate::data::Reply::Stories(query, Ok(page)));
+            }
+            Err(error) => eprintln!("arcons-cc: scene: {error}"),
+        }
+    }
+}
+
 /// The scene registry, handed to `AppSpec::scenes`.
 pub const SCENES: &[Scene] = &[
     ("empty", empty),
@@ -940,6 +1093,11 @@ pub const SCENES: &[Scene] = &[
     ("pane-tree-zoom", pane_tree_zoom),
     // The canvas by **pointer**: a drag on a post pans the tree (a script makes the gesture).
     ("pane-tree-pan", pane_tree_pan),
+    // The newsroom (#136): the strategic-environment feed beside a map, two panes on two tabs, and the
+    // same pane on page 2. A story is not an article, absence draws a dash, and a late page is discarded.
+    ("newsroom", newsroom),
+    ("newsroom-scopes", newsroom_scopes),
+    ("newsroom-page-2", newsroom_page_2),
 ];
 
 /// Look a scene up by the name `scripts/capture.sh` was given.
@@ -1003,6 +1161,84 @@ mod tests {
         );
     }
 
+    /// **The newsroom scenes hold the pages the assertions read** (#136). The three scenes are the
+    /// capture's inputs, so a fixture that moved or a scene that stopped applying its reply must fail
+    /// here — in `cargo test`, without rendering anything.
+    #[test]
+    fn the_newsroom_scenes_hold_the_pages_the_assertions_read() {
+        let feeds = |state: &crate::ui::State| -> Vec<crate::ui::newsroom::View> {
+            state
+                .panes
+                .iter()
+                .filter_map(|pane| pane.news.clone())
+                .collect()
+        };
+
+        let first = newsroom_page_fixture("newsroom-international-1.json")
+            .expect("the international page 1 fixture");
+        let second = newsroom_page_fixture("newsroom-international-2.json")
+            .expect("the international page 2 fixture");
+        let regional =
+            newsroom_page_fixture("newsroom-regional-1.json").expect("the regional page 1 fixture");
+        assert_eq!(first.rows.len(), 25, "the wall's page is 25 stories");
+        assert_eq!(first.pagination.total_records, 128);
+        assert_ne!(
+            first.rows[0].title, second.rows[0].title,
+            "page 2 must start with a different story, or the scene proves nothing about paging"
+        );
+        assert_ne!(first.rows[0].title, regional.rows[0].title);
+
+        let newsroom = state_for("newsroom");
+        let views = feeds(&newsroom);
+        assert_eq!(views.len(), 1, "one feed beside the map");
+        assert_eq!(views[0].scope, crate::data::types::NewsScope::International);
+        assert_eq!(views[0].page, 1);
+        assert_eq!(views[0].stories[0].title, first.rows[0].title);
+        assert_eq!(
+            newsroom.layout.focused(),
+            newsroom.layout.ids()[1],
+            "the feed is focused"
+        );
+        assert_eq!(
+            newsroom.picture.len(),
+            40,
+            "the map beside it is the wall's picture"
+        );
+
+        let page_2 = state_for("newsroom-page-2");
+        let views = feeds(&page_2);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].page, 2, "the Next press moved the page");
+        assert_eq!(
+            views[0]
+                .pagination
+                .map(|pagination| pagination.current_page),
+            Some(2),
+            "and the footer says the page whose rows are on screen"
+        );
+        assert_eq!(views[0].stories[0].title, second.rows[0].title);
+
+        let scopes = state_for("newsroom-scopes");
+        let views = feeds(&scopes);
+        assert_eq!(views.len(), 2, "two newsroom panes");
+        assert!(
+            views
+                .iter()
+                .any(|view| view.scope == crate::data::types::NewsScope::International),
+            "one pane is on International"
+        );
+        let regional_view = views
+            .iter()
+            .find(|view| view.scope == crate::data::types::NewsScope::Regional)
+            .expect("the other pane was pressed to Regional");
+        assert_eq!(regional_view.stories[0].title, regional.rows[0].title);
+        assert_eq!(
+            scopes.picture.len(),
+            0,
+            "a wall of feeds draws no picture, so the header does not claim units it cannot show"
+        );
+    }
+
     #[test]
     fn every_scene_is_named_and_can_be_built() {
         // `--list-scenes` prints these; a scene that panics on build is a capture that fails at
@@ -1052,16 +1288,30 @@ mod tests {
                 "pane-tree-narrow",
                 "pane-tree-zoom",
                 // The canvas by a pointer: a drag on a post pans it.
-                "pane-tree-pan"
+                "pane-tree-pan",
+                // The newsroom (#136): the feed beside a map, two panes on two scope tabs, and the same
+                // pane after one Next press.
+                "newsroom",
+                "newsroom-scopes",
+                "newsroom-page-2"
             ]
         );
         for name in names() {
             let state = state_for(name);
             if name == "empty" {
                 assert!(state.picture.is_empty());
-            } else {
-                assert_eq!(state.picture.len(), 40, "{name} loads the fixture");
+                continue;
             }
+            if !state.panes.iter().any(|pane| pane.content.is_map()) {
+                // A wall of feeds has no picture: nothing in it projects, so loading the fixture would
+                // be a picture nothing draws — and the header would claim 40 units the wall cannot show.
+                assert!(
+                    state.picture.is_empty(),
+                    "{name} has no map pane and must not load a picture"
+                );
+                continue;
+            }
+            assert_eq!(state.picture.len(), 40, "{name} loads the fixture");
         }
         let card = state_for("card-open");
         let focused = card.layout.focused();

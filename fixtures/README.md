@@ -95,6 +95,16 @@ filled in so each trap has one hull (hull 7 never reported, hull 11 is older tha
 threshold, hull 13 is backfilled, hull 17 has no course, hull 9 is a measured `0.0`). Say so rather
 than pretending a dev server produced it.
 
+`scenes/newsroom-international-1.json`, `scenes/newsroom-international-2.json` and
+`scenes/newsroom-regional-1.json` are the newsroom scenes' pages (#136): **derived from the pinned spec**,
+like the list page in `rest/`, because the dev deployment holds no stories to record. Each is the
+`GET /banglinstra/stories` envelope with its `metadata` as the wire sends it — 25 rows, page 1 of 6 (128
+records) for International, page 2 of 6 for the same, and page 1 of 3 (61 records) for Regional — and each
+carries the absences the ticket needs: stories with **no `country`**, countries with **no `place`**, and
+`source_count` from 1 to 7 so the singular is covered. The first titles differ across the three files,
+which is what makes "page 2 is not page 1" and "two panes, two scopes" assertable. **Replace them with
+recordings** the moment the deployment's intel ingest has rows; the same rule as the `rest/` pair above.
+
 `scenes/objects.json` is the `objects` scene's operational layer (#110): **derived from
 `rest/tactical-object-placements.json`**, the same three marks and the same coordinates, with two
 labels filled in ("North Cardinal 3", "Green cone 7") and the cone's bearing set to 45°. The third
