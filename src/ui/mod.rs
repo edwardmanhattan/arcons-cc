@@ -973,11 +973,81 @@ impl State {
     /// the focus on another workspace is #141's rule, and it is a different ticket. What #138 makes
     /// expressible is a workspace that was *never* given a pane, or whose panes were moved away by the
     /// move ticket: `Workspace::empty` is a valid state, and `layout()` answers `None` for it.
+    /// **May this pane be closed?** (#141) — a pane with a sibling in its workspace, or a pane somewhere
+    /// else on the wall. The menu row and the action read this one answer, so the control and the action
+    /// cannot disagree about the last pane.
+    pub fn can_close(&self, id: ViewId) -> bool {
+        let Some(index) = self.workspace_of(id) else {
+            return false;
+        };
+        if self.workspaces[index].panes.len() > 1 {
+            return true;
+        }
+        // **The wall always keeps one pane** (#141). Three empty workspaces is a wall that can only be
+        // fixed with the `+` and `Focus on new pane`, which is not a state to hand an operator at 2 a.m.
+        self.workspaces
+            .iter()
+            .enumerate()
+            .any(|(other, workspace)| other != index && !workspace.panes.is_empty())
+    }
+
+    /// **The nearest previous workspace that still has a pane** (#141): `active-1, active-2, … 0`, then
+    /// `active+1, … n-1`. The descending scan is what makes a tie resolve to the lower index.
+    pub fn nearest_previous_non_empty(&self, from: usize) -> Option<usize> {
+        let has_panes = |index: usize| {
+            self.workspaces
+                .get(index)
+                .is_some_and(|workspace| !workspace.panes.is_empty())
+        };
+        (0..from)
+            .rev()
+            .find(|&index| has_panes(index))
+            .or_else(|| ((from + 1)..self.workspaces.len()).find(|&index| has_panes(index)))
+    }
+
+    /// **Close a pane** (#81, #141): its slot collapses into its sibling, or — when it was its workspace's
+    /// only pane — the workspace becomes **empty** and the wall lands on the nearest previous workspace
+    /// that still has one. Dropping the pane sends its map thread's stop and joins it.
+    ///
+    /// `false` for a pane no workspace holds, and for **the last pane on the wall** (#141): the rule is
+    /// [`State::can_close`], the same answer the menu row is built from.
     pub fn close_pane(&mut self, id: ViewId) -> bool {
-        if !self.layout_mut().is_some_and(|layout| layout.close(id)) {
+        if !self.can_close(id) {
             return false;
         }
-        self.panes_mut().retain(|pane| pane.id != id);
+        let Some(index) = self.workspace_of(id) else {
+            return false;
+        };
+        if !self.workspaces[index].close(id) {
+            return false;
+        }
+        // **Nothing hidden may still hold it**: ids are the wall's (#138), and a pane that survived in a
+        // workspace nobody draws would be a map thread that never stops.
+        for workspace in &mut self.workspaces {
+            workspace.panes.retain(|pane| pane.id != id);
+        }
+        // The pane a surface was opened on is gone, so the surface goes with it.
+        let on_it = match self.interaction {
+            Interaction::Menu { pane, .. } | Interaction::Filtering { pane } => pane == id,
+            Interaction::Renaming(Rename {
+                target: RenameTarget::Pane(pane),
+                ..
+            }) => pane == id,
+            _ => false,
+        };
+        if on_it {
+            self.interaction = Interaction::Idle;
+        }
+        // **Land on the nearest previous workspace that still has a pane** (#141), and focus **the pane
+        // the operator was last in there** — `Layout::focused()` remembers it, and it is not necessarily
+        // the first leaf. A workspace that keeps a pane keeps the one its tiling focused; the collapse did
+        // that.
+        if index == self.active
+            && self.workspaces[index].panes.is_empty()
+            && let Some(target) = self.nearest_previous_non_empty(index)
+        {
+            self.switch_to(target);
+        }
         self.layout_dirty = true;
         true
     }
@@ -1478,6 +1548,29 @@ impl Workspace {
             layout: Some(layout),
             panes: vec![pane],
         }
+    }
+
+    /// **Close a pane here** (#141): a multi-pane tiling collapses into the pane's sibling; the only pane
+    /// leaves the workspace **empty**, which is a state (#138) and not an error.
+    ///
+    /// `Layout` still refuses to hold nothing — a tiling of nothing is `None`, and `None` is the
+    /// workspace's — so removing the last pane is this function's job, and disowning the tiling is its
+    /// way of removing it.
+    pub fn close(&mut self, id: ViewId) -> bool {
+        let Some(layout) = self.layout.as_mut() else {
+            return false;
+        };
+        if layout.len() > 1 {
+            if !layout.close(id) {
+                return false;
+            }
+        } else if layout.contains(id) {
+            self.layout = None;
+        } else {
+            return false;
+        }
+        self.panes.retain(|pane| pane.id != id);
+        true
     }
 
     /// A workspace with nowhere to put a pane yet: the state the operator asked for.
@@ -3327,7 +3420,9 @@ pub fn menu_items(state: &State, pane: ViewId) -> Vec<MenuItem> {
     if !elsewhere.is_empty() {
         items.push(MenuItem::submenu(MENU_MOVE, "menu-move", elsewhere));
     }
-    if state.pane_count() > 1 {
+    // **The same predicate the action uses** (#141): a pane with a sibling, or one on another
+    // workspace. A lone pane on a wall of empty workspaces is refused here and refused there.
+    if state.can_close(pane) {
         items.push(MenuItem::leaf(MENU_CLOSE, "menu-close", MenuAction::Close));
     }
     items
@@ -3537,15 +3632,14 @@ pub fn open_submenu(state: &mut State, key: &'static str) {
 
 fn close_from_menu(state: &mut State, id: ViewId) {
     state.end();
+    // `close_pane` drops the pane — which stops its map thread and joins it (the rule `close_maps` relies
+    // on) — collapses its slot or empties its workspace, and lands the wall on the nearest previous
+    // workspace when it was that workspace's last pane (#141).
     if !state.close_pane(id) {
-        // The last pane: nothing happened, and the menu said so by not offering it. A redraw keeps the
-        // menu from being left open on a pane that is still there.
+        // The last pane on the wall: nothing happened, and the menu said so by not offering it. A redraw
+        // keeps the menu from being left open on a pane that is still there.
         state.layout_dirty = true;
-        return;
     }
-    // Dropping the pane's `LiveMap` stops its thread and joins it (the rule `close_maps` relies on).
-    state.panes_mut().retain(|pane| pane.id != id);
-    state.layout_dirty = true;
 }
 
 /// `Focus on new pane`: the clicked ground becomes a pane of its own, same zoom.
@@ -6880,6 +6974,171 @@ mod tests {
             1,
             "the last pane is not closeable: a wall with no panes draws nothing"
         );
+        assert_eq!(state.pane_count(), 1);
+    }
+}
+
+/// **Closing a workspace's last pane** (#141): a workspace is allowed to be empty, and the wall lands on
+/// the nearest previous workspace that still has a pane — on **the pane the operator was last in there**,
+/// which is the one thing a "switch to the workspace" that forgot `Layout::focused()` would get wrong.
+#[cfg(test)]
+mod workspace_close_tests {
+    use super::*;
+
+    /// Workspace 1 with two panes, focused on its **second**, and a one-pane workspace 2 that is active.
+    fn two_and_a_newsroom() -> (State, ViewId) {
+        let mut state = State::default();
+        let first = state.focused();
+        let second = state
+            .split_pane_as(first, Camera::START, PaneContent::Map)
+            .expect("a second map pane");
+        state.focus_pane(second);
+        // Workspace 2 with one newsroom pane, through the move the menu row calls.
+        let newsroom = state
+            .split_pane_as(second, Camera::START, PaneContent::Newsroom)
+            .expect("a feed");
+        state.focus_pane(second);
+        assert!(crate::ui::move_pane_to(&mut state, newsroom, 1));
+        assert_eq!(state.active, 1, "workspace 2 is on screen");
+        (state, newsroom)
+    }
+
+    #[test]
+    fn closing_a_one_pane_workspace_empties_it_and_lands_on_the_previous_one() {
+        let (mut state, newsroom) = two_and_a_newsroom();
+        assert!(state.can_close(newsroom), "a pane elsewhere allows it");
+        assert!(state.close_pane(newsroom));
+        assert_eq!(
+            state.active, 0,
+            "the nearest previous workspace with a pane"
+        );
+        assert_eq!(
+            state.workspaces.len(),
+            3,
+            "and the empty one stays in the chips"
+        );
+        let emptied = &state.workspaces[1];
+        assert!(emptied.layout.is_none(), "an empty workspace has no tiling");
+        assert!(emptied.panes.is_empty());
+        assert_eq!(emptied.name, "Workspace 2", "and it keeps its name");
+        assert_eq!(state.panes().len(), 2, "workspace 1 still has both panes");
+        assert!(
+            state.pane(newsroom).is_none(),
+            "and nothing anywhere still holds the closed pane"
+        );
+        // **The remembered pane, not the first leaf**: the layout's focus is what the wall shows.
+        let ids = state.pane_ids();
+        assert_eq!(state.focused(), ids[1], "the pane it was last in");
+        assert_ne!(state.focused(), ids[0]);
+    }
+
+    #[test]
+    fn closing_a_pane_with_a_sibling_keeps_its_workspace() {
+        let mut state = crate::scene::state_for("panes-menu");
+        let closed = state.focused();
+        let before = state.pane_count();
+        assert!(before > 1, "the scene tiles more than one pane");
+        assert!(state.can_close(closed));
+        assert!(state.close_pane(closed));
+        assert_eq!(
+            state.active, 0,
+            "no workspace switch: this one still has a pane"
+        );
+        assert_eq!(state.pane_count(), before - 1);
+        assert!(state.workspaces[0].layout.is_some());
+        assert_eq!(state.focused(), state.pane_ids()[0], "focus on the sibling");
+    }
+
+    /// **The wall always keeps a pane** (#141): three workspaces, two of them empty, and the lone pane
+    /// refuses to close — and the menu row that would close it is absent for the same reason.
+    #[test]
+    fn the_last_pane_on_the_wall_is_refused() {
+        let mut state = crate::scene::state_for("pane-menu");
+        let only = state.focused();
+        assert_eq!(state.pane_count(), 1);
+        assert!(
+            state.workspaces.iter().skip(1).all(|w| w.panes.is_empty()),
+            "the scene's two other workspaces are empty"
+        );
+        assert!(!state.can_close(only));
+        assert!(!state.close_pane(only), "and the action agrees with it");
+        assert_eq!(state.pane_count(), 1);
+        assert!(state.pane(only).is_some());
+        assert!(
+            crate::ui::menu_items(&state, only)
+                .iter()
+                .all(|item| item.label != MENU_CLOSE),
+            "a wall of empty workspaces cannot be fixed with a menu row, so the row is not offered"
+        );
+        // A pane on **another** workspace is what makes the same pane closeable.
+        let mut state = state;
+        let index = state.add_workspace();
+        let id = state.allocate_pane();
+        state.workspaces[index].layout = Some(Layout::single_with(id));
+        state.workspaces[index]
+            .panes
+            .push(Pane::new(id, Camera::START));
+        assert!(
+            state.can_close(only),
+            "with a pane on workspace 4, workspace 1's lone pane can close"
+        );
+    }
+
+    /// The rule's scan, as the ticket states it: `active-1, … 0`, then `active+1, … n-1`.
+    #[test]
+    fn the_scan_prefers_the_nearest_previous_workspace() {
+        let mut state = State::default();
+        while state.workspaces.len() < 4 {
+            state.add_workspace();
+        }
+        // One pane in each of workspaces 1 and 2, none in 3, a pane in 4.
+        for index in [0, 1] {
+            let id = state.allocate_pane();
+            state.workspaces[index].layout = Some(Layout::single_with(id));
+            state.workspaces[index]
+                .panes
+                .push(Pane::new(id, Camera::START));
+        }
+        let id = state.allocate_pane();
+        state.workspaces[3].layout = Some(Layout::single_with(id));
+        state.workspaces[3].panes.push(Pane::new(id, Camera::START));
+
+        // From 2 with 1 non-empty: the previous one.
+        assert_eq!(state.nearest_previous_non_empty(2), Some(1));
+        // From 2 and 1 empty, 0 non-empty: skips the hole.
+        state.workspaces[1].layout = None;
+        state.workspaces[1].panes.clear();
+        assert_eq!(state.nearest_previous_non_empty(2), Some(0));
+        // From 3 with 2 and 1 empty: 0, not the pane after it.
+        assert_eq!(state.nearest_previous_non_empty(3), Some(0));
+        // From 0 there is no previous one, so the scan turns around.
+        assert_eq!(state.nearest_previous_non_empty(0), Some(2 + 1));
+        // With no workspace holding a pane, nothing to land on.
+        for workspace in &mut state.workspaces {
+            workspace.layout = None;
+            workspace.panes.clear();
+        }
+        assert_eq!(state.nearest_previous_non_empty(1), None);
+    }
+
+    /// The pane a surface was opened on is gone, so the surface goes with it — and so does the
+    /// maximised pane, which would otherwise name a pane that no longer exists.
+    #[test]
+    fn closing_the_pane_under_a_surface_clears_it() {
+        let mut state = State::default();
+        let first = state.focused();
+        let second = state
+            .split_pane_as(first, Camera::START, PaneContent::Map)
+            .expect("a second pane");
+        state.focus_pane(second);
+        state.begin(Begin::Menu {
+            pane: second,
+            at: (20.0, 20.0),
+        });
+        state.maximise(second);
+        assert!(state.close_pane(second));
+        assert!(state.menu().is_none(), "the menu closed with its pane");
+        assert!(state.maximised().is_none(), "and nothing is maximised");
         assert_eq!(state.pane_count(), 1);
     }
 }

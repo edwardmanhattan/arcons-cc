@@ -2046,6 +2046,30 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                     "{scene}: the menu offers {rows} items, and this wall is the case for {expected}"
                 ));
             }
+            // **The lone pane of the wall is refused, and the row is refused for the same reason**
+            // (#141): the wall has three workspaces and two of them empty, so "the last pane" is not
+            // "the last pane on this workspace". `menu_items` and `State::close_pane` read one answer, so
+            // this asserts both at once.
+            if scene == "pane-menu"
+                && let Some(menu) = state.menu()
+            {
+                if state.can_close(menu.pane) {
+                    failures.push(
+                        "pane-menu: the wall would let its only pane close, and a wall of empty \
+                         workspaces cannot be fixed with a menu row (#141)"
+                            .into(),
+                    );
+                } else if rows == 4
+                    && crate::ui::menu_items(&state, menu.pane)
+                        .iter()
+                        .all(|item| item.label != crate::ui::MENU_CLOSE)
+                {
+                    lines.push(
+                        "pane-menu: no `Close pane` row, and the wall's only pane refuses to close"
+                            .to_string(),
+                    );
+                }
+            }
             let (w, h) = tokens::menu_size(rows.max(1));
             // **The pane's rectangle, not the panel's**: a menu is clamped inside the pane it was asked
             // on. With one pane those are the same rectangle, which is why #77's assertion passed on the
@@ -3040,7 +3064,8 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
         // raised chip is, so the claim is geometric: on `workspaces` the raised chip is the one furthest
         // from the `+`, on `workspaces-switch` it is the one nearest it. That scene leaves the wall on
         // workspace 1, so a capture showing workspace 3 is the script's click.
-        "workspaces" | "workspaces-empty" | "workspaces-switch" | "workspaces-named" => {
+        "workspaces" | "workspaces-empty" | "workspaces-switch" | "workspaces-named"
+        | "workspaces-close" => {
             let state = scene::state_for(scene);
             let header = (0.0, f64::from(tokens::CHIP_H) + f64::from(tokens::PAD));
             // A chip's fill is a **block** at least as wide as a chip is tall; an inactive chip's
@@ -3074,7 +3099,9 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             };
             let distance = plus - raised_end;
             let (want, why): (fn(f64) -> bool, &str) = match scene {
-                "workspaces" => (|d| d > 60.0, "the first chip, furthest from the `+`"),
+                "workspaces" | "workspaces-close" => {
+                    (|d| d > 60.0, "the first chip, furthest from the `+`")
+                }
                 "workspaces-empty" | "workspaces-named" => (
                     |d| (20.0..=80.0).contains(&d),
                     "the second chip, between the first and the `+`",
@@ -3131,7 +3158,9 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 ));
             }
             let expected = match scene {
-                "workspaces" | "workspaces-switch" => 0,
+                // #141: an emptied workspace sends the wall back to the nearest previous one that has
+                // a pane, which is the first here.
+                "workspaces" | "workspaces-switch" | "workspaces-close" => 0,
                 _ => 1,
             };
             if state.active != expected {
@@ -3249,6 +3278,84 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                         failures.push(format!(
                             "workspaces-named: the workspaces are {numbers:?} — naming one must not \
                              rename another"
+                        ));
+                    }
+                }
+                "workspaces-close" => {
+                    // **Closing a workspace's last pane** (#141): the workspace is still there, still
+                    // named, and empty; the wall landed on the nearest previous workspace; and the
+                    // focus is on **the pane the operator was last in there**, not the first leaf.
+                    if state.workspaces.len() != 3 {
+                        failures.push(format!(
+                            "workspaces-close: {} workspaces, and emptying one does not remove it from \
+                             the chips",
+                            state.workspaces.len()
+                        ));
+                    }
+                    let emptied = &state.workspaces[1];
+                    if !emptied.panes.is_empty()
+                        || emptied.layout.is_some()
+                        || emptied.name.is_empty()
+                    {
+                        failures.push(format!(
+                            "workspaces-close: workspace 2 holds {} panes and {:?} — a workspace whose \
+                             last pane closed is empty and keeps its name",
+                            emptied.panes.len(),
+                            emptied.layout.as_ref().map(|layout| layout.len())
+                        ));
+                    } else {
+                        lines.push(
+                            "workspaces-close: workspace 2 is empty, still in the chips, and still named"
+                                .to_string(),
+                        );
+                    }
+                    let ids = state.pane_ids();
+                    if ids.len() != 2 || state.panes().len() != 2 {
+                        failures.push(format!(
+                            "workspaces-close: {} panes and {} in the workspace, and the close took one \
+                             of three",
+                            ids.len(),
+                            state.panes().len()
+                        ));
+                    }
+                    if ids.len() == 2 && state.focused() == ids[1] {
+                        lines.push(format!(
+                            "workspaces-close: focus is on pane {}, the one this workspace was last \
+                             focused on — not the first leaf {}",
+                            ids[1], ids[0]
+                        ));
+                    } else {
+                        failures.push(format!(
+                            "workspaces-close: focus is on {:?}, and workspace 1 was last focused on \
+                             its second pane",
+                            state.focused()
+                        ));
+                    }
+                    // **The ring says it too.** The focused pane's edge is a hairline of its own
+                    // colour, and the two panes **share** their top and bottom edges with the picture
+                    // panel — so the honest pixel is a **vertical** one: the left pane's outer edge
+                    // carries no ring ink, and the right pane's outer edge does.
+                    let Some((ox, oy, pw, ph)) = image.find_panel_rect(ink(tokens::panel())) else {
+                        failures.push("workspaces-close: no picture panel".into());
+                        return Err(failures);
+                    };
+                    let ring = ink(tokens::focus_edge());
+                    let edge = f64::from(tokens::HAIRLINE) * 3.0;
+                    // The region's right edge is exclusive, and the pane's edge **is** the panel's last
+                    // column: one pixel of width on top of the band is not slack, it is that column.
+                    let unfocused = count_colour_in(image, (ox, oy, edge + 1.0, ph), ring, 10);
+                    let focused =
+                        count_colour_in(image, (ox + pw - edge, oy, edge + 1.0, ph), ring, 10);
+                    if focused > 0 && unfocused == 0 {
+                        lines.push(format!(
+                            "workspaces-close: {focused} px of focus-edge ink on the right pane's \
+                             outer edge and none on the left's"
+                        ));
+                    } else {
+                        failures.push(format!(
+                            "workspaces-close: {unfocused} px of focus-edge ink on the left pane's \
+                             outer edge and {focused} on the right's — the ring is on the remembered \
+                             pane alone"
                         ));
                     }
                 }
