@@ -3038,7 +3038,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
         // raised chip is, so the claim is geometric: on `workspaces` the raised chip is the one furthest
         // from the `+`, on `workspaces-switch` it is the one nearest it. That scene leaves the wall on
         // workspace 1, so a capture showing workspace 3 is the script's click.
-        "workspaces" | "workspaces-empty" | "workspaces-switch" => {
+        "workspaces" | "workspaces-empty" | "workspaces-switch" | "workspaces-named" => {
             let state = scene::state_for(scene);
             let header = (0.0, f64::from(tokens::CHIP_H) + f64::from(tokens::PAD));
             // A chip's fill is a **block** at least as wide as a chip is tall; an inactive chip's
@@ -3073,7 +3073,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             let distance = plus - raised_end;
             let (want, why): (fn(f64) -> bool, &str) = match scene {
                 "workspaces" => (|d| d > 60.0, "the first chip, furthest from the `+`"),
-                "workspaces-empty" => (
+                "workspaces-empty" | "workspaces-named" => (
                     |d| (20.0..=80.0).contains(&d),
                     "the second chip, between the first and the `+`",
                 ),
@@ -3146,6 +3146,41 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                     state.active().name
                 ));
             }
+            // **The title is the workspace's name** (#138) and the **thing you click to rename it**
+            // (#139). Its ink is one run at the header's left padding, and it is **not** the app's name:
+            // `Arcons Command Center` measured ~205 px at this style, and a workspace's name is cut to
+            // `tokens::NAME_MAX_CHARS` — so a run wider than the app's would be the wordmark back again.
+            let title = colour_runs_in_band(
+                image,
+                (
+                    f64::from(tokens::PAD),
+                    f64::from(tokens::PAD) + f64::from(tokens::CHIP_H) * 2.0,
+                ),
+                ink(tokens::accent()),
+                24,
+                12,
+            );
+            match title.as_slice() {
+                [(start, end)]
+                    if (*start - f64::from(tokens::PAD)).abs() <= 2.0 && *end < 160.0 =>
+                {
+                    lines.push(format!(
+                        "{scene}: the title is one run of {:.0} px at x={start:.0}, and the app's name \
+                         is not in the header",
+                        end - start
+                    ));
+                }
+                [(start, end)] => failures.push(format!(
+                    "{scene}: the title runs from {start:.0} to {end:.0} — it must start at the \
+                     header's padding and be narrower than the app's name (`TITLE` belongs to the \
+                     window, not the topbar)"
+                )),
+                other => failures.push(format!(
+                    "{scene}: {} runs of title ink in the header, and the title is one name",
+                    other.len()
+                )),
+            }
+
             match scene {
                 "workspaces" => {
                     if state.pane_count() != scene::WORKSPACE_PANES {
@@ -3184,6 +3219,35 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                             "workspaces-empty: workspace 1 keeps its panes, and they are not drawn"
                                 .to_string(),
                         );
+                    }
+                }
+                "workspaces-named" => {
+                    // **The operator's name, through the sheet's own commit** (#139): the state holds it,
+                    // the header shows it, and the chips keep their numbers.
+                    let shown = crate::ui::workspace_title(state.active(), state.active);
+                    if shown == "Straits watch" && state.workspaces[1].name == "Straits watch" {
+                        lines.push(
+                            "workspaces-named: the title reads \"Straits watch\", the name the sheet \
+                             committed"
+                                .to_string(),
+                        );
+                    } else {
+                        failures.push(format!(
+                            "workspaces-named: the title reads {shown:?} and the workspace's name is \
+                             {:?} — the sheet's commit is the only way a workspace is named",
+                            state.workspaces[1].name
+                        ));
+                    }
+                    let numbers: Vec<&str> = state
+                        .workspaces
+                        .iter()
+                        .map(|workspace| workspace.name.as_str())
+                        .collect();
+                    if numbers != ["Workspace 1", "Straits watch", "Workspace 3"] {
+                        failures.push(format!(
+                            "workspaces-named: the workspaces are {numbers:?} — naming one must not \
+                             rename another"
+                        ));
                     }
                 }
                 _ => {
@@ -3784,10 +3848,10 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
         // **An empty workspace projects nothing** (#138): no tiling, so no pane, so no frame for a mark
         // to be placed against — `INV-04` holds literally. The wall beside it keeps its panes and they
         // are not drawn.
-        "workspaces-empty" => {
+        "workspaces-empty" | "workspaces-named" => {
             if state.layout().is_some() || state.pane_count() != 0 {
                 failures.push(format!(
-                    "workspaces-empty: the active workspace holds {} panes and a tiling",
+                    "{scene}: the active workspace holds {} panes and a tiling",
                     state.pane_count()
                 ));
             }
@@ -3796,17 +3860,15 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                 .first()
                 .is_some_and(|workspace| workspace.panes.is_empty())
             {
-                failures.push(
-                    "workspaces-empty: workspace 1 has no panes to hide, so the capture proves \
-                     nothing about a hidden workspace"
-                        .into(),
-                );
+                failures.push(format!(
+                    "{scene}: workspace 1 has no panes to hide, so the capture proves nothing about a \
+                     hidden workspace"
+                ));
             }
             if failures.is_empty() {
-                lines.push(
-                    "workspaces-empty: no tiling, nothing projected, workspace 1's panes not drawn"
-                        .to_string(),
-                );
+                lines.push(format!(
+                    "{scene}: no tiling, nothing projected, workspace 1's panes not drawn"
+                ));
             }
         }
         "empty" => {

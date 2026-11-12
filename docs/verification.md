@@ -138,6 +138,7 @@ cargo run -- --scenes            # empty · picture · stale · card-open · pho
                                  # pane-tree-pan · newsroom · newsroom-scopes · newsroom-page-2
                                  # newsroom-story · newsroom-story-back
                                  # workspaces · workspaces-empty · workspaces-switch
+                                 # workspaces-named
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -294,6 +295,18 @@ the **third chip**, so the capture is workspace 3's empty state with the third c
 half says the raised chip is the one nearest the `+`; the structure half says the scene started on
 workspace 1 with its two panes. A press that reached no handler leaves the first chip raised and the two
 panes drawn, and both halves go red.
+
+`workspaces-named` is **a workspace named by the operator** (#139): workspace 2 active, and the name
+`Straits watch` arrives through the sheet's own path — `begin_workspace_rename`, the field's text and
+`commit_rename` — not by assigning the name in the scene. The title is the thing you click to rename a
+workspace, as the pane's plate is the pane's, and the sheet says `Name this workspace` over a workspace
+and `Name this pane` over a pane: one sheet, one field, one Enter/Escape contract, with a target. The
+assertion reads the title as **one run of accent ink at the header's padding, narrower than the app's
+name** (which lives in the window title now), the second chip raised, the words `No panes yet.`, and the
+state: the three workspaces are `Workspace 1`, `Straits watch`, `Workspace 3` — naming one does not rename
+another. `cargo test ui::rename` holds what a capture cannot: a rename commits to its target and nowhere
+else, an empty field falls back to `Workspace N` (a pane's empty field still removes its name), a long
+name is cut with the pane name's own ellipsis, and Escape commits nothing.
 
 `pane-menu` is a wall with **one** pane and its right-click menu open (#77) — the one shape the menu was
 never drawn on, and the only wall that needs it, because "Focus on new pane" is the only route to a second

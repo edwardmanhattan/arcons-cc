@@ -303,20 +303,31 @@ pub struct PaneDrag {
     pub drop: Option<view::Drop>,
 }
 
-/// A rename in progress (#83): which pane, and the field being typed into.
+/// **What a rename sheet is renaming** (#139): a pane, or a workspace.
+///
+/// The sheet is one sheet — one field, one limit, one Enter/Escape contract — and this is the only thing
+/// that differs between naming a pane and naming the workspace on screen. Keeping it as a value rather
+/// than a second sheet is what stops the two renaming paths from drifting apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenameTarget {
+    Pane(ViewId),
+    Workspace(usize),
+}
+
+/// A rename in progress (#83, #139): what is being renamed, and the field being typed into.
 ///
 /// The field is Rune's `TextEdit` and not a `String`: it owns the caret, the selection, the input method and
 /// the undo history, and a wall shows an operator's keyboard the same way any other app does. The commit is
 /// one function — Enter — and abandoning is Escape.
 pub struct Rename {
-    pub pane: ViewId,
+    pub target: RenameTarget,
     pub edit: rune::TextEdit,
 }
 
 impl Rename {
-    /// Open a rename on a pane, with its current name in the field and the caret at the end — so typing
-    /// replaces nothing until the operator says so with a selection or a backspace.
-    pub fn new(pane: ViewId, current: Option<&str>) -> Rename {
+    /// Open a rename with the current name in the field and the caret at the end — so typing replaces
+    /// nothing until the operator says so with a selection or a backspace.
+    pub fn new(target: RenameTarget, current: Option<&str>) -> Rename {
         let text = current.unwrap_or_default().to_string();
         let caret = text.chars().count();
         let mut edit = rune::TextEdit::default();
@@ -324,7 +335,16 @@ impl Rename {
         edit.anchor = caret;
         edit.focus = caret;
         edit.focused = true;
-        Rename { pane, edit }
+        Rename { target, edit }
+    }
+
+    /// **What the sheet is called** (#139): a workspace and a pane are different things, and a sheet that
+    /// said "pane" over a workspace would be the sort of wrong an operator only notices afterwards.
+    pub fn title(&self) -> &'static str {
+        match self.target {
+            RenameTarget::Pane(_) => RENAME_TITLE,
+            RenameTarget::Workspace(_) => RENAME_WORKSPACE_TITLE,
+        }
     }
 }
 
@@ -713,7 +733,7 @@ impl State {
     pub fn add_workspace(&mut self) -> usize {
         let index = self.workspaces.len();
         self.workspaces
-            .push(Workspace::empty(format!("Workspace {}", index + 1)));
+            .push(Workspace::empty(default_workspace_name(index)));
         self.switch_to(index);
         index
     }
@@ -1495,13 +1515,17 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
     let header = row()
         .w_full()
         .gap(tokens::GAP)
-        // **The active workspace's name, where the wordmark was** (#138): the operator's arrow. The app's
-        // own name stays the *window* title (`TITLE`), which is where a window manager looks for it.
+        // **The active workspace's name, where the wordmark was** (#138), and **the thing you click to
+        // rename it** (#139): a title is a rename's door on this wall, the same rule the pane's plate
+        // follows (#83, #113). The app's own name stays the *window* title (`TITLE`), which is where a
+        // window manager looks for it.
         .child(
-            text(state.active().name.clone())
+            text(workspace_title(state.active(), state.active))
                 .key("workspace-title")
                 .font(tokens::WORDMARK)
-                .color(tokens::accent()),
+                .color(tokens::accent())
+                .help("Name this workspace")
+                .on_press(|state: &mut State| begin_workspace_rename(state, state.active)),
         )
         .child(workspace_chips(state))
         .child(spacer())
@@ -1590,6 +1614,18 @@ pub const NEWSROOM_LABEL: &str = "newsroom";
 /// What an empty workspace says, where the picture would be (#138): a state, not an error and not a
 /// placeholder for a read that failed.
 pub const NO_PANES: &str = "No panes yet.";
+
+/// What a workspace is called until somebody names it (#138, #139): its number, from its place on the
+/// wall. The one place that form is written — the chips, an empty rename and `+` all come through here.
+pub fn default_workspace_name(index: usize) -> String {
+    format!("Workspace {}", index + 1)
+}
+
+/// What the workspace's name shows in the header: the typed name, cut to the pane name's own limit with
+/// the same drawn ellipsis, and the default when nobody has named it.
+pub fn workspace_title(workspace: &Workspace, index: usize) -> String {
+    shown_name(&workspace.name).unwrap_or_else(|| default_workspace_name(index))
+}
 
 /// The workspace chips and the `+` (#138): a selector, in the header, after the workspace's name.
 ///
@@ -1907,7 +1943,11 @@ fn rename_sheet(state: &State) -> El {
         .radius(tokens::PANEL_RADIUS)
         .fill(tokens::panel())
         .border(tokens::HAIRLINE, tokens::card_edge())
-        .child(text(RENAME_TITLE).font(tokens::TITLE).color(tokens::ink()))
+        .child(
+            text(rename.title())
+                .font(tokens::TITLE)
+                .color(tokens::ink()),
+        )
         .child(field)
         .child(
             text("Enter names it, Escape leaves it as it was")
@@ -2976,7 +3016,25 @@ fn menu_view(state: &State, scale: f32, body: El) -> El {
 /// `Name this pane…`: open the rename sheet on this pane, with its current name in the field (#83).
 fn begin_rename(state: &mut State, pane: ViewId) {
     let current = state.pane(pane).and_then(|pane| pane.name.clone());
-    state.begin(Begin::Rename(Rename::new(pane, current.as_deref())));
+    state.begin(Begin::Rename(Rename::new(
+        RenameTarget::Pane(pane),
+        current.as_deref(),
+    )));
+}
+
+/// **Name this workspace** (#139): the header's title is the door, as the pane's plate is the pane's.
+///
+/// The field starts with the name the header shows — the typed name, or the default — so the operator
+/// edits what they can see rather than an empty box over an unnamed workspace.
+pub(crate) fn begin_workspace_rename(state: &mut State, index: usize) {
+    let Some(workspace) = state.workspaces.get(index) else {
+        return;
+    };
+    let current = workspace_title(workspace, index);
+    state.begin(Begin::Rename(Rename::new(
+        RenameTarget::Workspace(index),
+        Some(&current),
+    )));
 }
 
 /// The maximise action: the pane is drawn over the wall and its map renders at the window's size (#85).
@@ -3042,19 +3100,41 @@ fn resize_map(state: &mut State, pane: ViewId, points: (f32, f32), scale: f32) {
     let _ = (state, pane, points, scale);
 }
 
-/// Enter in the rename sheet: the name is the field's text, trimmed, and an empty field removes it.
-fn commit_rename(state: &mut State) {
+/// Enter in the rename sheet: the name is the field's text, trimmed, and **what it renames is the
+/// target** (#139).
+///
+/// A pane's empty field removes its name, and the plate falls back to the pane's number. A workspace is
+/// never nameless: an empty field falls back to its default `Workspace N`, because the header has to say
+/// something and a blank title is a wall that looks broken.
+///
+/// **A workspace name lives in memory only**, like a pane's: panes do not survive a restart, and a saved
+/// layout/workspace file is its own ticket. Do not add a `settings.toml` field for this.
+pub(crate) fn commit_rename(state: &mut State) {
     // The sheet is the only thing that renames, so taking its text and ending the state in one step is
     // unambiguous — and `end()` is what clears it, rather than a second way to leave the state.
-    let Some((pane, text)) = state
+    let Some((target, text)) = state
         .rename()
-        .map(|rename| (rename.pane, rename.edit.text.clone()))
+        .map(|rename| (rename.target, rename.edit.text.clone()))
     else {
         return;
     };
     state.end();
-    if let Some(pane) = state.pane_mut(pane) {
-        pane.name = shown_name(&text);
+    let trimmed = text.trim();
+    match target {
+        RenameTarget::Pane(pane) => {
+            if let Some(pane) = state.pane_mut(pane) {
+                pane.name = shown_name(trimmed);
+            }
+        }
+        RenameTarget::Workspace(index) => {
+            if let Some(workspace) = state.workspaces.get_mut(index) {
+                workspace.name = if trimmed.is_empty() {
+                    default_workspace_name(index)
+                } else {
+                    trimmed.to_string()
+                };
+            }
+        }
     }
     state.layout_dirty = true;
 }
@@ -3126,6 +3206,8 @@ pub fn menu_origin(rect: Rect, at: (f32, f32), size: (f32, f32)) -> (f32, f32) {
 pub const MENU_SPLIT: &str = "Focus on new pane";
 pub const MENU_RENAME: &str = "Name this pane…";
 pub const MENU_CLOSE: &str = "Close pane";
+/// What the workspace rename sheet is called (#139). The pane's keeps its own words.
+pub const RENAME_WORKSPACE_TITLE: &str = "Name this workspace";
 /// What the maximised pane's own close plate says, and the header's note about it (#85).
 pub const MAX_CLOSE: &str = "back to the wall";
 /// What the rename sheet is called, and what a name longer than `NAME_MAX_CHARS` ends with.
@@ -4808,6 +4890,12 @@ mod tests {
         assert!(!state.switch_to(99), "there is no such workspace");
     }
 
+    /// **A workspace rename commits to that workspace, and a pane rename to its pane** (#139): the sheet
+    /// is one sheet with a target, so this is the test that keeps the two from swapping.
+    /// **Empty is not a name** (#139): a workspace falls back to its default `Workspace N`, because the
+    /// header has to say something; a pane's empty field removes its name, as it always has.
+    /// **A long workspace name is cut with the same ellipsis a pane's is** (#139), and **Escape leaves the
+    /// old one** — abandoning a rename is not a commit of nothing.
     #[test]
     fn the_window_can_be_told_to_have_no_decorations() {
         // A wall has no window manager affordances to click, and `borderless` is how Rune says so.
@@ -6103,50 +6191,6 @@ mod tests {
 
     /// #83: renaming opens on the pane's current name, commits on Enter, and abandons on Escape — and a
     /// committed empty field removes the name rather than drawing an empty plate.
-    #[test]
-    fn the_rename_sheet_names_a_pane_and_abandons_cleanly() {
-        let mut state = crate::scene::state_for("panes");
-        let id = state.focused();
-        begin_rename(&mut state, id);
-        let rename = state.rename().expect("the sheet opens");
-        assert_eq!(rename.pane, id);
-        assert_eq!(rename.edit.text, "", "the pane had no name");
-        assert_eq!(
-            rename.edit.focus, 0,
-            "the caret is at the end of what there is"
-        );
-
-        state.renaming_mut().expect("open").edit.text = "  Underway  ".to_string();
-        commit_rename(&mut state);
-        assert!(state.rename().is_none(), "the sheet closes on commit");
-        assert_eq!(
-            state.pane(id).and_then(|pane| pane.name.as_deref()),
-            Some("Underway"),
-            "the name is stored trimmed"
-        );
-
-        // Reopening starts from the name it has, so a rename edits rather than retypes.
-        begin_rename(&mut state, id);
-        assert_eq!(state.rename().expect("reopened").edit.text, "Underway");
-        // Escape: the field goes, the name stays.
-        state.end();
-        assert_eq!(
-            state.pane(id).and_then(|pane| pane.name.as_deref()),
-            Some("Underway")
-        );
-
-        // An empty field next time removes it.
-        begin_rename(&mut state, id);
-        state.renaming_mut().expect("open").edit.text = "   ".to_string();
-        commit_rename(&mut state);
-        assert_eq!(state.pane(id).and_then(|pane| pane.name.as_deref()), None);
-        assert_eq!(
-            state.pane(id).expect("the pane").title(),
-            default_title(id),
-            "an unnamed pane still has a title: its own number"
-        );
-    }
-
     /// #113: the title is the typed name or the pane's own number, and the number is the pane's **id**,
     /// zero-padded to two digits. The form is written in one place, so this is its one literal check.
     #[test]
@@ -6258,7 +6302,7 @@ mod tests {
             .state
             .rename()
             .expect("a press on the plate opens the sheet");
-        assert_eq!(rename.pane, id);
+        assert_eq!(rename.target, RenameTarget::Pane(id));
         assert_eq!(rename.edit.text, "", "a default title is not a name");
         assert!(
             rt.state.dragging().is_none(),
@@ -6387,5 +6431,160 @@ mod tests {
             "the last pane is not closeable: a wall with no panes draws nothing"
         );
         assert_eq!(state.pane_count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod rename_tests {
+    use super::*;
+
+    #[test]
+    fn a_rename_commits_to_its_target_and_nowhere_else() {
+        let mut state = State::default();
+        let pane = state.focused();
+
+        // The workspace, through the title's own door.
+        begin_workspace_rename(&mut state, 1);
+        assert_eq!(
+            state.rename().map(|rename| rename.target),
+            Some(RenameTarget::Workspace(1))
+        );
+        assert_eq!(
+            state.rename().map(Rename::title),
+            Some(RENAME_WORKSPACE_TITLE),
+            "the sheet says what it is naming"
+        );
+        assert_eq!(
+            state
+                .rename()
+                .map(|rename| rename.edit.text.clone())
+                .as_deref(),
+            Some("Workspace 2"),
+            "the field starts with what the header shows"
+        );
+        state.renaming_mut().expect("a rename").edit.text = "  Straits watch  ".into();
+        commit_rename(&mut state);
+        assert_eq!(state.workspaces[1].name, "Straits watch", "trimmed");
+        assert_eq!(
+            state.workspaces[0].name, "Workspace 1",
+            "and only the workspace that was being renamed"
+        );
+        assert!(
+            state.pane(pane).is_some_and(|pane| pane.name.is_none()),
+            "a workspace rename is not a pane rename"
+        );
+
+        // The pane, through the plate's door: the workspace's name is untouched.
+        begin_rename(&mut state, pane);
+        assert_eq!(
+            state.rename().map(Rename::title),
+            Some(RENAME_TITLE),
+            "the pane sheet keeps its own words"
+        );
+        state.renaming_mut().expect("a rename").edit.text = "Watchkeeper".into();
+        commit_rename(&mut state);
+        assert_eq!(
+            state
+                .pane(pane)
+                .and_then(|pane| pane.name.clone())
+                .as_deref(),
+            Some("Watchkeeper")
+        );
+        assert_eq!(state.workspaces[1].name, "Straits watch");
+    }
+
+    #[test]
+    fn an_empty_rename_keeps_a_workspaces_default_and_clears_a_panes_name() {
+        let mut state = State::default();
+        let pane = state.focused();
+        begin_workspace_rename(&mut state, 2);
+        state.renaming_mut().expect("a rename").edit.text = "   ".into();
+        commit_rename(&mut state);
+        assert_eq!(state.workspaces[2].name, "Workspace 3");
+
+        begin_rename(&mut state, pane);
+        state.renaming_mut().expect("a rename").edit.text = "Named".into();
+        commit_rename(&mut state);
+        begin_rename(&mut state, pane);
+        state.renaming_mut().expect("a rename").edit.text = "  ".into();
+        commit_rename(&mut state);
+        assert_eq!(
+            state.pane(pane).and_then(|pane| pane.name.clone()),
+            None,
+            "an empty pane name removes it, and the plate falls back to the pane's number"
+        );
+        assert_eq!(
+            state.pane(pane).map(Pane::title).as_deref(),
+            Some(default_title(pane).as_str()),
+            "and the plate falls back to the pane's number"
+        );
+    }
+
+    #[test]
+    fn a_long_workspace_name_is_cut_and_escape_leaves_the_old_one() {
+        let mut state = State::default();
+        begin_workspace_rename(&mut state, 0);
+        let long = "x".repeat(tokens::NAME_MAX_CHARS + 12);
+        state.renaming_mut().expect("a rename").edit.text = long.clone();
+        commit_rename(&mut state);
+        assert_eq!(state.workspaces[0].name, long, "the raw name is kept");
+        let shown = workspace_title(&state.workspaces[0], 0);
+        assert_eq!(
+            shown.chars().count(),
+            tokens::NAME_MAX_CHARS + 1,
+            "the title cuts it to the pane name's limit, with a drawn ellipsis"
+        );
+        assert!(shown.ends_with(ELLIPSIS));
+
+        // Escape: `end()` is what a cancel does, and the name is not touched.
+        begin_workspace_rename(&mut state, 0);
+        state.renaming_mut().expect("a rename").edit.text = "Something else".into();
+        state.end();
+        assert_eq!(state.workspaces[0].name, long, "Escape commits nothing");
+        assert!(state.rename().is_none());
+    }
+
+    #[test]
+    fn the_rename_sheet_names_a_pane_and_abandons_cleanly() {
+        let mut state = crate::scene::state_for("panes");
+        let id = state.focused();
+        begin_rename(&mut state, id);
+        let rename = state.rename().expect("the sheet opens");
+        assert_eq!(rename.target, RenameTarget::Pane(id));
+        assert_eq!(rename.edit.text, "", "the pane had no name");
+        assert_eq!(
+            rename.edit.focus, 0,
+            "the caret is at the end of what there is"
+        );
+
+        state.renaming_mut().expect("open").edit.text = "  Underway  ".to_string();
+        commit_rename(&mut state);
+        assert!(state.rename().is_none(), "the sheet closes on commit");
+        assert_eq!(
+            state.pane(id).and_then(|pane| pane.name.as_deref()),
+            Some("Underway"),
+            "the name is stored trimmed"
+        );
+
+        // Reopening starts from the name it has, so a rename edits rather than retypes.
+        begin_rename(&mut state, id);
+        assert_eq!(state.rename().expect("reopened").edit.text, "Underway");
+        // Escape: the field goes, the name stays.
+        state.end();
+        assert_eq!(
+            state.pane(id).and_then(|pane| pane.name.as_deref()),
+            Some("Underway")
+        );
+
+        // An empty field next time removes it.
+        begin_rename(&mut state, id);
+        state.renaming_mut().expect("open").edit.text = "   ".to_string();
+        commit_rename(&mut state);
+        assert_eq!(state.pane(id).and_then(|pane| pane.name.as_deref()), None);
+        assert_eq!(
+            state.pane(id).expect("the pane").title(),
+            default_title(id),
+            "an unnamed pane still has a title: its own number"
+        );
     }
 }
