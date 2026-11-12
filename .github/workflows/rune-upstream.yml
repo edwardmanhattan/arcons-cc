@@ -1,0 +1,98 @@
+name: Rune upstream
+
+# `Cargo.toml` pins Rune by rev, and `docs/adr/0001-rune-and-maplibre.md` says why a bump is a
+# deliberate act, not a `cargo update`: a wall display that silently changes renderer is not
+# verifiable. So this workflow does not bump anything. It answers one question every morning — has
+# `dev` moved past the pin? — and leaves the answer where a human will see it: an issue with the
+# compare URL, the commits since, and the steps that make a bump a reviewed change.
+#
+# The issue is one per movement, refreshed in place: a second day with the same upstream SHA edits
+# the same body rather than opening a second issue. When the pin catches up, the job finds nothing
+# and closes nothing — the human closes the issue with the PR that moved the pin.
+
+on:
+  schedule:
+    # 06:17 UTC, before the European morning. GitHub schedules can be late; the check is idempotent.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the pin and Rune's dev head
+        id: pin
+        run: |
+          set -euo pipefail
+          pinned=$(sed -nE 's/^rune = .*rev = "([0-9a-f]{40})".*/\1/p' Cargo.toml | head -1)
+          if [ -z "$pinned" ]; then
+            echo "Cargo.toml has no 40-character Rune rev: the pin line changed shape" >&2
+            exit 1
+          fi
+          upstream=$(git ls-remote https://github.com/anomalyco/rune refs/heads/dev | cut -f1)
+          if [ -z "$upstream" ]; then
+            echo "github.com/anomalyco/rune has no refs/heads/dev" >&2
+            exit 1
+          fi
+          echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
+          echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
+          if [ "$pinned" = "$upstream" ]; then
+            echo "behind=false" >> "$GITHUB_OUTPUT"
+            echo "Rune is at the pin ($pinned)."
+          else
+            echo "behind=true" >> "$GITHUB_OUTPUT"
+            echo "Rune dev is $upstream; the pin is $pinned."
+          fi
+
+      - name: Open or refresh the upstream issue
+        if: steps.pin.outputs.behind == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PINNED: ${{ steps.pin.outputs.pinned }}
+          UPSTREAM: ${{ steps.pin.outputs.upstream }}
+        run: |
+          set -euo pipefail
+          repo=https://github.com/anomalyco/rune
+          compare="$repo/compare/$PINNED...$UPSTREAM"
+          commits=$(gh api "repos/anomalyco/rune/commits?sha=dev&per_page=8" \
+            --jq '.[] | "- `\(.sha[0:8])` \(.commit.message | split("\n")[0])"' || true)
+          body=$(cat <<EOF
+          \`dev\` is at [\`${UPSTREAM:0:8}\`]($repo/commit/$UPSTREAM); the pin is [\`${PINNED:0:8}\`]($repo/commit/$PINNED).
+
+          [Commits since the pin]($compare) — the last eight, newest first:
+
+          ${commits:-_the compare endpoint returned no commits_}
+
+          ## Making the bump a reviewed change
+
+          This is deliberately not automated: the gate is the proof, and a renderer change is not a
+          dependency update. In one branch, following \`AGENTS.md\`:
+
+          1. Change **both** \`rune\` and \`rune-kit\` in \`Cargo.toml\` to \`$UPSTREAM\`.
+          2. Read the commits above for what moves the wall's pixels (\`Text\`, \`Icons\`, \`Render\`,
+             \`canvas\`, \`image\`) and name them in a new section of
+             \`docs/adr/0001-rune-and-maplibre.md\`, with the old and new revs and why they are taken now.
+          3. Update the rev in \`THIRD-PARTY-NOTICES.md\`.
+          4. Run \`scripts/verify.sh\`. Goldens may move; read the diff first, run \`scripts/assert.sh\`
+             against the new captures, then \`scripts/capture.sh --update-goldens\` **by hand**, as
+             \`docs/verification.md\` says.
+          5. The PR says which revs, what changed in the renderer, and pastes the gate's last lines.
+
+          When the pin moves, close this issue with that PR.
+          EOF
+          )
+          title="Rune upstream has moved past the pin"
+          number=$(gh issue list --state open --search "Rune upstream in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body "$body"
+            echo "Updated #$number for $UPSTREAM."
+          else
+            gh issue create --title "$title" --body "$body"
+            echo "Opened an issue for $UPSTREAM."
+          fi
