@@ -3171,16 +3171,18 @@ pub const DEFAULT_BOUNDS: Bounds = Bounds::new(2, 200, 600);
 /// coverage on different subpixel phases — is the case that needs a stated exception.
 pub fn golden_bounds(scene: &str) -> Bounds {
     match scene {
-        // **Scaled text** (#127): the tree canvas draws 12 pt text at a transform, and lavapipe was
-        // measured at a channel difference of 6 on 207–224 pixels. The tolerance keeps the colour
-        // contract for the other scenes.
-        "pane-tree" | "pane-tree-pan" => Bounds::new(8, 350, 400),
         // **Hundreds of one-step pixels** (#110, #112, #127): labels, the filter panel's rows, and a
-        // zoomed tree. Measured 252–373; the change budget is the ordinary 200, because these are
-        // rounding, not moved glyphs.
+        // zoomed tree. Measured 229–416 on lavapipe; the change budget is the ordinary 200, because
+        // these are rounding, not moved glyphs. The rounding allowance is the measurement plus about
+        // half, so a driver that moves a panel still fails.
         "objects" => Bounds::new(2, 200, 450),
-        "panes-filter" => Bounds::new(2, 200, 400),
-        "pane-tree-zoom" => Bounds::new(2, 200, 500),
+        "panes-filter" => Bounds::new(2, 200, 550),
+        "pane-tree-zoom" => Bounds::new(2, 200, 600),
+        // The tree canvas draws 12 pt text at a transform. Until Rune `205b8d4` its run cells were
+        // rasterized at the GPU's scale and lavapipe differed by 6/255; #599 rasterizes them at the
+        // text's own factor, and both CI runs now measure **1/255**, so the 8/255 exception this
+        // scene used to need is gone.
+        "pane-tree" | "pane-tree-pan" => Bounds::new(2, 200, 450),
         _ => DEFAULT_BOUNDS,
     }
 }
@@ -3511,17 +3513,23 @@ mod tests {
             assert!(reason.contains("more than one step"), "{reason}");
         }
 
-        /// **The measured exception** (#127): scaled text on lavapipe differs by six steps on a channel,
-        /// and the tree scenes say so; every other scene keeps the ordinary two-step contract.
+        /// **No scene relaxes the colour contract** (#127, #130): scaled text used to need 8/255,
+        /// and Rune `205b8d4` rasterizes run cells at the text's own factor instead, so the measured
+        /// difference on lavapipe fell to 1/255. The tolerance is two steps everywhere; only the
+        /// rounding *count* is per scene, because a rasteriser's text has more of those.
         #[test]
-        fn only_the_scenes_whose_text_is_scaled_relax_the_tolerance() {
-            assert_eq!(DEFAULT_BOUNDS.tolerance, 2);
-            assert_eq!(golden_bounds("pane-tree").tolerance, 8);
-            assert_eq!(golden_bounds("pane-tree-pan").tolerance, 8);
-            for scene in ["objects", "panes-filter", "pane-tree-zoom", "installations"] {
+        fn the_scaled_text_scenes_need_no_tolerance_exception() {
+            for scene in [
+                "pane-tree",
+                "pane-tree-pan",
+                "pane-tree-zoom",
+                "objects",
+                "panes-filter",
+                "installations",
+            ] {
                 assert_eq!(
                     golden_bounds(scene).tolerance,
-                    2,
+                    DEFAULT_BOUNDS.tolerance,
                     "{scene} keeps the two-step contract"
                 );
             }

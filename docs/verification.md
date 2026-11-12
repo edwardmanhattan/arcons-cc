@@ -334,9 +334,9 @@ one count cannot tell a rasteriser's noise from a picture that changed (#130):
 
 | bound | default | why that number |
 | --- | --- | --- |
-| no channel differs by more than | **2 / 255** | a rounding step at a glyph edge. Scaled text — the tree canvas — was measured at **6/255** on lavapipe, so `pane-tree` and `pane-tree-pan` state **8** |
+| no channel differs by more than | **2 / 255** | a rounding step at a glyph edge. Scaled text — the tree canvas — needed **8/255** until Rune `205b8d4`; its run cells now rasterize at the text's own factor and both CI runs measure **1/255**, so every scene keeps 2 |
 | pixels differing **by more than one step** | **200** | ink where the golden has water, or a different colour: a label that moved, an edge that shifted, a token that changed. 200 is small enough that a label-sized block moved by a visible amount fails |
-| pixels differing by **exactly one step** | **600** | the rasteriser's rounding. Text-heavy scenes were measured at 252–373 of these; the panel-sized falsifier below is **1600**, so the allowance is bounded, not ignored |
+| pixels differing by **exactly one step** | **600** | the rasteriser's rounding. Text-heavy scenes were measured at 289–416 of these; the panel-sized falsifier below is **1600**, so the allowance is bounded, not ignored |
 
 **Why three, and not two.** A single pixel budget had to grow to accept a rasteriser's text — 373 pixels
 on the zoomed tree against a bound of 200 — and a bound that large would let a moved label hide. Splitting
@@ -349,8 +349,8 @@ exceptions carry the measurement that set them. A new scene takes the defaults, 
 printed on every run — a bound nobody can see the margin of is a bound that quietly widens.
 
 ```
-matches fixtures/golden/objects.png within bounds: 276 px differ (0 changed, 276 rounding), max Δ1/255
-(tolerance 2, change 200, rounding 450)
+matches fixtures/golden/panes-filter.png within bounds: 376 px differ (0 changed, 376 rounding), max Δ1/255
+(tolerance 2, change 200, rounding 550)
 ```
 
 `ARCONS_GOLDENS=exact` demands bytes (`tolerance 0`, `change 0`, `rounding 0`): for the reference machine,
