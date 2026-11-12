@@ -12,7 +12,7 @@ from this file, or when a copyleft crate appears in the lockfile unnamed.
 
 | component | licence | what it is |
 | --- | --- | --- |
-| **Rune** (`rune`, `rune-kit`) | MIT, © 2026 Anomaly | The UI framework. <https://github.com/anomalyco/rune>, pinned to rev `04389ed930177f1f475ff3de5249304545b3d5b4`. Vendored before release; the full licence text then lives at `vendor/rune/LICENSE`. |
+| **Rune** (`rune`, `rune-kit`) | MIT, © 2026 Anomaly | The UI framework. <https://github.com/anomalyco/rune>, pinned to rev `25db9cd122a6972816342fdb24db3c4ad0c72e0f`. Vendored before release; the full licence text then lives at `vendor/rune/LICENSE`. |
 | **MapLibre Native** (`maplibre_native` 0.9.3, vendored) | BSD-2-Clause | The map engine, vendored for two checkout-cache fixes — see `vendor/README.md`. <https://github.com/maplibre/maplibre-native>. Behind the `map` feature, which the gate does not enable. |
 | **Inter**, **IBM Plex Mono** | SIL Open Font License 1.1 | Typefaces bundled with Rune. |
 | **milsymbol** (`spatialillusions/milsymbol`) | MIT — © 2017 Mans Beckman | NATO/APP-6 icon geometry, pinned by the sister project at `f5134380…` v3.0.5. **Not linked or vendored yet**: `docs/research/sheets/wall-symbol-icons.svg` is derived from it (#33), and lifting the module needs this row to stay and the licence text to travel with the copy. |
