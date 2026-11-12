@@ -18,9 +18,10 @@ use crate::config::Minos;
 use crate::data::Error;
 use crate::data::http::Http;
 use crate::data::types::{
-    FeedPosition, Installation, InstallationType, Pages, TacticalObject, TacticalObjectFacets,
-    TacticalObjectManifest, TacticalObjectPlacement, TniCommandPost, TniCommander, UnitCommander,
-    UnitDetail, UnitOrganisation, UnitOrganisationDetail, Viewpoint,
+    FeedPosition, Installation, InstallationType, NewsQuery, NewsStoryDetail, Pages, StoryPage,
+    TacticalObject, TacticalObjectFacets, TacticalObjectManifest, TacticalObjectPlacement,
+    TniCommandPost, TniCommander, UnitCommander, UnitDetail, UnitOrganisation,
+    UnitOrganisationDetail, Viewpoint,
 };
 
 /// What the view loop asks for. One variant per read the display performs.
@@ -63,6 +64,10 @@ pub enum Command {
     TniCommander,
     /// The supreme command's appointments, newest first.
     TniCommanderHistory,
+    /// One page of the newsroom: the tab, the window and the page the operator asked for.
+    Stories(NewsQuery),
+    /// One story and the documents that carried it, oldest first.
+    Story(i64),
 }
 
 /// What comes back. It carries typed values or an [`Error`] — never a status code, and never a token.
@@ -107,6 +112,12 @@ pub enum Reply {
     TniCommander(Result<Box<TniCommandPost>, Error>),
     /// The supreme command's appointments, newest first.
     TniCommanderHistory(Result<Vec<TniCommander>, Error>),
+    /// One page of the newsroom. **The query comes back with it**: a page that arrives after the
+    /// operator changed tab or pressed Next is discarded by comparing this with the view's current
+    /// query, not applied because it arrived last.
+    Stories(NewsQuery, Result<StoryPage, Error>),
+    /// One story with its sources.
+    Story(i64, Result<Box<NewsStoryDetail>, Error>),
     /// The backend could not start, or could not sign in. The view loop surfaces it once.
     Failed(String),
 }
@@ -224,6 +235,8 @@ async fn perform(http: &Http, command: Command) -> Reply {
         Command::TniCommanderHistory => {
             Reply::TniCommanderHistory(http.tni_commander_history().await)
         }
+        Command::Stories(query) => Reply::Stories(query, http.stories(query).await),
+        Command::Story(id) => Reply::Story(id, http.story(id).await.map(Box::new)),
     }
 }
 
@@ -296,6 +309,51 @@ mod tests {
                 );
             }
             other => panic!("expected a picture, got {other:?}"),
+        }
+    }
+
+    /// **The query comes back with the page** (`#135`). A reply carrying only the rows could not be
+    /// compared with the tab the operator is on now, so a late page would be applied because it
+    /// arrived last rather than discarded because it answers a question nobody is asking any more.
+    #[test]
+    fn a_newsroom_page_arrives_with_the_query_that_asked_for_it() {
+        use crate::data::types::{NewsScope, NewsWindow};
+
+        const PAGE: &str = include_str!("../../fixtures/rest/newsroom-stories-page-1.json");
+        let (base, _stub) = stub_minos(PAGE);
+        let minos = Minos::new(
+            base,
+            crate::config::Credential::Password {
+                identifier: "wall".into(),
+                password: crate::config::Secret::new("not-a-real-password"),
+            },
+        );
+        let backend = Backend::spawn(minos).expect("the backend thread starts");
+        let query = NewsQuery {
+            scope: NewsScope::National,
+            window: NewsWindow::Archive,
+            page: 3,
+        };
+        backend.request(Command::Stories(query));
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut reply = None;
+        while Instant::now() < deadline {
+            if let Some(got) = backend.try_recv() {
+                reply = Some(got);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        match reply {
+            Some(Reply::Stories(asked, Ok(page))) => {
+                assert_eq!(
+                    asked, query,
+                    "the reply must carry the query that asked for it, or a late page cannot be told from a current one"
+                );
+                assert_eq!(page.rows.len(), 3, "and the rows of the page it asked for");
+            }
+            other => panic!("expected the page and its query, got {other:?}"),
         }
     }
 

@@ -294,6 +294,23 @@ tags:
 
       **Nothing here moves.** A symbol is furniture: no speed, no course, no commander, and no
       entry into the fix chain.
+  - name: banglinstra
+    description: |
+      The strategic-environment monitoring panel: articles harvested from GDELT and filed by the
+      country the EVENT happened in, so one feed can be read as Global, Regional or Nasional.
+
+      **READ ONLY, AND THERE IS NO WRITE ACTION TO GRANT.** Nothing writes an article through this
+      API. The rows are produced by `cmd/minos-intel`, a separate binary that connects as the
+      application role; the API reads and can do nothing else. A `create` grant on
+      `/system/banglinstra` would name a capability no route provides.
+
+      **THE TIER IS THE EVENT'S LOCATION, NOT THE OUTLET'S.** A story is filed where it happened, and
+      the outlet that reported it is a separate column. Deriving the tab from the publisher would make
+      "Global" mean "foreign news as told by Indonesian outlets", and would make the location column
+      redundant with the source column.
+
+      **NOTHING IS EVER DELETED.** The archive tab requires history; retention would empty the feed
+      unattended in a training environment, which is a worse failure than a full disk.
   - name: references
     description: |
       The Pustaka Referensi: documents the CMS uploads, and the sidebar categories they are filed
@@ -13951,6 +13968,132 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /banglinstra/stories:
+    get:
+      tags: [banglinstra]
+      summary: List the strategic-environment feed
+      description: |
+        Requires `read` on `/system/banglinstra`.
+
+        **A ROW IS A STORY, NOT AN ARTICLE.** GDELT is a per-document corpus and the same wire story
+        arrives from many outlets: one measured 15-minute slice carried a single headline under seven
+        syndication domains with identical text. Listing documents would show that story seven times;
+        this lists it once, with `source_count` reading seven — which is also the more useful fact for
+        a reader deciding what to look at.
+
+        **THE FOUR SCOPES ARE PREDICATES OVER ONE COLUMN.** `national` is the event's country being
+        Indonesia; `regional` is membership of the deployment's regional list
+        (`INTEL_REGIONAL_COUNTRIES`, APAC by default); `international` is everything else with a
+        country; `unknown` is a document whose geography could not be resolved. `unknown` is a real
+        scope and not a null — roughly 30% of documents carry no usable location, and filing them
+        under a tab or dropping them would both be lies.
+
+        **`window=latest` IS MEASURED FROM THE NEWEST ARTICLE HELD, NEVER FROM THE WALL CLOCK.** An
+        air-gapped deployment started on a three-day-old corpus would otherwise show an empty latest
+        tab while holding thousands of usable rows. `window=archive` has no lower bound, which is what
+        the archive toggle needs and what "nothing is ever deleted" makes possible.
+
+        **ORDERED BY `first_seen` DESCENDING** — when the story was learned, not when the last station
+        repeated it. A story that keeps being syndicated must not climb the list and make an old event
+        look like breaking news.
+      operationId: listBanglinstraStories
+      parameters:
+        - name: scope
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [international, regional, national, unknown]
+          description: |
+            Which tab. Omitted means every scope, which is what an unfiltered read wants.
+        - name: window
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [latest, archive]
+            default: latest
+          description: |
+            `latest` is the last 24 hours of the data held; `archive` is everything.
+        - name: min_confidence
+          in: query
+          required: false
+          schema:
+            type: number
+            format: double
+            minimum: 0
+            maximum: 1
+          description: |
+            Drop stories whose geography is weaker than this. `0` or omitted means no filter.
+
+            **IT ALSO DROPS `unknown`-SCOPE STORIES.** A story whose country could not be resolved
+            carries no `country` and therefore no confidence, so it cannot satisfy any positive
+            minimum. That is the intent rather than a side effect: a caller asking for confidence is
+            asking to be spared stories whose location was never established — a "US-China chip war"
+            article resolved to the Netherlands at 0.41 in measurement, and a reader who sets `0.5`
+            is asking not to see that.
+
+            Filter on the same field the response reports, so a client can echo back what it
+            applied.
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/PageNumber'
+      responses:
+        '200':
+          description: One page of stories, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BanglinstraStoryListEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /banglinstra/stories/{id}:
+    get:
+      tags: [banglinstra]
+      summary: Read one story and every source that carried it
+      description: |
+        Requires `read` on `/system/banglinstra`.
+
+        The expanded row of the panel: the story, and the documents that reported it OLDEST FIRST, so
+        the list reads as provenance — who had it first, and who repeated it. `source_count` on the
+        story always equals the length of `articles`, because both are derived from the same rows.
+
+        **`flagged` MARKS A DOMAIN ON NEITHER THE ALLOW NOR THE DENY LIST.** It is shown rather than
+        filtered: an unclassified source is a question for an operator, and a gap nobody can see is
+        worse than a source nobody has classified yet.
+
+        **`country` IS ABSENT WHEN THE CORPUS HAD NO USABLE GEOGRAPHY.** The panel draws "—"; it does
+        not guess. `country.confidence` is the share of the document's location rows behind the
+        answer, so a weak match reads as weak rather than as fact.
+      operationId: getBanglinstraStory
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        '200':
+          description: The story with its sources.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BanglinstraStoryDetailEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -22868,6 +23011,151 @@ components:
           minimum: -180
           maximum: 180
 
+    BanglinstraCountry:
+      type: object
+      required: [code, name, confidence]
+      properties:
+        code:
+          type: string
+          minLength: 2
+          maxLength: 2
+          description: |
+            ISO 3166-1 alpha-2, resolved at ingest from GDELT's FIPS 10-4 code.
+
+            **THE TWO ARE NOT THE SAME SCHEME AND THEY COLLIDE**: FIPS `CH` is China while ISO `CH`
+            is Switzerland, `AS` is Australia versus American Samoa, `RS` is Russia versus Serbia.
+            Mapping FIPS as though it were ISO would have mis-filed 24.6% of a measured sample and
+            silently dropped every row whose FIPS code has no ISO meaning at all.
+        name:
+          type: string
+          description: The country as the corpus wrote it. This is what the panel shows.
+        place:
+          type: string
+          description: |
+            The city, present ONLY when it held at least half of the document's location rows AND
+            belongs to `code`.
+
+            Below that threshold the rows disagree and a city would be an invention — the geocoder
+            has filed a Bekasi story under "Antara, Aceh" because the word appeared in the domain
+            name, and an Indonesian export story under Barcelona. Absent means "—", not "unknown
+            city".
+        confidence:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          description: |
+            The share of the document's location rows behind `code`. Below 0.5 the UI should not
+            present the country as settled: a "US-China chip war" article resolved to the Netherlands
+            at 41% in measurement, which is a true statement about the corpus and a misleading one
+            about the article.
+    BanglinstraStory:
+      type: object
+      required: [id, title, source_count, source, url, first_seen, last_seen]
+      properties:
+        id: {type: integer, format: int64, minimum: 1}
+        title:
+          type: string
+          description: The headline as the story was first named, never rewritten as copies arrive.
+        source_count:
+          type: integer
+          minimum: 1
+          description: |
+            How many documents carried this story. Seven means seven outlets ran it — which is
+            information the reader wants, and the reason the panel lists stories rather than articles.
+        country:
+          allOf:
+            - $ref: '#/components/schemas/BanglinstraCountry'
+          description: |
+            Absent when the corpus carried no usable geography. The panel draws "—"; it does not
+            guess.
+        source:
+          type: string
+          description: The lead article's registrable domain.
+        url:
+          type: string
+          format: uri
+          description: |
+            The lead article's URL — provenance only. On an air-gapped deployment it cannot be
+            opened, so a client should not present it as a browsing affordance without saying so.
+        first_seen:
+          type: string
+          format: date-time
+        last_seen:
+          type: string
+          format: date-time
+    BanglinstraArticle:
+      type: object
+      required: [id, title, domain, url, flagged, seen_at]
+      properties:
+        id: {type: integer, format: int64, minimum: 1}
+        title: {type: string}
+        domain: {type: string}
+        url: {type: string, format: uri}
+        flagged:
+          type: boolean
+          description: |
+            The domain is on neither the allow nor the deny list. Shown rather than filtered: an
+            unclassified source is a question for an operator, and an invisible gap is worse than a
+            visible one.
+        persons:
+          type: array
+          items: {type: string}
+        tone:
+          type: number
+          format: double
+          description: GDELT's average document tone. Absent when the source carried none.
+        event_code:
+          type: string
+          description: |
+            CAMEO event code, when the document produced an event. Absent for the ~73% of documents
+            that did not — those are still articles.
+        quad_class:
+          type: integer
+          minimum: 1
+          maximum: 4
+        seen_at:
+          type: string
+          format: date-time
+          description: GDELT's own processing clock, UTC.
+    BanglinstraStoryEnvelope:
+      type: object
+      required: [status_code, message, data]
+      properties:
+        status_code: {type: integer, format: int32}
+        message: {type: string}
+        data:
+          $ref: '#/components/schemas/BanglinstraStory'
+    BanglinstraStoryListEnvelope:
+      type: object
+      required: [status_code, message, data, metadata]
+      properties:
+        status_code: {type: integer, format: int32}
+        message: {type: string}
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/BanglinstraStory'
+        metadata:
+          $ref: '#/components/schemas/PaginationMetadata'
+    BanglinstraStoryDetail:
+      type: object
+      required: [story, articles]
+      properties:
+        story:
+          $ref: '#/components/schemas/BanglinstraStory'
+        articles:
+          type: array
+          items:
+            $ref: '#/components/schemas/BanglinstraArticle'
+    BanglinstraStoryDetailEnvelope:
+      type: object
+      required: [status_code, message, data]
+      properties:
+        status_code: {type: integer, format: int32}
+        message: {type: string}
+        data:
+          $ref: '#/components/schemas/BanglinstraStoryDetail'
     ViewpointEnvelope:
       type: object
       required: [status_code, message, data]

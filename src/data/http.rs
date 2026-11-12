@@ -15,10 +15,10 @@ use crate::config::Minos;
 use crate::data::Error;
 use crate::data::auth::{Auth, Refresher};
 use crate::data::types::{
-    Envelope, ErrorResponse, FeedPosition, Installation, InstallationType, Pages, Register,
-    TacticalObject, TacticalObjectFacets, TacticalObjectManifest, TacticalObjectPlacement,
-    TniCommandPost, TniCommander, TokenPair, UnitCommander, UnitDetail, UnitOrganisation,
-    UnitOrganisationDetail, UnitSummary, Viewpoint,
+    Envelope, ErrorResponse, FeedPosition, Installation, InstallationType, NewsQuery, NewsStory,
+    NewsStoryDetail, Pages, Register, StoryPage, TacticalObject, TacticalObjectFacets,
+    TacticalObjectManifest, TacticalObjectPlacement, TniCommandPost, TniCommander, TokenPair,
+    UnitCommander, UnitDetail, UnitOrganisation, UnitOrganisationDetail, UnitSummary, Viewpoint,
 };
 
 /// A request timeout. The wall is on a LAN or a VPN; a read that takes longer than this is a stall to
@@ -244,6 +244,43 @@ impl Http {
         self.get("/tni-commander/history").await
     }
 
+    /// `GET /banglinstra/stories` — **one page** of the newsroom, with the five parameters the wall
+    /// asks with. Needs `read` on `/system/banglinstra`.
+    ///
+    /// The API's word for the route is `banglinstra`; this crate calls the thing the newsroom.
+    ///
+    /// Deliberately **not** `paged()`: that walks every page at [`PAGE_SIZE`] and answers "the whole
+    /// catalogue", which is the register's question. The newsroom asks the operator's — page `n` of
+    /// [`NEWS_PAGE_SIZE`] stories, ordered `first_seen` descending by the server — so a client that
+    /// walked the pages would make the operator's page buttons meaningless and page 2 unreachable.
+    pub async fn stories(&self, query: NewsQuery) -> Result<StoryPage, Error> {
+        let path = format!(
+            "/banglinstra/stories?scope={}&window={}&min_confidence={MIN_CONFIDENCE}&page_size={NEWS_PAGE_SIZE}&page_number={}",
+            query.scope.as_str(),
+            query.window.as_str(),
+            query.page,
+        );
+        let envelope: Envelope<Vec<NewsStory>> = self.get_envelope(&path).await?;
+        // `metadata` is required on this route: without it the panel cannot offer Next, and an
+        // empty block would be a guess about a page the server never described.
+        let pagination = envelope.metadata.ok_or_else(|| {
+            Error::Decode(
+                "the story list carried no metadata: a page that cannot say which page it is is not a page"
+                    .to_string(),
+            )
+        })?;
+        Ok(StoryPage {
+            rows: envelope.data,
+            pagination,
+        })
+    }
+
+    /// `GET /banglinstra/stories/{id}` — the story and the documents that carried it, oldest first.
+    /// Needs `read` on `/system/banglinstra`.
+    pub async fn story(&self, id: i64) -> Result<NewsStoryDetail, Error> {
+        self.get(&format!("/banglinstra/stories/{id}")).await
+    }
+
     /// Every page of a paginated list, at the server's maximum page size.
     ///
     /// `path` may already carry a filter (`?active=true`); the page parameters are appended to it.
@@ -358,6 +395,17 @@ enum Attempt<T> {
 /// is one or two reads rather than a dozen.
 const PAGE_SIZE: u32 = 200;
 
+/// The wall's confidence floor, sent as `min_confidence`. It drops stories whose geography is
+/// weaker than this — and drops `unknown`-scope stories with them, because a story with no country
+/// carries no confidence to compare. That is the intent: an operator asking for certainty is
+/// asking not to be shown a story that was never located.
+pub const MIN_CONFIDENCE: f64 = 0.5;
+
+/// The wall's page, sent as `page_size`: what one screen of the newsroom holds, and the page the
+/// operator pages through. Not [`PAGE_SIZE`], which is the register's *read* size rather than a
+/// page anybody sees.
+pub const NEWS_PAGE_SIZE: u32 = 25;
+
 /// The most pages one register read will follow. Sixteen pages of [`PAGE_SIZE`] is 3 200 hulls; beyond that
 /// the wall is being asked to hold a fleet it cannot draw, and a read that stops is better than one that
 /// never ends.
@@ -427,6 +475,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use crate::config::{Credential, Minos, Secret};
+    use crate::data::types::{NewsScope, NewsWindow};
 
     /// A Minos that lives on loopback, in this process: two auth routes and a queue of `GET`
     /// answers. Real sockets, real `reqwest`, no network and no stub of our own client.
@@ -714,6 +763,85 @@ mod tests {
                 "the client did not ask {wanted:?}; it asked {paths:?}"
             );
         }
+    }
+
+    /// **The newsroom asks for ONE page, with the wall's five parameters, and never walks the
+    /// pages** (#135). `paged()` would ask `page_size=200` and follow `has_next_page`, which makes the
+    /// operator's page buttons meaningless; the falsifiable claim is the request line itself.
+    #[tokio::test]
+    async fn the_newsroom_asks_for_one_page_with_the_walls_parameters() {
+        let stub = stub(vec![
+            (200, fixture("fixtures/rest/newsroom-stories-page-1.json")),
+            (200, fixture("fixtures/rest/newsroom-story-1.json")),
+        ]);
+        let http = signed_in(&stub).await;
+
+        let page = http
+            .stories(NewsQuery::latest(NewsScope::International))
+            .await
+            .expect("the page reads");
+        assert_eq!(
+            page.rows.len(),
+            3,
+            "the rows of the page that was asked for"
+        );
+        assert_eq!(page.pagination.current_page, 1);
+        assert_eq!(page.pagination.total_records, 128);
+        assert!(page.pagination.has_next_page);
+
+        let detail = http.story(412).await.expect("the detail reads");
+        assert_eq!(detail.story.id, 412);
+        assert_eq!(detail.articles.len() as u32, detail.story.source_count);
+
+        let paths = stub.paths.lock().unwrap().clone();
+        assert_eq!(
+            paths.len(),
+            2,
+            "one request per read: a paged() walk would have asked for more, got {paths:?}"
+        );
+        assert!(
+            paths[0].starts_with(
+                "GET /api/v1/banglinstra/stories?scope=international&window=latest&min_confidence=0.5&page_size=25&page_number=1 "
+            ),
+            "the list is one page, at the wall's confidence and page size, got {:?}",
+            paths[0]
+        );
+        assert!(
+            paths[1].starts_with("GET /api/v1/banglinstra/stories/412 "),
+            "the detail is the story's own route, got {:?}",
+            paths[1]
+        );
+    }
+
+    /// The operator's page is a parameter, not a walk: page 2 asks for `page_number=2` once.
+    #[tokio::test]
+    async fn the_operators_page_is_the_page_that_is_asked_for() {
+        let stub = stub(vec![
+            (200, fixture("fixtures/rest/newsroom-stories-page-1.json")),
+            (200, fixture("fixtures/rest/newsroom-stories-page-1.json")),
+        ]);
+        let http = signed_in(&stub).await;
+
+        let query = NewsQuery {
+            scope: NewsScope::International,
+            window: NewsWindow::Latest,
+            page: 2,
+        };
+        let page = http.stories(query).await.expect("the page reads");
+        assert_eq!(
+            page.pagination.current_page, 1,
+            "the fixture is page 1 of 6; the client reports what the server said rather than relabelling it"
+        );
+
+        let paths = stub.paths.lock().unwrap().clone();
+        assert_eq!(paths.len(), 1, "one page, one request: {paths:?}");
+        assert!(
+            paths[0].starts_with(
+                "GET /api/v1/banglinstra/stories?scope=international&window=latest&min_confidence=0.5&page_size=25&page_number=2 "
+            ),
+            "page 2 is `page_number=2`, not a second walk at the read size, got {:?}",
+            paths[0]
+        );
     }
 
     #[tokio::test]

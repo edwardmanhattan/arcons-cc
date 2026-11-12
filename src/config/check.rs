@@ -11,9 +11,11 @@
 //! operator then fixes one thing per session.
 //!
 //! Since #107 the operational resources each get a line of their own (`viewpoint`, `inst types`,
-//! `facilities`, `symbols`, `manifest`, `facets`, `placements`, `orgs`, `org`, `tni command`,
-//! `tni history`). They are reads with their own `/system/...` subjects, so one refused read is named
-//! rather than left as "the map is empty"; a refusal is exit 4 like any other failed read.
+//! `facilities`, `newsroom`, `symbols`, `manifest`, `facets`, `placements`, `orgs`, `org`,
+//! `tni command`, `tni history`). They are reads with their own `/system/...` subjects, so one
+//! refused read is named rather than left as "the map is empty" — and it names the subject the
+//! account is missing, because "Forbidden" is not a fix. A refusal is exit 4 like any other failed
+//! read.
 //!
 //! **Nothing here prints a credential** (`INV-08`). The checks describe what the server *said*
 //! (`900 s left`, `127 hulls`, `subscribed to live-feed`), and the one thing taken from the file — its
@@ -203,7 +205,13 @@ pub fn run(args: &Args, env: &Env, world: &dyn World, out: &mut dyn std::fmt::Wr
                         let _ = writeln!(out, "  {:<11} ok  {detail}", check.name);
                     }
                     Err(error) => {
-                        let _ = writeln!(out, "  {:<11} FAILED  {error}", check.name);
+                        // A refusal names the subject the account needs: "forbidden" and "the map
+                        // is empty" are the same picture, and only one of them is a fix.
+                        let hint = check
+                            .needs
+                            .map(|subject| format!(" — needs the read action on {subject}"))
+                            .unwrap_or_default();
+                        let _ = writeln!(out, "  {:<11} FAILED  {error}{hint}", check.name);
                         fail(Outcome::ReadFailed, &mut verdict);
                     }
                 }
@@ -354,6 +362,7 @@ impl World for Live {
             Err(_) => {
                 return vec![crate::data::ResourceCheck {
                     name: "resources",
+                    needs: None,
                     detail: Err(crate::data::Error::Transport(
                         "the session lock was poisoned".to_string(),
                     )),
@@ -369,6 +378,7 @@ impl World for Live {
                     Err(error) => {
                         return vec![crate::data::ResourceCheck {
                             name: "resources",
+                            needs: None,
                             detail: Err(error),
                         }];
                     }
@@ -464,10 +474,12 @@ mod tests {
                 resources: vec![
                     crate::data::ResourceCheck {
                         name: "viewpoint",
+                        needs: None,
                         detail: Ok("the backend has not chosen a view (unset, not 0,0)".into()),
                     },
                     crate::data::ResourceCheck {
                         name: "symbols",
+                        needs: Some("/system/tactical-objects"),
                         detail: Ok("56 symbols in 1 page(s)".into()),
                     },
                 ],
@@ -688,16 +700,19 @@ mod tests {
         scripted.resources = vec![
             crate::data::ResourceCheck {
                 name: "viewpoint",
+                needs: None,
                 detail: Ok("the backend has not chosen a view (unset, not 0,0)".into()),
             },
             crate::data::ResourceCheck {
                 name: "placements",
+                needs: Some("/system/tactical-object-placements"),
                 detail: Err(crate::data::Error::Forbidden {
                     message: "the account may not read /system/tactical-object-placements".into(),
                 }),
             },
             crate::data::ResourceCheck {
                 name: "tni command",
+                needs: Some("/system/tni-command"),
                 detail: Ok("Panglima TNI, rank 7, vacant".into()),
             },
         ];
@@ -712,6 +727,34 @@ mod tests {
         assert!(
             out.contains("tni command") && out.contains("vacant"),
             "a failure must not stop the rows after it:\n{out}"
+        );
+    }
+
+    /// **A refused newsroom read names the subject the account needs** (#135). "Forbidden" and
+    /// "the panel is empty" read the same from the wall, and only one of them tells an operator what
+    /// to grant: `read` on `/system/banglinstra`.
+    #[test]
+    fn a_refused_newsroom_read_names_the_subject_the_account_needs() {
+        let sandbox = Sandbox::new("newsroom-refused");
+        let mut scripted = Scripted::good();
+        scripted.resources = vec![crate::data::ResourceCheck {
+            name: "newsroom",
+            needs: Some("/system/banglinstra"),
+            detail: Err(crate::data::Error::Forbidden {
+                message: "Forbidden".into(),
+            }),
+        }];
+        let mut out = String::new();
+        let outcome = run(&sandbox.args("t"), &Env::default(), &scripted, &mut out);
+        assert_eq!(outcome, Outcome::ReadFailed, "{out}");
+        assert_eq!(outcome.code(), 4);
+        assert!(
+            out.contains("newsroom"),
+            "the line names the read that was refused:\n{out}"
+        );
+        assert!(
+            out.contains("read action on /system/banglinstra"),
+            "the refusal must name the subject to grant, not just say forbidden:\n{out}"
         );
     }
 

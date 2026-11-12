@@ -20,15 +20,17 @@
 //! | the operational marks | `GET /tactical-object-placements`, paged to the end |
 //! | the standing orders of battle | `GET /unit-organisations`, `GET /unit-organisations/{id}` |
 //! | the supreme command | `GET /tni-commander`, `GET /tni-commander/history` |
+//! | the newsroom | `GET /banglinstra/stories` (one page), `GET /banglinstra/stories/{id}` |
 //! | sign in, refresh | `POST /auth/login` (`return_refresh_token: true`), `POST /auth/refresh` |
 //!
-//! Permissions, from the pinned spec and **confirmed against the dev server on 2026-11-10**: the
-//! picture needs the `read` action on `/system/live-feed`, and `/units/…` (identity, commander) needs
-//! `read` on `/system/units`. The operational resources each have their own subject —
-//! `/system/installations`, `/system/tactical-objects`, `/system/tactical-object-placements`,
-//! `/system/unit-organisations` and `/system/tni-command` — except `/viewpoint`, which is
-//! authentication only. A read-only wall account therefore holds those `read` actions and nothing
-//! else: it never posts a fix, an order, a placement or a message.
+//! Permissions, from the pinned spec and **confirmed against the dev server on 2026-11-10** (and,
+//! for the newsroom, on 2026-11-12): the picture needs the `read` action on `/system/live-feed`,
+//! and `/units/…` (identity, commander) needs `read` on `/system/units`. The operational resources
+//! each have their own subject — `/system/installations`, `/system/tactical-objects`,
+//! `/system/tactical-object-placements`, `/system/unit-organisations`, `/system/tni-command` and
+//! `/system/banglinstra` — except `/viewpoint`, which is authentication only. A read-only wall
+//! account therefore holds those `read` actions and nothing else: it never posts a fix, an order, a
+//! placement or a message.
 //!
 //! Facts the code must not re-derive per call site, because they are the traps:
 //!
@@ -42,6 +44,12 @@
 //! - The library is **not** the map: a placement embeds its symbol, so drawing needs no second read.
 //! - `unit-organisations/{id}.nodes` is a **forest**; more than one root is normal.
 //! - A vacant supreme command is a real state, not an error: `commander` is absent.
+//! - `window=latest` is the last 24 hours **of the data held**, anchored by the server to the newest
+//!   article it has. The client sends the word and never computes a cutoff from this machine's clock.
+//! - `min_confidence=0.5` drops `unknown`-scope stories: a story with no country carries no
+//!   confidence, so an empty tab for a scope nobody can file is intended, not a broken read.
+//! - A newsroom page carries the query that asked for it, so a page that arrives after a tab change
+//!   is discarded by comparing queries rather than applied because it arrived last.
 //!
 //! `401`/`403` are failures to surface, not to retry; `429` is real and backs off. A second `401`
 //! after a successful refresh is [`Error::Unauthorized`] — the account is disabled, or the token is
@@ -157,12 +165,19 @@ pub struct LiveCheck {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceCheck {
     pub name: &'static str,
+    /// The `/system/...` subject the read needs the `read` action on, or `None` for a route that is
+    /// authentication only (`/viewpoint`).
+    ///
+    /// A refusal prints it, because "Forbidden" and "the map is empty" look identical from the wall
+    /// and only one of them names a fix.
+    pub needs: Option<&'static str>,
     pub detail: Result<String, Error>,
 }
 
 /// One resource row: run the read, describe the value on success, keep the error on failure.
 async fn resource<T, F>(
     name: &'static str,
+    needs: Option<&'static str>,
     read: impl std::future::Future<Output = Result<T, Error>>,
     describe: F,
 ) -> ResourceCheck
@@ -171,6 +186,7 @@ where
 {
     ResourceCheck {
         name,
+        needs,
         detail: read.await.map(describe),
     }
 }
@@ -284,6 +300,7 @@ impl Session {
             Err(error) => {
                 return vec![ResourceCheck {
                     name: "resources",
+                    needs: None,
                     detail: Err(Error::Transport(format!(
                         "could not start a runtime: {error}"
                     ))),
@@ -296,6 +313,7 @@ impl Session {
             rows.push(
                 resource(
                     "viewpoint",
+                    None,
                     self.http.viewpoint(),
                     |viewpoint| match viewpoint.coordinates() {
                         Some((latitude, longitude)) => {
@@ -307,31 +325,60 @@ impl Session {
                 .await,
             );
             rows.push(
-                resource("inst types", self.http.installation_types(), |kinds| {
-                    format!("{} kinds", kinds.len())
-                })
+                resource(
+                    "inst types",
+                    Some("/system/installations"),
+                    self.http.installation_types(),
+                    |kinds| format!("{} kinds", kinds.len()),
+                )
                 .await,
             );
             rows.push(
-                resource("facilities", self.http.installations(), |places| {
-                    format!("{} active facilities", places.len())
-                })
+                resource(
+                    "facilities",
+                    Some("/system/installations"),
+                    self.http.installations(),
+                    |places| format!("{} active facilities", places.len()),
+                )
+                .await,
+            );
+            // The newsroom (#135): its own subject, its own row, and one page — the page the panel
+            // opens on. A refusal here must say "banglinstra", not leave an empty panel unexplained.
+            rows.push(
+                resource(
+                    "newsroom",
+                    Some("/system/banglinstra"),
+                    self.http
+                        .stories(types::NewsQuery::latest(types::NewsScope::International)),
+                    |page| {
+                        format!(
+                            "{} stories in {} page(s) (international, latest)",
+                            page.pagination.total_records, page.pagination.total_pages
+                        )
+                    },
+                )
                 .await,
             );
             rows.push(
-                resource("symbols", self.http.tactical_objects(), |library| {
-                    format!(
-                        "{} symbols in {} page(s){}",
-                        library.rows.len(),
-                        library.pages,
-                        if library.truncated { ", truncated" } else { "" }
-                    )
-                })
+                resource(
+                    "symbols",
+                    Some("/system/tactical-objects"),
+                    self.http.tactical_objects(),
+                    |library| {
+                        format!(
+                            "{} symbols in {} page(s){}",
+                            library.rows.len(),
+                            library.pages,
+                            if library.truncated { ", truncated" } else { "" }
+                        )
+                    },
+                )
                 .await,
             );
             rows.push(
                 resource(
                     "manifest",
+                    Some("/system/tactical-objects"),
                     self.http.tactical_object_manifest(),
                     |manifest| {
                         format!(
@@ -344,19 +391,25 @@ impl Session {
                 .await,
             );
             rows.push(
-                resource("facets", self.http.tactical_object_facets(), |facets| {
-                    format!(
-                        "{} active symbols, {} domains, {} categories",
-                        facets.total,
-                        facets.domains.len(),
-                        facets.categories.len()
-                    )
-                })
+                resource(
+                    "facets",
+                    Some("/system/tactical-objects"),
+                    self.http.tactical_object_facets(),
+                    |facets| {
+                        format!(
+                            "{} active symbols, {} domains, {} categories",
+                            facets.total,
+                            facets.domains.len(),
+                            facets.categories.len()
+                        )
+                    },
+                )
                 .await,
             );
             rows.push(
                 resource(
                     "placements",
+                    Some("/system/tactical-object-placements"),
                     self.http.tactical_object_placements(),
                     |marks| {
                         format!(
@@ -374,31 +427,41 @@ impl Session {
             let detail = match &organisations {
                 Ok(list) => match list.first() {
                     Some(first) => {
-                        resource("org", self.http.unit_organisation(first.id), |detail| {
-                            format!(
-                                "{} (id {}): {} nodes, {} root(s)",
-                                detail.organisation.name,
-                                detail.organisation.id,
-                                count_nodes(&detail.nodes),
-                                detail.nodes.len()
-                            )
-                        })
+                        resource(
+                            "org",
+                            Some("/system/unit-organisations"),
+                            self.http.unit_organisation(first.id),
+                            |detail| {
+                                format!(
+                                    "{} (id {}): {} nodes, {} root(s)",
+                                    detail.organisation.name,
+                                    detail.organisation.id,
+                                    count_nodes(&detail.nodes),
+                                    detail.nodes.len()
+                                )
+                            },
+                        )
                         .await
                     }
                     None => ResourceCheck {
                         name: "org",
+                        needs: Some("/system/unit-organisations"),
                         detail: Ok("no structure to read".to_string()),
                     },
                 },
                 Err(error) => ResourceCheck {
                     name: "org",
+                    needs: Some("/system/unit-organisations"),
                     detail: Err(error.clone()),
                 },
             };
             rows.push(
-                resource("orgs", async { organisations }, |list| {
-                    format!("{} structures", list.len())
-                })
+                resource(
+                    "orgs",
+                    Some("/system/unit-organisations"),
+                    async { organisations },
+                    |list| format!("{} structures", list.len()),
+                )
                 .await,
             );
             rows.push(detail);
@@ -406,6 +469,7 @@ impl Session {
             rows.push(
                 resource(
                     "tni command",
+                    Some("/system/tni-command"),
                     self.http.tni_commander(),
                     |post| match post.commander {
                         Some(commander) => format!(
@@ -423,6 +487,7 @@ impl Session {
             rows.push(
                 resource(
                     "tni history",
+                    Some("/system/tni-command"),
                     self.http.tni_commander_history(),
                     |appointments| format!("{} appointments", appointments.len()),
                 )
@@ -437,6 +502,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::types::*;
+    use super::{Error, Session};
     use std::path::PathBuf;
 
     fn fixture(name: &str) -> String {
@@ -882,5 +948,262 @@ mod tests {
             history.data.is_empty(),
             "nobody has been appointed on this deployment"
         );
+    }
+
+    // -- the newsroom (#135) --------------------------------------------------------------------
+
+    /// **The list is a page of stories, with the block that says which page.** The deployment this
+    /// was recorded against holds no stories, so the populated page is the pinned spec's shape
+    /// (`fixtures/README.md` says which is which); the envelope and `metadata` are the wire's.
+    #[test]
+    fn a_newsroom_page_carries_its_rows_and_the_pagination_block() {
+        let envelope: Envelope<Vec<NewsStory>> =
+            serde_json::from_str(&fixture("newsroom-stories-page-1.json"))
+                .expect("the page decodes");
+        let metadata = envelope.metadata.expect(
+            "the list reports metadata: a page that cannot say which page it is is not a page",
+        );
+        assert_eq!(metadata.current_page, 1);
+        assert_eq!(metadata.total_pages, 6);
+        assert_eq!(metadata.total_records, 128);
+        assert_eq!(
+            metadata.page_size, 25,
+            "the wall's page, not the register's read size"
+        );
+        assert!(metadata.has_next_page, "there is a page 2");
+        assert_eq!(envelope.data.len(), 3);
+
+        // `first_seen` descending: when the story was learned, not when the last station repeated
+        // it, so a re-syndicated old story cannot climb the list like breaking news.
+        let firsts: Vec<chrono::DateTime<chrono::Utc>> =
+            envelope.data.iter().map(|story| story.first_seen).collect();
+        let mut sorted = firsts.clone();
+        sorted.sort_by(|a, b| b.cmp(a));
+        assert_eq!(
+            firsts, sorted,
+            "the list is ordered by first_seen descending"
+        );
+    }
+
+    /// **A deployment whose corpus is empty answers a page with no rows, not an error.** This is the
+    /// one file in the group that is a recording: the dev server had `read` on the newsroom and
+    /// nothing to read. "No stories" must not be mistaken for "the read failed".
+    #[test]
+    fn an_empty_newsroom_page_is_a_valid_answer() {
+        let envelope: Envelope<Vec<NewsStory>> =
+            serde_json::from_str(&fixture("newsroom-stories-empty.json"))
+                .expect("an empty page decodes");
+        assert_eq!(envelope.status_code, 200);
+        assert!(envelope.data.is_empty());
+        let metadata = envelope
+            .metadata
+            .expect("even an empty list says which page it is");
+        assert_eq!(metadata.total_records, 0);
+        assert_eq!(metadata.total_pages, 0);
+        assert!(!metadata.has_next_page, "no rows, no next page");
+    }
+
+    /// **A story with no country is not a story at the origin, and a country with no city is not an
+    /// empty string** (`INV-01`). The two absences are different facts: the corpus never established
+    /// the country, or it established the country and not the city.
+    #[test]
+    fn a_story_without_a_country_and_a_country_without_a_place_are_both_absent() {
+        let envelope: Envelope<Vec<NewsStory>> =
+            serde_json::from_str(&fixture("newsroom-stories-page-1.json"))
+                .expect("the page decodes");
+
+        let located = envelope.data[0]
+            .country
+            .as_ref()
+            .expect("this row is located");
+        assert_eq!(located.code, "ID");
+        assert_eq!(located.place.as_deref(), Some("Jakarta"));
+        assert!(
+            (located.confidence - 0.83).abs() < 1e-9,
+            "the confidence is the server's number, shown as given rather than re-derived"
+        );
+
+        let no_place = envelope.data[1]
+            .country
+            .as_ref()
+            .expect("a country can be established without a city");
+        assert_eq!(no_place.code, "MY");
+        assert_eq!(
+            no_place.place, None,
+            "an absent place is not an empty string and not \"unknown city\""
+        );
+        assert!(
+            (no_place.confidence - 0.55).abs() < 1e-9,
+            "a weak match is a fact to show as weak, not a filter to re-apply"
+        );
+
+        assert_eq!(
+            envelope.data[2].country, None,
+            "INV-01: an absent country is not `code: \"\"`, and no story is ever at 0,0"
+        );
+    }
+
+    /// **The detail's article list is provenance, and absence is per field.** Oldest first, and its
+    /// length equals `source_count`; an article without `tone`, `event_code`, `quad_class` or
+    /// `persons` decodes as `None`, while a measured `tone: 0.0` survives as zero (`INV-01`).
+    #[test]
+    fn a_story_detail_is_oldest_first_and_every_absent_field_is_none() {
+        let envelope: Envelope<NewsStoryDetail> =
+            serde_json::from_str(&fixture("newsroom-story-1.json")).expect("the detail decodes");
+        let detail = envelope.data;
+        assert_eq!(
+            detail.articles.len() as u32,
+            detail.story.source_count,
+            "on the detail route `source_count` always equals `articles.len()`: both come from the same rows"
+        );
+
+        let seen: Vec<chrono::DateTime<chrono::Utc>> = detail
+            .articles
+            .iter()
+            .map(|article| article.seen_at)
+            .collect();
+        let mut sorted = seen.clone();
+        sorted.sort();
+        assert_eq!(
+            seen, sorted,
+            "articles are OLDEST FIRST: who had it first, then who repeated it"
+        );
+
+        let lead = &detail.articles[0];
+        assert_eq!(
+            lead.tone,
+            Some(0.0),
+            "INV-01: a measured tone of 0.0 is a measurement and must still draw"
+        );
+        assert_eq!(lead.event_code.as_deref(), Some("042"));
+        assert_eq!(lead.quad_class, Some(1));
+        assert!(
+            lead.persons
+                .as_ref()
+                .is_some_and(|persons| persons == &["Iqbal Ramadhan".to_string()]),
+            "a recorded persons array decodes as it was sent"
+        );
+        assert!(!lead.flagged);
+
+        let no_event = &detail.articles[1];
+        assert_eq!(no_event.tone, Some(-3.42));
+        assert_eq!(
+            no_event.persons, None,
+            "an absent persons array is not an empty one"
+        );
+        assert_eq!(
+            no_event.event_code, None,
+            "73% of documents carry no CAMEO code, and they are still articles"
+        );
+        assert_eq!(no_event.quad_class, None);
+
+        let flagged = &detail.articles[2];
+        assert!(
+            flagged.flagged,
+            "a domain on neither list is shown and marked, not filtered out"
+        );
+        assert_eq!(flagged.tone, None, "an absent tone is not 0.0");
+        assert_eq!(flagged.event_code, None);
+        assert_eq!(flagged.quad_class, None);
+        assert_eq!(flagged.persons, None);
+    }
+
+    /// The query's words are the API's enum values, and the panel opens on page one of the **latest**
+    /// window: the client sends the word and never a 24-hour cutoff of its own.
+    #[test]
+    fn a_newsroom_query_names_the_wires_words() {
+        let query = NewsQuery::latest(NewsScope::International);
+        assert_eq!(query.scope.as_str(), "international");
+        assert_eq!(query.window.as_str(), "latest");
+        assert_eq!(query.page, 1);
+        assert_eq!(
+            NewsScope::Unknown.as_str(),
+            "unknown",
+            "`unknown` is a real scope and not a null, even though the panel has no tab for it"
+        );
+        assert_eq!(NewsWindow::Archive.as_str(), "archive");
+    }
+
+    /// **A refused read is a named row, not a crash.** The stub refuses every resource the way an
+    /// account without the `read` actions would; every row is still attempted, and the newsroom row
+    /// names the subject the account is missing (#135).
+    #[test]
+    fn a_refused_newsroom_read_keeps_every_row_and_names_its_subject() {
+        let minos = crate::config::Minos::new(
+            refusing_minos(),
+            crate::config::Credential::Password {
+                identifier: "wall".into(),
+                password: crate::config::Secret::new("not-a-real-password"),
+            },
+        );
+        let mut session = Session::start(&minos).expect("the stub signs in");
+        let rows = session.resources();
+
+        let newsroom = rows
+            .iter()
+            .find(|row| row.name == "newsroom")
+            .expect("the newsroom has a row of its own");
+        assert_eq!(
+            newsroom.needs,
+            Some("/system/banglinstra"),
+            "the row names the subject the account needs"
+        );
+        assert!(
+            matches!(newsroom.detail, Err(Error::Forbidden { .. })),
+            "the refusal is kept as a refusal, got {:?}",
+            newsroom.detail
+        );
+
+        // One refused read must not stop the ones after it, and every row that needs a subject says
+        // which: "the map is empty" is not a diagnosis.
+        assert!(
+            rows.iter().any(|row| row.name == "tni history"),
+            "the rows after a refused one are still attempted: {:?}",
+            rows.iter().map(|row| row.name).collect::<Vec<_>>()
+        );
+        for row in &rows {
+            if row.name != "viewpoint" && row.name != "resources" {
+                assert!(
+                    row.needs.is_some(),
+                    "row {} does not name the subject its read needs",
+                    row.name
+                );
+            }
+        }
+    }
+
+    /// A Minos on loopback that signs in and then refuses every GET with a real 403 body.
+    fn refusing_minos() -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let base = format!(
+            "http://127.0.0.1:{}/api/v1",
+            listener.local_addr().unwrap().port()
+        );
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut buffer = [0u8; 4096];
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+                let (status, payload) = if request.starts_with("POST /api/v1/auth/login") {
+                    (
+                        200u16,
+                        r#"{"status_code":200,"message":"Successfull","data":{"access_token":"a","token_type":"Bearer","expires_in":900,"refresh_token":"r"}}"#.to_string(),
+                    )
+                } else {
+                    (
+                        403,
+                        r#"{"status_code":403,"message":"Forbidden","data":null}"#.to_string(),
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                    payload.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        base
     }
 }

@@ -23,6 +23,12 @@ up in the wrong ocean. This file defines the vocabulary; the code uses it exactl
 | **Tree camera** | Where a tree pane's own points land in the pane: `pane = tree * zoom + pan`, and whether a hand has taken it (until it has, a resize re-fits). | the map's camera |
 | **Installation** | A facility — a posko, a base, a dock, a radar station — at one coordinate. Not a Unit: no hull number, no class, no fix chain, no staleness judgement. | "unit", "vessel", "ship" |
 | **Post** | One box of a standing structure: what the structure calls it (`name`), the position that runs it (`position_title`), and the person appointed (`commander`, absent when vacant). A post with an `id_unit` **is** a hull. | "node" in the domain, "unit" when it has no hull |
+| **Newsroom** | The strategic-environment panel: events from Minos' `banglinstra` feed, read one page at a time. The API's word for the route is `banglinstra`; this code says **newsroom** (the client's mockup spells it *Banglingstra*). | "the news", "the feed" — the Feed is the hull picture |
+| **Story** | One event as the corpus grouped it: a headline, the country it happened in, and how many outlets carried it (`source_count`). What the list shows. | "article" |
+| **Article** | One document behind a Story: one domain, one URL, one `seen_at`. **A Story is not an Article**: the same wire story under seven mastheads is one Story and seven Articles. | "story" |
+| **Scope** | Which tab a Story is filed under — `international`, `regional`, `national` — decided by the **event's** country, not the outlet's. The API also has `unknown`, a real scope and not a null; the panel has no fourth tab, and `min_confidence=0.5` drops those stories anyway. | "category"; the publisher's country |
+| **Window** | `latest` — the last 24 hours **of the data held**, anchored by the server to the newest article it has, never to the wall clock — or `archive`, which has no lower bound. | "today", "the last day" |
+| **Confidence** | The share of a Story's location rows behind its country, 0–1. A fact to show (below 0.5 the country is not settled), not a filter to re-apply: the server already applied `min_confidence`. | "accuracy", "score" |
 
 ## The distinctions that decide code
 
@@ -45,6 +51,16 @@ up in the wrong ocean. This file defines the vocabulary; the code uses it exactl
 - **A maximised pane is layout, not interaction.** It survives every menu, sheet and gesture coming
   and going, which is why it lives on the `Layout` and the table stays seven rows — a filter panel is a
   hold, but a full-size pane is not.
+- **Absence is not zero, in the newsroom too.** A Story with no `country`, a country with no
+  `place`, an Article with no `tone`: each draws a dash. A `tone` of `0.0` is a measured neutral and
+  still draws; `event_code` is absent for most documents and those are still Articles (`INV-01`).
+- **`latest` is anchored to the data, not to the clock.** The client sends the word `latest` and
+  computes no 24-hour cutoff: a three-day-old corpus on an air-gapped box must show those three days,
+  not an empty tab.
+- **A paged reply carries the question that asked for it.** The newsroom's `Reply::Stories` carries
+  its `NewsQuery`, so a page arriving after a tab change or a page press is compared with what is on
+  screen and discarded. "Newest arrival wins" would draw page 2 of the regional tab under the
+  national heading.
 - **The data is shared; the question is not.** One Feed, one socket, one Picture — but which hull a
   pane is asking about is that pane's, so a card in one pane is not a card in another (`INV-10`).
   A wall-wide selection was the first version and it drew the same card in every pane.

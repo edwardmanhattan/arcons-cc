@@ -237,6 +237,47 @@ pub const TNI_COMMAND_POST_SUMMARY: &[&str] = &[
     "commander",
 ];
 
+// ---------------------------------------------------------------------------------------------
+// The newsroom (#135): Minos' strategic-environment feed. The API's word for the route is
+// `banglinstra`; this crate's word is the newsroom, which is what the panel is called. A row is a
+// STORY, not an article — one wire story carried by seven outlets is one row with
+// `source_count: 7` — and the detail is that story with the documents behind it, oldest first.
+// ---------------------------------------------------------------------------------------------
+
+/// The `country` inside a story. **Absent when the corpus carried no usable geography**, and
+/// `place` is absent unless at least half the document's location rows agreed.
+pub const NEWS_COUNTRY: &[&str] = &["code", "name", "place", "confidence"];
+
+/// One row of `GET /banglinstra/stories`.
+pub const NEWS_STORY: &[&str] = &[
+    "id",
+    "title",
+    "source_count",
+    "country",
+    "source",
+    "url",
+    "first_seen",
+    "last_seen",
+];
+
+/// One document inside a story. `persons`, `tone`, `event_code` and `quad_class` are all absent in
+/// real responses; `flagged` marks a domain on neither the allow nor the deny list.
+pub const NEWS_ARTICLE: &[&str] = &[
+    "id",
+    "title",
+    "domain",
+    "url",
+    "flagged",
+    "persons",
+    "tone",
+    "event_code",
+    "quad_class",
+    "seen_at",
+];
+
+/// `GET /banglinstra/stories/{id}` — the story and its sources, oldest first.
+pub const NEWS_STORY_DETAIL: &[&str] = &["story", "articles"];
+
 /// `GET /unit-organisations/{id}` — the structure's summary plus its forest of roots.
 ///
 /// The schema is an `allOf` composition, so its `required: [nodes]` sits inside the inline half and
@@ -282,6 +323,10 @@ pub const MODELLED: &[(&str, &[&str])] = &[
     ("NodeCommanderSummary", NODE_COMMANDER_SUMMARY),
     ("TniCommanderSummary", TNI_COMMANDER_SUMMARY),
     ("TniCommandPostSummary", TNI_COMMAND_POST_SUMMARY),
+    ("BanglinstraCountry", NEWS_COUNTRY),
+    ("BanglinstraStory", NEWS_STORY),
+    ("BanglinstraArticle", NEWS_ARTICLE),
+    ("BanglinstraStoryDetail", NEWS_STORY_DETAIL),
 ];
 
 #[cfg(test)]

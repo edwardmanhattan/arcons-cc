@@ -54,7 +54,11 @@ with the mode it found and the `chmod` that fixes it. The check happens before t
 a file we may not trust is a file whose contents should not be in memory either.
 
 The wall account needs `read` on **`/system/live-feed`** *and* **`/system/units`** (`GET
-/units/{id}`, `/commander`, `/specifications`). Feed-only draws a map and fails every click.
+/units/{id}`, `/commander`, `/specifications`). Feed-only draws a map and fails every click. The
+self-check reads one row per resource, so the account also needs `read` on each subject it prints
+(`/system/installations`, `/system/tactical-objects`, `/system/tactical-object-placements`,
+`/system/unit-organisations`, `/system/tni-command`, `/system/banglinstra`): a missing one is a
+`FAILED` row that names it, and exit `4`.
 
 ### Rotating it
 

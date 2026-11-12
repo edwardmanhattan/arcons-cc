@@ -69,6 +69,23 @@ The empty answers (`viewpoint`, `installations`, `tni-commander/history`) are re
 worked around. A test that needs a non-empty history cannot get one from this server without appointing
 an officer, and inventing the row would be worse than the gap.
 
+## `rest/` — the newsroom, 2026-11-12 (#135)
+
+The dev deployment **answers** `GET /banglinstra/stories` (200, `read` on `/system/banglinstra`) and
+`GET /banglinstra/stories/{id}` (404 for a story that does not exist) — but its table holds **zero
+stories**, because the intel ingest had put nothing in it. So one file here is a recording and two are
+not, and this table says which:
+
+| file | what it is |
+| --- | --- |
+| `newsroom-stories-empty.json` | **Recorded** 2026-11-12: `GET /banglinstra/stories?scope=international&window=latest&min_confidence=0.5&page_size=25&page_number=1`, complete and unedited. An **empty list** with `total_records: 0`, `total_pages: 0` — a valid answer, and the one that says "no stories", not "the read failed" |
+| `newsroom-stories-page-1.json` | **Derived from the pinned spec** (`docs/spec/minos-api.yaml` @ `5758f37`), not recorded: one page of six, 128 stories in total, with the absences the ticket needs — a story with **no `country`**, and a country with **no `place`**. The deployment had no rows to record, and inventing them from a struct in `src/` is the one thing this directory forbids; the field names and the omissions are the spec's |
+| `newsroom-story-1.json` | **Derived from the pinned spec**, the same way: story 412 with **three articles, oldest first**, and `source_count: 3` equal to their length. The lead article carries `tone: 0.0` (a measured zero, not an absence); the second has no `event_code` or `quad_class`; the third is `flagged: true` and has no `tone` |
+
+**Replace the two derived files with recordings as soon as the deployment holds stories.** They are
+here so the decoder and the request line can be tested today; a recording of real rows is strictly
+better, and the moment one exists these two should be deleted rather than kept alongside it.
+
 ## `scenes/` and `golden/` — recorded 2026-11-07
 
 `scenes/feed.json` is the picture the named scenes load: 40 hulls in the `GET /live-feed/positions`
