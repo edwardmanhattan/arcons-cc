@@ -1,0 +1,5 @@
+[
+  { "t": 0.4, "type": "secondary-click", "x": 146, "y": 27 },
+  { "t": 0.8, "type": "key", "name": "Home", "shift": true },
+  { "t": 1.0, "type": "type", "text": "Straits watch" }
+]

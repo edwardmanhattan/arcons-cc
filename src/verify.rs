@@ -3057,6 +3057,91 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 }
             }
         }
+        // **A workspace that is not on screen can be named** (#154). The capture is the **gesture**:
+        // `fixtures/scripts/workspaces-rename-hidden.json` right-clicks chip 2, selects the field with
+        // Shift+Home and types "Straits watch". So the structure here is the scene's wall (the state
+        // `state_for` builds, before the script runs) and the sheet is the picture's — the split the
+        // script-driven scenes have always had (`workspaces-switch` is the same shape).
+        //
+        // Its own arm rather than the header arm's, because a modal sheet draws its scrim over the chips
+        // and the title: a pixel claim about the raised chip would be a claim about the scrim.
+        "workspaces-rename-hidden" => {
+            let state = scene::state_for(scene);
+            if state.active != 0 || state.workspaces.len() != 3 {
+                failures.push(format!(
+                    "workspaces-rename-hidden: the scene leaves {} workspaces with {} active, and the operator's wall is three with the first on screen",
+                    state.workspaces.len(),
+                    state.active + 1
+                ));
+            }
+            if state.rename().is_some() {
+                failures.push(
+                    "workspaces-rename-hidden: the scene opens the sheet itself, and the sheet must be the script's right-click"
+                        .into(),
+                );
+            }
+            if state.workspaces.iter().any(|workspace| {
+                workspace.name != "Workspace 1"
+                    && workspace.name != "Workspace 2"
+                    && workspace.name != "Workspace 3"
+            }) {
+                failures.push(
+                    "workspaces-rename-hidden: a workspace starts named, and the scene is the wall before anybody typed"
+                        .into(),
+                );
+            } else {
+                lines.push(
+                    "workspaces-rename-hidden: the scene is workspace 1 with three default names, so the sheet in the picture is the script's secondary press"
+                        .to_string(),
+                );
+            }
+            // **The sheet is drawn, in the middle of the wall**: the widest run of the sheet's own fill
+            // across the middle of its height. The picture's panel is *not* looked for, and that is the
+            // point of this scene — the scrim covers the wall, so the only `panel()` ink there is the
+            // sheet's. A band rather than one row, because the sheet's own children break a single line.
+            let middle = image.height as f64 / 2.0;
+            let widest = colour_runs_in_band(
+                image,
+                (middle - 20.0, middle + 20.0),
+                ink(tokens::panel()),
+                4,
+                2,
+            )
+            .into_iter()
+            .map(|(start, end)| end - start)
+            .fold(0.0_f64, f64::max);
+            if widest < f64::from(tokens::SHEET_SIZE.0) * 0.8 {
+                failures.push(format!(
+                    "workspaces-rename-hidden: the widest panel run across the wall's middle is {widest:.0} px, and a sheet is {:.0} — the sheet is not drawn",
+                    tokens::SHEET_SIZE.0
+                ));
+                return Err(failures);
+            }
+            lines.push(format!(
+                "workspaces-rename-hidden: the sheet fills {widest:.0} px across the wall's middle, over the scrim"
+            ));
+            // **And it carries words in two rows**: the sheet's own title, and the name in its field. The
+            // hint below is `ink_dim()`, so it is not counted — two bands of `ink()` is "a sheet with a
+            // name in it", and a blank field is one.
+            let sheet = (
+                (image.width as f64 - f64::from(tokens::SHEET_SIZE.0)) / 2.0,
+                (image.height as f64 - f64::from(tokens::SHEET_SIZE.1)) / 2.0,
+                f64::from(tokens::SHEET_SIZE.0),
+                f64::from(tokens::SHEET_SIZE.1) * 0.7,
+            );
+            let bands = ink_bands(image, sheet, &[ink(tokens::ink())], 24);
+            if bands.len() < 2 {
+                failures.push(format!(
+                    "workspaces-rename-hidden: {} row(s) of the sheet's own ink, and the sheet says its name and shows the one being typed",
+                    bands.len()
+                ));
+            } else {
+                lines.push(format!(
+                    "workspaces-rename-hidden: the sheet draws {} rows of ink — its title, and the name in its field",
+                    bands.len()
+                ));
+            }
+        }
         // **Workspaces** (#138): three chips and a `+`, exactly one chip raised, the title naming the
         // active one, and an empty workspace that says so with no pane chrome and no marker ink.
         //
@@ -3281,6 +3366,10 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                         ));
                     }
                 }
+                // **The sheet is open on a workspace that is not on screen** (#154): the wall stays on
+                // workspace 1, its title stays its name, and the sheet names workspace 2. A right-click on
+                // a chip is the gesture; `begin_workspace_rename` is the function it calls, and the scene
+                // calls the same one.
                 "workspaces-close" => {
                     // **Closing a workspace's last pane** (#141): the workspace is still there, still
                     // named, and empty; the wall landed on the nearest previous workspace; and the

@@ -140,6 +140,7 @@ cargo run -- --scenes            # empty · picture · stale · card-open · pho
                                  # workspaces · workspaces-empty · workspaces-switch
                                  # workspaces-named · workspaces-menu · workspaces-moved
                                  # workspaces-new · workspaces-close
+                                 # workspaces-rename-hidden
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -333,6 +334,17 @@ first leaf, one fewer pane in total, and — in pixels — the focus edge on the
 and none on the left's. The two panes share their top and bottom edges with the picture panel, so the
 honest pixel is a vertical one; a ring drawn on the wrong pane, or a wall that forgot `Layout::focused()`
 and landed on the first leaf, is red.
+
+`workspaces-rename-hidden` is **naming a workspace that is not on screen** (#154), and it is driven by
+the gesture: `fixtures/scripts/workspaces-rename-hidden.json` **right-clicks chip 2**, selects the field
+with Shift+Home and types `Straits watch`. So the split every script-driven scene has holds here — the
+**structure** is the scene's wall (three workspaces, the first active, no sheet open, the default names)
+and the **pixels** are the script's: a sheet of the sheet's own fill across the middle of the wall, over
+its scrim, with two rows of `ink()` — its title and the name being typed. The claim that matters most,
+*which* workspace is being renamed, is `cargo test ui::hidden_rename_tests`: the commit lands on
+`RenameTarget::Workspace(1)`, workspace 1 and the title are untouched, the wall does not switch, and Escape
+leaves the hidden workspace as it was. A capture cannot read a field's words without a text recogniser, and
+a function call in the scene would prove the sheet and not the chip.
 
 `pane-menu` is also the **refused** case (#141): one pane on a wall of three workspaces, two of them
 empty. Its menu has four rows and no `Close pane`, and the assertion says why — `State::can_close` is
