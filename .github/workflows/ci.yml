@@ -102,7 +102,9 @@ jobs:
             -o "$dir/headers.tar.gz" "$base/maplibre-native-headers.tar.gz"
           ls -l "$dir"
 
-      - name: cargo check, map engine
+      # The same check `VERIFY_WITH_MAP=1 scripts/verify.sh` runs, at the same standard: `cargo check`
+      # tolerates warnings, and code nothing compiles is exactly where a warning is rot already (#152).
+      - name: cargo clippy, map engine
         id: map
         run: |
           set -o pipefail
@@ -111,7 +113,7 @@ jobs:
             export MLN_CORE_LIBRARY_HEADERS_PATH="$HOME/.cache/arcons-cc/mln/headers.tar.gz"
             echo "using the cached core at $MLN_CORE_LIBRARY_PATH"
           fi
-          cargo check --features map --all-targets --locked 2>&1 | tee map.log
+          cargo clippy --features map --all-targets --locked -- -D warnings 2>&1 | tee map.log
         shell: bash
         env:
           # The precompiled core, when the platform has one: 378 MB of download beats an hour of C++. On

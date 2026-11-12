@@ -1231,7 +1231,7 @@ impl State {
         for (index, workspace) in self.workspaces.iter().enumerate() {
             let active = index == self.active;
             let focused = workspace.layout.as_ref().map(|layout| layout.focused());
-            for pane in &workspace.panes() {
+            for pane in &workspace.panes {
                 if let Some(map) = &pane.map {
                     map.set_cadence(if !active {
                         crate::map::thread::HIDDEN_INTERVAL
@@ -1253,7 +1253,7 @@ impl State {
     pub fn close_maps(&mut self) {
         #[cfg(feature = "map")]
         for workspace in &mut self.workspaces {
-            for pane in &mut workspace.panes() {
+            for pane in &mut workspace.panes {
                 // Dropping the handle stops the thread and joins it.
                 pane.map = None;
             }
@@ -3756,7 +3756,6 @@ fn drag_map(state: &mut State, id: ViewId, drag: &mut rune::Drag) {
 /// A drag on a tiled pane: a border grip resizes the split, anywhere else pans that pane's map (#69).
 #[cfg(feature = "map")]
 fn drag_pane(state: &mut State, id: ViewId, rect: Rect, drag: &mut rune::Drag, scale: f32) {
-    let viewport = state.pane_viewport();
     match drag.phase {
         rune::Phase::Down => {
             let at = view::viewport_point(rect, (drag.start_x, drag.start_y));
@@ -4636,22 +4635,20 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     }
     // The frame each pane's map last handed over is what that pane's markers project against
     // (`INV-04`). Reading it here, rather than in the view, keeps the view a function of the state.
+    // The panes are walked **mutably and by value**, not indexed out of `panes()`: the handover writes
+    // each pane's own two fields, and a slice cannot be written through. `panes_mut` is the active
+    // workspace's, which is the only one whose maps are at the wall cadence (#138).
     #[cfg(feature = "map")]
-    {
-        for index in 0..state.pane_count() {
-            let rendered = state.panes()[index]
-                .map
-                .as_ref()
-                .and_then(|map| map.rendered());
-            if let Some(frame) = rendered
-                && state.panes()[index].frame != Some(frame)
-            {
-                state.panes()[index].frame = Some(frame);
-            }
-            if state.panes()[index].frame != state.panes()[index].frame_seen {
-                state.panes()[index].frame_seen = state.panes()[index].frame;
-                changed = true;
-            }
+    for pane in state.panes_mut() {
+        let rendered = pane.map.as_ref().and_then(|map| map.rendered());
+        if let Some(frame) = rendered
+            && pane.frame != Some(frame)
+        {
+            pane.frame = Some(frame);
+        }
+        if pane.frame != pane.frame_seen {
+            pane.frame_seen = pane.frame;
+            changed = true;
         }
     }
     if state.layout_dirty {

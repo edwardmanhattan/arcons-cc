@@ -18,7 +18,11 @@ scripts/verify.sh --fast   # the inner loop
 ```
 
 CI runs exactly `scripts/verify.sh` — never its individual parts — so CI and a human cannot
-diverge. **Before reporting done, paste the gate's last lines.** A claim is not evidence. If a check
+diverge. **The two `map` jobs are the exception that proves it, and they are not advisory**: the gate
+cannot build MapLibre's C++, so the `#[cfg(feature = "map")]` code is compiled by CI alone, and a red
+`map (macos-latest)` or `map (windows-latest)` is a red PR. #152 is why: #138 moved `panes` from a field
+to a method, four map-gated sites were left behind, and the map feature did not compile for five merges
+while this gate was green. Locally, `VERIFY_WITH_MAP=1` closes the hole at the gate's own standard. **Before reporting done, paste the gate's last lines.** A claim is not evidence. If a check
 is slow, ticket the fix; never delete or weaken it.
 
 Every ticket carries a `## Proof` line. If it cannot name a command, it is not ready.

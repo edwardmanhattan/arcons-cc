@@ -38,7 +38,7 @@ one `#[cfg(feature = "map")]` `drag_pane` assigning the old one; the default gat
 `map` job was the first thing to notice. So:
 
 ```sh
-VERIFY_WITH_MAP=1 scripts/verify.sh   # the same gate, plus `cargo check --features map`
+VERIFY_WITH_MAP=1 scripts/verify.sh   # the same gate, plus the map feature at clippy -D warnings
 ```
 
 Run it before pushing anything that touches code behind `cfg(feature = "map")`. CI's `map` jobs run the same

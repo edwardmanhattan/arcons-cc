@@ -61,13 +61,20 @@ if have_crate; then
   step "cargo fmt --check"           cargo fmt --all -- --check
   step "cargo clippy -D warnings"    cargo clippy --all-targets -- -D warnings
   step "cargo test"                  cargo test --all-targets
-  # **The gate does not compile the map feature**, and cannot: that is MapLibre's C++ and the gate may need
+  # **The gate does not build the map feature**, and cannot: that is MapLibre's C++ and the gate may need
   # no compiler, no network and no GPU. The cost of the hole is real — `#[cfg(feature = "map")]` code can rot
-  # without a red line here (#101: a rename of a `State` field left one `drag_pane` assigning the old one, and
-  # the first thing to notice was CI's macOS map job) — so it is named rather than silent, and `VERIFY_WITH_MAP=1`
-  # closes it locally for a change that touches those lines. CI's `map` jobs run the same command.
+  # without a red line here (#101: a rename of a `State` field left one `drag_pane` assigning the old one).
+  # #152 is the second time it happened and the worse one: #138 moved `panes` from a field to a method, four
+  # sites under `#[cfg(feature = "map")]` were left behind, and the map feature did not compile for five
+  # merges while this gate was green.
+  #
+  # So the hole is **named**, it is closable locally (`VERIFY_WITH_MAP=1`, cheap when the engine's core is
+  # already built), and the local closable check is **the whole standard**, not a weaker one: `cargo check`
+  # tolerates warnings, and a warning in code nothing compiles is rot that has already started. CI's `map`
+  # jobs run the same command on the two platforms that have a precompiled core.
   if [ "${VERIFY_WITH_MAP:-0}" = "1" ]; then
-    step "cargo check --features map" cargo check --features map
+    step "map feature, clippy -D warnings" \
+      cargo clippy --features map --all-targets -- -D warnings
   else
     skip "map feature compiles" "VERIFY_WITH_MAP=1 to check it here; CI's map jobs do"
   fi
