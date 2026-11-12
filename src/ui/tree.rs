@@ -581,6 +581,8 @@ fn set_camera(state: &mut State, pane: ViewId, camera: TreeCamera) {
     if let Some(pane) = state.pane_mut(pane) {
         pane.tree = Some(camera);
     }
+    // A tree pane's own camera is part of the arrangement a wall remembers (#153).
+    state.arranged();
     state.layout_dirty = true;
 }
 

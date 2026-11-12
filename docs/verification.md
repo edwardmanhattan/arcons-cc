@@ -430,6 +430,21 @@ The two checks do different jobs, and neither substitutes for the other:
   `ui::tokens` and geometry from `map::geometry::project`, so it cannot outlive the palette or the
   layout it describes.
 
+### A capture is a wall with no memory
+
+Three files can change what a wall draws before its first frame: `config.toml` (where the sea is),
+`settings.toml` (the pane gap) and `layout.toml` (the workspaces, panes and cameras, #153). **A capture
+reads none of them.** `State::with_saved_settings` and `State::with_saved_layout` both return early on
+`rune::is_headless()`, and `State::arranged` records nothing for a headless state, so a scene neither
+depends on the machine it was rendered on nor writes to it — the same rule as the one clock, for the same
+reason: a golden that changed because somebody's wall was arranged differently is not a picture of the
+software.
+
+`layout.toml` is also why the golden list has no "restored wall" scene: the arrangement is a **file**, and a
+scene that read one would be a test of this machine's `$XDG_CONFIG_HOME`. What the file does is tested where
+files are tested — `cargo test config::layout`, `cargo test ui::saved` — with a temp directory and no
+window.
+
 ### The clock a capture runs on
 
 A scene has exactly one clock: `ui::State::now()`, which is `origin + logical`, and `logical` comes from

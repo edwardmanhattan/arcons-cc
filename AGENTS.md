@@ -69,6 +69,8 @@ cargo run -- --snap out/frame.png   # Rune's headless snapshot; #9 wraps this in
 - **Never edit `docs/spec/`.** Re-vendor it with a new commit hash and say what changed.
 - **No secret, host, username or token in the tree, in a log line, or in a panic** (`INV-08`).
   Configuration is read from the environment or `$XDG_CONFIG_HOME/arcons-cc/`, never from source.
+  **`layout.toml` holds the arrangement and nothing else** — workspaces, panes, cameras, names, filters —
+  and `deny_unknown_fields` is what keeps it that way. A capture never reads or writes it.
 - **No dependency without an entry in `THIRD-PARTY-NOTICES.md`.** The app is proprietary; there is
   no root `LICENSE` on purpose — do not add one (`README.md` says so too).
 - **Rune is pinned by rev.** Bump it deliberately, in a commit that names the old and new revs.
@@ -87,7 +89,7 @@ Comment on the issue rather than choosing silently, especially for: the wall's c
 ```
 src/main.rs      flags, startup, exit codes
 src/config.rs    the command line, the resolved Config, Secret (redacting by construction)
-src/config/      file.rs (config.toml) · credential.rs (mode 0600) · settings.rs (settings.toml, written by the display) · check.rs (--self-check, 0–6)
+src/config/      file.rs (config.toml) · credential.rs (mode 0600) · settings.rs (settings.toml, written by the display) · layout.rs (layout.toml: the wall as the operator arranged it) · check.rs (--self-check, 0–6)
 src/ui/          the view, view.rs (the pane tree), tree.rs (the chain of command), markers.rs, objects.rs (the operational layer), installations.rs (the places), filter.rs (per-pane visibility and the panel's vocabulary), unitcard.rs, tokens.rs (the only file that names a colour or a size)
 src/units/       the vocabulary and the view model: Unit, UnitView, Glyph, Picture, motion, card
 src/data.rs      the Minos REST client            (#3)

@@ -376,6 +376,76 @@ enum Node {
     },
 }
 
+/// **A layout's shape, without its ratios' arithmetic** — what a saved file describes (#153).
+///
+/// It exists so that `ui::saved` can convert a layout to a file and back **without** the layout learning
+/// what TOML is, and without `config` learning what a `Layout` is: the shape is the smallest thing both
+/// can talk about.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Shape {
+    Leaf(ViewId),
+    Split {
+        dir: Dir,
+        ratio: f32,
+        a: Box<Shape>,
+        b: Box<Shape>,
+    },
+}
+
+impl Layout {
+    /// The tiling, as a shape a file can describe.
+    pub fn shape(&self) -> Option<Shape> {
+        Some(shape_of(&self.root))
+    }
+
+    /// **A layout from a shape** (#153): the reverse, and `None` for a shape that names one pane twice —
+    /// a tiling is a partition of the panes it has, and a file that says otherwise describes no wall.
+    pub fn from_shape(shape: Shape) -> Option<Layout> {
+        let mut leaves = Vec::new();
+        let root = node_of(shape, &mut leaves)?;
+        let count = leaves.len();
+        leaves.sort_unstable();
+        leaves.dedup();
+        if leaves.len() != count || count == 0 {
+            return None;
+        }
+        let mut ids = Vec::new();
+        collect_leaves(&root, &mut ids);
+        Some(Layout {
+            root,
+            focused: *ids.first()?,
+            maximised: None,
+        })
+    }
+}
+
+fn shape_of(node: &Node) -> Shape {
+    match node {
+        Node::Leaf(id) => Shape::Leaf(*id),
+        Node::Split { dir, ratio, a, b } => Shape::Split {
+            dir: *dir,
+            ratio: *ratio,
+            a: Box::new(shape_of(a)),
+            b: Box::new(shape_of(b)),
+        },
+    }
+}
+
+fn node_of(shape: Shape, leaves: &mut Vec<ViewId>) -> Option<Node> {
+    match shape {
+        Shape::Leaf(id) => {
+            leaves.push(id);
+            Some(Node::Leaf(id))
+        }
+        Shape::Split { dir, ratio, a, b } => Some(Node::Split {
+            dir,
+            ratio,
+            a: Box::new(node_of(*a, leaves)?),
+            b: Box::new(node_of(*b, leaves)?),
+        }),
+    }
+}
+
 /// The panes, how they tile, and which one the operator is working in.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layout {

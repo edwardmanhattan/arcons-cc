@@ -17,6 +17,7 @@ use crate::ui::tokens;
 pub mod check;
 pub mod credential;
 pub mod file;
+pub mod layout;
 pub mod settings;
 
 pub const USAGE: &str = "\
@@ -313,6 +314,53 @@ pub fn config_dir() -> PathBuf {
 /// The non-secret configuration: base URL, channel, window mode. Written by #8.
 pub fn config_file() -> PathBuf {
     config_dir().join("config.toml")
+}
+
+/// **The wall as the operator arranged it** (#153): workspaces, panes, cameras, names.
+pub fn layout_file() -> PathBuf {
+    layout::layout_file()
+}
+
+/// Write a file **atomically and privately**: a temp file in the same directory, mode 0600, a rename.
+///
+/// The rename is what makes a wall that loses power come back with the previous file instead of half a
+/// new one, and the mode is what stops a habit: a wall's config directory is where the credential lives,
+/// and a file everyone can read there is a habit that will write a secret into one eventually. Both
+/// writers in this module need exactly this, so it is one function rather than two copies that can drift.
+pub fn write_atomically(path: &Path, text: &str) -> Result<(), String> {
+    use std::io::Write;
+    let directory = path
+        .parent()
+        .ok_or_else(|| format!("{} has no directory", path.display()))?;
+    std::fs::create_dir_all(directory)
+        .map_err(|error| format!("{}: {error}", directory.display()))?;
+    // A temp file **in the same directory**, so the rename is a rename and not a copy across
+    // filesystems: `layout.toml.tmp` next to `layout.toml` is atomic; `/tmp/...` is not.
+    let temp = path.with_extension("toml.tmp");
+    let mut file =
+        std::fs::File::create(&temp).map_err(|error| format!("{}: {error}", temp.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // 0600 **before** the content is in it: a window in which the file exists, readable and empty, is
+        // shorter than one where it is readable and full, but it is free to close.
+        if let Err(error) = file.set_permissions(std::fs::Permissions::from_mode(0o600)) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(format!("{}: {error}", temp.display()));
+        }
+    }
+    if let Err(error) = file
+        .write_all(text.as_bytes())
+        .and_then(|()| file.sync_all())
+    {
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!("{}: {error}", temp.display()));
+    }
+    drop(file);
+    std::fs::rename(&temp, path).map_err(|error| {
+        let _ = std::fs::remove_file(&temp);
+        format!("{}: {error}", path.display())
+    })
 }
 
 /// What the display itself remembers: the preferences someone changed on the wall (#82).

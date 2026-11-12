@@ -250,6 +250,9 @@ pub(crate) fn toggle_in(state: &mut State, pane: ViewId, target: Target) -> bool
         return false;
     };
     pane.view.filter.toggle(target);
+    // **A filter is a question the pane asked** (#153): it is part of the arrangement, so a pane that
+    // hid the bases comes back hiding them. The data stays shared; the exclusions are the pane's.
+    state.arranged();
     state.layout_dirty = true;
     true
 }

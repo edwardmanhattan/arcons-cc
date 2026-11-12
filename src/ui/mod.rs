@@ -24,6 +24,7 @@ pub mod installations;
 pub mod markers;
 pub mod newsroom;
 pub mod objects;
+pub mod saved;
 pub mod symbol;
 pub mod tokens;
 pub mod tree;
@@ -412,6 +413,10 @@ pub struct State {
     /// What the display remembers between runs: the settings file (#82). A scene gets the defaults, so a
     /// capture never depends on the machine it was rendered on.
     pub settings: crate::config::settings::Settings,
+    /// **When the arrangement last changed, on the frame clock** (#153): the debounce before the wall
+    /// writes `layout.toml`. `None` is "nothing to write", and a scene never sets it — a capture that wrote
+    /// to its machine's config directory would make the next capture's goldens depend on this one.
+    pub arranged_at: Option<f64>,
     /// Device pixels per point, as the last layout pass reported it. The one number a *toggle* needs and
     /// cannot get from a layout callback: restoring a maximised pane resizes its map thread, and resizing
     /// it to the wrong scale is the blurred pane #85 exists to avoid.
@@ -563,6 +568,7 @@ impl Default for State {
             active: 0,
             next_pane: 2,
             settings: crate::config::settings::Settings::default(),
+            arranged_at: None,
 
             scale: 1.0,
 
@@ -726,6 +732,7 @@ impl State {
             // Force the cadence pass on the next frame: the pane count may not have changed.
             self.cadenced = None;
         }
+        self.arranged();
         self.layout_dirty = true;
         true
     }
@@ -911,7 +918,11 @@ impl State {
     }
 
     pub fn focus_pane(&mut self, id: ViewId) -> bool {
-        self.layout_mut().is_some_and(|layout| layout.focus(id))
+        let focused = self.layout_mut().is_some_and(|layout| layout.focus(id));
+        if focused {
+            self.arranged();
+        }
+        focused
     }
 
     pub fn pane_ids(&self) -> Vec<ViewId> {
@@ -931,8 +942,13 @@ impl State {
     }
 
     pub fn set_ratio(&mut self, border: &view::Border, ratio: f32) -> bool {
-        self.layout_mut()
-            .is_some_and(|layout| layout.set_ratio(border, ratio))
+        let set = self
+            .layout_mut()
+            .is_some_and(|layout| layout.set_ratio(border, ratio));
+        if set {
+            self.arranged();
+        }
+        set
     }
 
     pub fn border_at(&self, at: (f32, f32), grip: f32) -> Option<view::Border> {
@@ -1048,6 +1064,7 @@ impl State {
         {
             self.switch_to(target);
         }
+        self.arranged();
         self.layout_dirty = true;
         true
     }
@@ -1066,12 +1083,14 @@ impl State {
     pub fn set_camera(&mut self, camera: Camera) {
         if let Some(pane) = self.focused_pane_mut() {
             pane.camera = camera;
+            self.arranged();
         }
     }
 
     pub fn set_camera_of(&mut self, id: ViewId, camera: Camera) {
         if let Some(pane) = self.pane_mut(id) {
             pane.camera = camera;
+            self.arranged();
         }
     }
 
@@ -1199,6 +1218,7 @@ impl State {
                 ));
             }
         }
+        self.arranged();
         self.layout_dirty = true;
         Some(id)
     }
@@ -3324,6 +3344,7 @@ pub(crate) fn commit_rename(state: &mut State) {
             }
         }
     }
+    state.arranged();
     state.layout_dirty = true;
 }
 
@@ -3543,6 +3564,7 @@ pub fn new_workspace_from_pane(state: &mut State, pane: ViewId) -> Option<ViewId
     }
     state.focus_pane(id);
     state.end();
+    state.arranged();
     state.layout_dirty = true;
     Some(id)
 }
@@ -3613,6 +3635,7 @@ pub fn move_pane_to(state: &mut State, pane: ViewId, target: usize) -> bool {
     state.switch_to(target);
     state.focus_pane(pane);
     state.end();
+    state.arranged();
     state.layout_dirty = true;
     true
 }
@@ -4206,11 +4229,26 @@ pub(crate) fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool
         // dropped on purpose.
         crate::data::Reply::Stories(query, result) => {
             let mut applied = 0;
+            let mut relocated = Vec::new();
             for pane in state.panes_mut() {
                 if let Some(view) = pane.news.as_mut()
                     && view.apply(*query, result)
                 {
                     applied += 1;
+                    // **A page the deployment no longer holds** (#153): a wall restored on page 4 of a feed
+                    // that now has two opens on the last page that exists and asks for it, rather than
+                    // sitting on a page nobody wrote.
+                    if let Some(pagination) = view.pagination
+                        && view.page > pagination.total_pages
+                        && pagination.total_pages >= 1
+                    {
+                        relocated.push(view.ask_page(pagination.total_pages));
+                    }
+                }
+            }
+            for query in relocated {
+                if let Some(backend) = &state.backend {
+                    backend.request(crate::data::Command::Stories(query));
                 }
             }
             match result {
@@ -4577,6 +4615,9 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
             "terminating on SIGTERM/SIGINT after {} ms",
             crate::platform::since_start()
         );
+        // **The arrangement is written before the wall leaves** (#153): a `SIGTERM` a second after a split
+        // must not lose the split, and this is the last moment the state is whole.
+        state.flush_layout();
         // **Every pane's map thread is joined here, not by the drop of a `State` the runtime owns.**
         // The engine asserts in `~RunLoop` when a process with a live map walks out, and with N panes
         // there are N contexts to close (#71).
@@ -4585,9 +4626,18 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
         return false;
     }
 
+    // **The arrangement is written once it holds still** (#153): `arranged()` records the frame a change
+    // happened on, and the write itself goes to a thread — a camera gesture is a hundred changes a second
+    // and a `fsync` on the drawing thread would be a stutter on every one of them.
+    if state.save_due() {
+        state.save_layout();
+    }
     let mut changed = drain_socket(state);
     changed |= drain_card_reads(state);
     changed |= tick_card_age(state);
+    // **A newsroom pane restored from the file has asked for nothing yet** (#153): one read, on this
+    // frame, so the pane that comes back on page 2 draws its rows rather than "reading the feed…" forever.
+    changed |= crate::ui::saved::ask_restored_feeds(state);
 
     // "Start to first map frame" is a number in the log rather than a claim in a ticket. Without the
     // engine there is no map frame, so the first view pass is what gets timed.
@@ -4932,7 +4982,7 @@ pub fn run(window: config::Window, passthrough: Vec<String>) -> ExitCode {
         ..AppSpec::new(
             TITLE,
             window.size,
-            || State::default().with_saved_settings(),
+            || State::default().with_saved_settings().with_saved_layout(),
             view,
         )
     };

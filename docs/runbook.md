@@ -86,6 +86,7 @@ arcons-cc 0.1.0 self-check
   config      ok  /home/wall/.config/arcons-cc/config.toml (file · minos from env)
   credentials ok  /home/wall/.config/arcons-cc/credentials.toml mode 0600 · refresh token (from file)
   settings    ok  no /home/wall/.config/arcons-cc/settings.toml, using the defaults (pane gap 0 pt)
+  layout      ok  no /home/wall/.config/arcons-cc/layout.toml, opening the default wall (0 workspace(s) remembered)
   login       ok  refresh token accepted, access token valid for 900 s
   picture     ok  127 hulls, 126 never reported
   socket      ok  subscribed to live-feed
@@ -96,6 +97,12 @@ ok
 `settings` is the display's own file, not the configuration: the wall writes it when someone changes a
 preference on screen (`settings.toml`, mode 0600, beside `config.toml`). A wall that has never had one is
 healthy — the line says which file it looked for and what it used instead.
+
+`layout` is the same kind of line about a bigger file (#153): the workspaces, the panes, their cameras and
+their names, written a second and a half after the operator stops arranging (`layout.toml`, mode 0600, and
+also on `SIGTERM`). A wall with no file opens the default wall; a corrupt one says so and does the same.
+Because it is written by the wall, **a service unit that runs the display as one user and restarts it as
+another** will not find the previous arrangement — that is a runbook fact, not a bug.
 
 It never prints a token, a password, or a URL containing either. The token line states a *lifetime*
 and nothing else; the credential line states the file's *mode* and nothing else.

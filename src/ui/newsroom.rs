@@ -739,6 +739,9 @@ fn press_scope(state: &mut State, pane: ViewId, scope: NewsScope) {
         .and_then(|view| view.press_scope(scope));
     if let Some(query) = query {
         ask(state, query);
+        // **The tab and the page are the pane's place in the feed** (#153): they are the part of a
+        // newsroom pane a wall remembers, because they are where the operator was reading.
+        state.arranged();
     }
     state.layout_dirty = true;
 }
@@ -753,6 +756,7 @@ fn press_page(state: &mut State, pane: ViewId, step: i32) {
         .and_then(|view| view.press_page(step));
     if let Some(query) = query {
         ask(state, query);
+        state.arranged();
     }
     state.layout_dirty = true;
 }
