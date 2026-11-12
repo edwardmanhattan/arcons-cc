@@ -4503,7 +4503,10 @@ pub fn golden_bounds(scene: &str) -> Bounds {
         | "newsroom-page-2"
         | "newsroom-scopes"
         | "newsroom-story"
-        | "newsroom-story-back" => Bounds::new(2, 200, 1_200),
+        | "newsroom-story-back"
+        // **A moved feed is the same nine rows of 12 pt text** (#140): CI's lavapipe measured 791
+        // one-step pixels there, the newsroom scenes' class of rounding.
+        | "workspaces-moved" => Bounds::new(2, 200, 1_200),
         _ => DEFAULT_BOUNDS,
     }
 }
