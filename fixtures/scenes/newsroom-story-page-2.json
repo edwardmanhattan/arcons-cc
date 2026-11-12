@@ -1,0 +1,46 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": {
+    "story": {
+      "id": 1200,
+      "title": "Coast guard delivers relief after the Cianjur earthquake",
+      "source_count": 2,
+      "source": "en.antaranews.com",
+      "url": "https://en.antaranews.com/2026/11/story-1200",
+      "first_seen": "2026-11-10T18:05:00Z",
+      "last_seen": "2026-11-10T18:17:00Z",
+      "country": {
+        "code": "MY",
+        "name": "Malaysia",
+        "confidence": 0.76,
+        "place": "Kuala Lumpur"
+      }
+    },
+    "articles": [
+      {
+        "id": 3200,
+        "title": "Coast guard delivers relief after the Cianjur earthquake",
+        "domain": "en.antaranews.com",
+        "url": "https://en.antaranews.com/2026/11/story-1200",
+        "flagged": false,
+        "persons": [
+          "Bayu Setiawan"
+        ],
+        "tone": 1.8,
+        "seen_at": "2026-11-10T18:05:00Z"
+      },
+      {
+        "id": 3207,
+        "title": "Relief deliveries reach the last village on the Cianjur road",
+        "domain": "thejakartapost.com",
+        "url": "https://www.thejakartapost.com/news/story-3207",
+        "flagged": false,
+        "tone": 2.4,
+        "event_code": "072",
+        "quad_class": 1,
+        "seen_at": "2026-11-10T18:17:00Z"
+      }
+    ]
+  }
+}

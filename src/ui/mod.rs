@@ -3391,6 +3391,41 @@ pub(crate) fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool
             state.tni_command = Some((**post).clone());
             changed = true;
         }
+        // **A story's provenance** (#137): applied only to the panes still on that story. A slow story
+        // that lands after `back`, or after another row was pressed, answers a question nobody is
+        // asking any more — the detail is the pane's state, so it is compared, not merely delivered.
+        crate::data::Reply::Story(id, result) => {
+            let mut applied = 0;
+            for pane in &mut state.panes {
+                if let Some(view) = pane.news.as_mut()
+                    && view.apply_detail(*id, result)
+                {
+                    applied += 1;
+                }
+            }
+            match result {
+                Ok(detail) if applied > 0 => tracing::info!(
+                    story = id,
+                    articles = detail.articles.len(),
+                    source_count = detail.story.source_count,
+                    panes = applied,
+                    "a story's provenance was read"
+                ),
+                Err(error) if applied > 0 => tracing::warn!(
+                    story = id,
+                    error = %error,
+                    panes = applied,
+                    "the story did not read: the pane shows what it can and offers retry"
+                ),
+                _ => tracing::debug!(
+                    story = id,
+                    "a story arrived after the operator left it: discarded"
+                ),
+            }
+            if applied > 0 {
+                changed = true;
+            }
+        }
         // **The newsroom** (#136). A page is applied only to the panes waiting for exactly that query:
         // a reply is the answer to a question, and a question the operator has already changed is not
         // one to answer. `panes` in the log line is how many were still waiting — zero is a late page,
@@ -3542,7 +3577,9 @@ fn tick_card_age(state: &mut State) -> bool {
 /// 1. whatever `interaction` holds — a rename, a lift, the settings sheet, a menu, a filter panel;
 /// 2. a maximised pane, which is a **layout** fact rather than a state of being held (a pane drawn over the
 ///    tiling is not a gesture): Escape is the way back the close plate also offers;
-/// 3. the focused pane's card, which is the pane's own state (#99) and so goes last and only there.
+/// 3. the focused pane's own selection — **the newsroom's open story** (#137) and the map's card (#99).
+///    Both are the pane's state, so they go last and only in the pane that has one; a pane is a feed or a
+///    map, so the two are never both open.
 fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool {
     if event.key != rune::Key::Escape {
         return false;
@@ -3556,6 +3593,16 @@ fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool
         return true;
     }
     let focused = state.layout.focused();
+    // The newsroom's detail first: it is a mode of the pane, and `back` is the same function the word
+    // calls, so Escape and the button cannot disagree about what closing a story does.
+    if state
+        .pane_mut(focused)
+        .and_then(|pane| pane.news.as_mut())
+        .is_some_and(|view| view.back())
+    {
+        state.layout_dirty = true;
+        return true;
+    }
     if state.selected_in(focused).is_none() && state.installation_in(focused).is_none() {
         return false;
     }
@@ -4297,6 +4344,57 @@ mod tests {
             before,
             "a stale reply leaves the pane exactly as it was: the tab, the state and the ask are the \
              operator's"
+        );
+    }
+
+    /// **Escape closes the newsroom's story before anything wall-wide** (#137): the detail is the
+    /// pane's own state, on the same rung as the map's card, and a second Escape with nothing open is
+    /// not consumed.
+    #[test]
+    fn escape_closes_the_newsroom_story_and_nothing_else() {
+        let mut state = State::default();
+        open_newsroom_pane(&mut state);
+        let pane = state.layout.focused();
+        let escape = rune::KeyEvent {
+            key: rune::Key::Escape,
+            mods: rune::Mods::default(),
+        };
+        let mut tx = rune::Tx::default();
+        assert!(
+            !on_key(&mut state, &escape, &mut tx),
+            "Escape with no story open is not consumed"
+        );
+
+        // A story open, through the view's own two steps: press the row, apply the read.
+        let id = 1103;
+        assert!(
+            state
+                .pane_mut(pane)
+                .and_then(|pane| pane.news.as_mut())
+                .is_some_and(|view| view.select(id))
+        );
+        let mut tx = rune::Tx::default();
+        assert!(
+            on_key(&mut state, &escape, &mut tx),
+            "Escape closes the open story"
+        );
+        let view = state
+            .pane(pane)
+            .and_then(|pane| pane.news.as_ref())
+            .expect("the feed pane");
+        assert_eq!(view.selected, None, "the list is back");
+        assert_eq!(view.detail, None);
+
+        // And it did not touch the list's own question: the tab is still the operator's.
+        assert_eq!(
+            view.scope,
+            crate::data::types::NewsScope::International,
+            "closing a story is not a tab press"
+        );
+        let mut tx = rune::Tx::default();
+        assert!(
+            !on_key(&mut state, &escape, &mut tx),
+            "with the list back, Escape is nothing again"
         );
     }
 

@@ -2756,7 +2756,11 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
         // this is what says so). The pane rectangles come from `Layout::rects` against the panel this
         // capture actually has, exactly as `objects` does, so the view and this check cannot disagree
         // about where a pane is.
-        "newsroom" | "newsroom-scopes" | "newsroom-page-2" => {
+        "newsroom"
+        | "newsroom-scopes"
+        | "newsroom-page-2"
+        | "newsroom-story"
+        | "newsroom-story-back" => {
             let Some((ox, oy, pw, ph)) = image.find_panel_rect(ink(tokens::panel())) else {
                 failures.push(format!("{scene}: no picture panel on screen"));
                 return Err(failures);
@@ -2794,7 +2798,14 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                     24,
                     tokens::GAP as u32 + 2,
                 );
-                if words != 3 {
+                // **A story open is a surface over the list** (#137), and the strip's band is the
+                // detail's own top row when it is up — `back` and the title, not three tabs — so the word
+                // count only means something on the list. The footer and the article lines below are
+                // what tell the two apart: the list has a footer, the surface covers it.
+                // `newsroom-story-back` is the other half: its script clicks `back`, so its capture must
+                // have the list's three tabs again even though the scene left the story open.
+                let detail_open = scene == "newsroom-story";
+                if !detail_open && words != 3 {
                     failures.push(format!(
                         "{scene}: pane {id} has {words} words on its tab strip, not three — the scope \
                          tabs are International, Regional and National, and a wall-wide or missing tab \
@@ -2816,10 +2827,22 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                     &[ink(tokens::ink())],
                     24,
                 );
-                if rows.len() < 3 {
+                if detail_open && rows.len() < 6 {
+                    // The story's title, then a domain line and a headline per article.
+                    failures.push(format!(
+                        "{scene}: pane {id} draws {} lines of primary ink below the strip — three \
+                         articles are a domain line and a headline each, plus the story's title",
+                        rows.len()
+                    ));
+                } else if !detail_open && rows.len() < 3 {
                     failures.push(format!(
                         "{scene}: pane {id} draws {} story titles, and three fit — the rows come from \
                          the wire, not from a list written in the view",
+                        rows.len()
+                    ));
+                } else if detail_open {
+                    lines.push(format!(
+                        "{scene}: pane {id} draws {} lines of the story and its articles",
                         rows.len()
                     ));
                 } else {
@@ -2841,12 +2864,17 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                     &ink_colours,
                     24,
                 );
-                if footer.is_empty() {
+                if detail_open && !footer.is_empty() {
+                    failures.push(format!(
+                        "{scene}: pane {id} draws its page footer under the story — the detail is a \
+                         surface over the whole pane, footer included"
+                    ));
+                } else if !detail_open && footer.is_empty() {
                     failures.push(format!(
                         "{scene}: pane {id} has no footer — the page number is how a reader knows \
                          there is more, and it is drawn whenever the server sent metadata"
                     ));
-                } else {
+                } else if !detail_open {
                     lines.push(format!("{scene}: pane {id} draws its page footer"));
                 }
                 // **No marker ink in a feed**: `INV-04` is vacuous in a pane with no frame, and this is
@@ -3054,7 +3082,11 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
         // **The newsroom** (#136): a pane holds its own tab, page and rows, the rows are the wire's,
         // and absence draws a dash rather than a code or a zero. Read from the same `State` the capture
         // draws, because a text recogniser is not what this gate is.
-        "newsroom" | "newsroom-scopes" | "newsroom-page-2" => {
+        "newsroom"
+        | "newsroom-scopes"
+        | "newsroom-page-2"
+        | "newsroom-story"
+        | "newsroom-story-back" => {
             let rects = crate::ui::view::panes_on(
                 &state.layout,
                 state.pane_viewport(),
@@ -3302,6 +3334,157 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                         failures.push(
                             "newsroom-scopes: the two panes do not hold their own pages — a shared read \
                              would give both the same footer"
+                                .into(),
+                        );
+                    }
+                }
+                // **A story's provenance** (#137): three outlets, oldest first, and the absences the
+                // wire can carry drawn as they are — a flagged source in words, a country that is not
+                // there as a dash, and a measured tone of zero still drawn.
+                "newsroom-story" => {
+                    let Some((id, view)) = feeds.first() else {
+                        failures.push("newsroom-story: no feed pane".into());
+                        return Err(failures);
+                    };
+                    if view.selected != Some(crate::scene::NEWSROOM_STORY) {
+                        failures.push(format!(
+                            "newsroom-story: the pane has {:?} selected, and the scene presses story {}",
+                            view.selected,
+                            crate::scene::NEWSROOM_STORY
+                        ));
+                    }
+                    match view.detail.as_ref() {
+                        Some(crate::ui::newsroom::Detail::Ready(detail)) => {
+                            let story = &detail.story;
+                            if detail.articles.len() != 3 || story.source_count != 3 {
+                                failures.push(format!(
+                                    "newsroom-story: {} articles and a `source_count` of {} — the \
+                                     recorded story carried three documents, and the header is the \
+                                     wire's number",
+                                    detail.articles.len(),
+                                    story.source_count
+                                ));
+                            } else {
+                                lines.push(format!(
+                                    "newsroom-story: pane {id} draws 3 documents and `3 sources`"
+                                ));
+                            }
+                            let seen: Vec<chrono::DateTime<chrono::Utc>> =
+                                detail.articles.iter().map(|article| article.seen_at).collect();
+                            if !seen.windows(2).all(|pair| pair[0] <= pair[1]) {
+                                failures.push(
+                                    "newsroom-story: the articles are not oldest first — the wire's \
+                                     order is provenance, who had it first"
+                                        .into(),
+                                );
+                            } else {
+                                lines.push(
+                                    "newsroom-story: the articles are oldest first".to_string(),
+                                );
+                            }
+                            let domains: Vec<&str> = detail
+                                .articles
+                                .iter()
+                                .map(|article| article.domain.as_str())
+                                .collect();
+                            if domains != ["rappler.com", "en.antaranews.com", "malaysiasun.com"] {
+                                failures.push(format!(
+                                    "newsroom-story: the domains are {domains:?}, and the fixture's \
+                                     provenance order is rappler, antaranews, malaysiasun"
+                                ));
+                            }
+                            match detail.articles.iter().find(|article| article.flagged) {
+                                Some(flagged)
+                                    if crate::ui::newsroom::article_facts(flagged)
+                                        .contains("unclassified source") =>
+                                {
+                                    lines.push(format!(
+                                        "newsroom-story: the flagged source draws the words {:?}",
+                                        crate::ui::newsroom::article_facts(flagged)
+                                    ));
+                                }
+                                Some(flagged) => failures.push(format!(
+                                    "newsroom-story: a flagged source draws {:?} — an unclassified \
+                                     domain is a question for an operator, and it is a word",
+                                    crate::ui::newsroom::article_facts(flagged)
+                                )),
+                                None => failures.push(
+                                    "newsroom-story: the fixture has no flagged article, so the words \
+                                     are not covered by this capture"
+                                        .into(),
+                                ),
+                            }
+                            if story.country.is_some() {
+                                failures.push(
+                                    "newsroom-story: the fixture's story has a country, so the dash \
+                                     the ticket asks for is not covered"
+                                        .into(),
+                                );
+                            } else if crate::ui::newsroom::country_line(story) == "—" {
+                                lines.push(
+                                    "newsroom-story: a story with no country draws \"—\""
+                                        .to_string(),
+                                );
+                            } else {
+                                failures.push(format!(
+                                    "newsroom-story: a story with no country draws {:?}",
+                                    crate::ui::newsroom::country_line(story)
+                                ));
+                            }
+                            if detail.articles.iter().any(|article| article.tone == Some(0.0)) {
+                                lines.push(
+                                    "newsroom-story: a measured tone of 0.0 is still drawn".to_string(),
+                                );
+                            } else {
+                                failures.push(
+                                    "newsroom-story: no article has a measured tone of 0.0, so the \
+                                     absence-is-not-zero case is not covered here"
+                                        .into(),
+                                );
+                            }
+                        }
+                        other => failures.push(format!(
+                            "newsroom-story: the pane's detail is {other:?} — the reply never landed"
+                        )),
+                    }
+                }
+                "newsroom-story-back" => {
+                    // The scene leaves **page 2 open on a story**; the script clicks `back`. This half of
+                    // the claim is the state the capture started from, and the pixel arm is the list the
+                    // capture ends with — together they say the word reached the handler and that `back`
+                    // returned to the page the operator left.
+                    let Some((id, view)) = feeds.first() else {
+                        failures.push("newsroom-story-back: no feed pane".into());
+                        return Err(failures);
+                    };
+                    if view.page != 2
+                        || view
+                            .pagination
+                            .is_none_or(|pagination| pagination.current_page != 2)
+                    {
+                        failures.push(format!(
+                            "newsroom-story-back: the pane is on page {} and the scene pressed Next \
+                             once — `back` must not return to page 1",
+                            view.page
+                        ));
+                    }
+                    if view.selected != Some(crate::scene::NEWSROOM_STORY_PAGE_2) {
+                        failures.push(format!(
+                            "newsroom-story-back: the pane has {:?} selected, and the scene presses \
+                             story {} on page 2",
+                            view.selected,
+                            crate::scene::NEWSROOM_STORY_PAGE_2
+                        ));
+                    }
+                    if matches!(view.detail, Some(crate::ui::newsroom::Detail::Ready(_))) {
+                        lines.push(format!(
+                            "newsroom-story-back: pane {id} opens page 2 on a story, which the \
+                             script's `back` must close"
+                        ));
+                    } else {
+                        failures.push(
+                            "newsroom-story-back: the story's detail never landed, so the click has \
+                             nothing to close"
                                 .into(),
                         );
                     }
@@ -3670,11 +3853,16 @@ pub fn golden_bounds(scene: &str) -> Bounds {
         // text's own factor, and both CI runs now measure **1/255**, so the 8/255 exception this
         // scene used to need is gone.
         "pane-tree" | "pane-tree-pan" => Bounds::new(2, 200, 450),
-        // **The newsroom's rows** (#136): 12 pt text at 1:1, nine visible rows and three tabs. CI's
+        // **The newsroom's rows** (#136, #137): 12 pt text at 1:1, nine visible rows, three tabs. CI's
         // lavapipe measured 656 px (`newsroom-scopes`), 785 (`newsroom-page-2`) and 828 (`newsroom`) as
         // one-step rounding; the allowance is the measurement plus about half, and the change budget
-        // stays the ordinary 200, so a row that moved is still red.
-        "newsroom" | "newsroom-page-2" | "newsroom-scopes" => Bounds::new(2, 200, 1_200),
+        // stays the ordinary 200, so a row that moved is still red. The two story scenes set the same
+        // 12 pt rows, so they share the allowance until CI measures their own number.
+        "newsroom"
+        | "newsroom-page-2"
+        | "newsroom-scopes"
+        | "newsroom-story"
+        | "newsroom-story-back" => Bounds::new(2, 200, 1_200),
         _ => DEFAULT_BOUNDS,
     }
 }

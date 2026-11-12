@@ -28,7 +28,10 @@ use chrono::{DateTime, FixedOffset, Utc};
 use rune::{El, col, el, row, spacer, text};
 
 use crate::data::Error;
-use crate::data::types::{NewsQuery, NewsScope, NewsStory, NewsWindow, Pagination, StoryPage};
+use crate::data::types::{
+    NewsArticle, NewsQuery, NewsScope, NewsStory, NewsStoryDetail, NewsWindow, Pagination,
+    StoryPage,
+};
 use crate::ui::{ELLIPSIS, State, ViewId, tokens};
 
 /// The three tabs, in the order the panel reads them. **There is no `unknown` tab**, deliberately: the
@@ -56,7 +59,22 @@ pub enum ReadState {
     Failed(String),
 }
 
-/// One newsroom pane's view: the tab, the page, the rows, and the query whose reply may still land.
+/// A story's provenance, as the detail read left it (#137).
+///
+/// A **mode**, not a replacement: the list's tab, page and rows stay on the view underneath, so `back`
+/// returns to the page the operator left rather than to page 1.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Detail {
+    /// The read is in flight: "reading the story…" rather than an empty list of articles.
+    Reading,
+    /// The story and the documents that carried it, oldest first.
+    Ready(Box<NewsStoryDetail>),
+    /// The read failed, with the server's (or the transport's) words.
+    Failed(String),
+}
+
+/// One newsroom pane's view: the tab, the page, the rows, the pressed story, and the query whose reply
+/// may still land.
 #[derive(Clone, Debug)]
 pub struct View {
     /// Which tab. `International` by default — the panel opens on the world.
@@ -71,9 +89,10 @@ pub struct View {
     pub stories: Vec<NewsStory>,
     pub pagination: Option<Pagination>,
     pub state: ReadState,
-    /// The row the operator pressed. The detail ticket consumes it; this ticket records it so a press is
-    /// not a dead gesture.
+    /// The row the operator pressed: the story whose detail this pane is showing, or `None` on the list.
     pub selected: Option<i64>,
+    /// What the detail read said, when a story is open. `None` on the list.
+    pub detail: Option<Detail>,
 }
 
 impl Default for View {
@@ -86,6 +105,7 @@ impl Default for View {
             pagination: None,
             state: ReadState::Reading,
             selected: None,
+            detail: None,
         }
     }
 }
@@ -187,6 +207,66 @@ impl View {
     pub fn first_title(&self) -> Option<&str> {
         self.stories.first().map(|story| story.title.as_str())
     }
+
+    /// Whether this pane is showing a story rather than the list.
+    pub fn detail_open(&self) -> bool {
+        self.selected.is_some()
+    }
+
+    /// Press a row: that story becomes this pane's selection and its detail is read. `false` when the
+    /// row was already open, so a press that changes nothing sends no read.
+    pub fn select(&mut self, story: i64) -> bool {
+        if self.selected == Some(story) {
+            return false;
+        }
+        self.selected = Some(story);
+        self.detail = Some(Detail::Reading);
+        true
+    }
+
+    /// **Apply a detail only while this pane is still on that story** (#137). A slow story that lands
+    /// after `back`, or after another row was pressed, answers a question nobody is asking any more.
+    pub fn apply_detail(&mut self, id: i64, result: &Result<Box<NewsStoryDetail>, Error>) -> bool {
+        if self.selected != Some(id) {
+            return false;
+        }
+        match result {
+            Ok(detail) => {
+                // **The list is the truth, the header is the wire's number** (#137): a detail whose
+                // `articles` do not match `source_count` is a server inconsistency, and it is a log line
+                // rather than a header quietly adjusted to match what happened to arrive.
+                if detail.articles.len() as u32 != detail.story.source_count {
+                    tracing::warn!(
+                        story = id,
+                        articles = detail.articles.len(),
+                        source_count = detail.story.source_count,
+                        "the story's articles disagree with its source_count: the list is what came"
+                    );
+                }
+                self.detail = Some(Detail::Ready(detail.clone()));
+            }
+            Err(error) => self.detail = Some(Detail::Failed(error.to_string())),
+        }
+        true
+    }
+
+    /// `back`: the list, exactly as it was left — the tab, the page, the rows and the footer. `false`
+    /// when no story is open, so Escape falls through to the wall's next rung.
+    pub fn back(&mut self) -> bool {
+        if self.selected.is_none() {
+            return false;
+        }
+        self.selected = None;
+        self.detail = None;
+        true
+    }
+
+    /// Ask again for the open story. `None` when no story is open.
+    pub fn retry_detail(&mut self) -> Option<i64> {
+        let id = self.selected?;
+        self.detail = Some(Detail::Reading);
+        Some(id)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -214,7 +294,200 @@ pub fn content(state: &State, pane: ViewId) -> El {
     if view.pagination.is_some() {
         body = body.child(footer(pane, view));
     }
+    // **The detail is a surface over the list, not a replacement of it** (#137). The list stays mounted,
+    // which is what keeps Rune's scroll viewport where the operator left it — unmounting it and drawing
+    // it again would return `back` to the top of the page. The surface is opaque, catches the press, and
+    // is drawn after the footer so nothing of the list shows through.
+    if view.detail_open() {
+        body = body.child(detail_surface(pane, view));
+    }
     body
+}
+
+/// The story's provenance, over the list (#137): `back` and the title, the times and the sources, the
+/// place and its confidence, the URL as text — and every outlet that carried it, **oldest first**.
+///
+/// One scroll viewport, the pane's own: the articles are rows in it, never a second nested viewport.
+fn detail_surface(pane: ViewId, view: &View) -> El {
+    let mut body = col()
+        .key(format!("news-detail-body-{pane}"))
+        .w_full()
+        .h_full()
+        .min_h(tokens::NEWS_SCROLL_MIN_H)
+        .scroll(rune::ScrollSpec {
+            stick_bottom: false,
+        })
+        .pt(tokens::NEWS_TOP)
+        .px(tokens::NEWS_PAD)
+        .pb(tokens::NEWS_PAD)
+        .gap(tokens::GAP)
+        .child(back_row(pane, view));
+    match view.detail.as_ref() {
+        Some(Detail::Ready(detail)) => {
+            let story = &detail.story;
+            body = body
+                .child(prose_line(
+                    pane,
+                    "provenance",
+                    provenance_line(story),
+                    tokens::ink_dim(),
+                ))
+                .child(prose_line(
+                    pane,
+                    "place",
+                    country_line(story),
+                    // A weak match reads as weak: the country is shown either way, and below half the
+                    // corpus's agreement the line is drawn quietly rather than as settled fact.
+                    match &story.country {
+                        Some(country)
+                            if country.confidence >= crate::data::http::MIN_CONFIDENCE =>
+                        {
+                            tokens::ink()
+                        }
+                        _ => tokens::ink_dim(),
+                    },
+                ))
+                // **Provenance, never a control** (#135, #137): on an air-gapped wall this URL opens
+                // nothing, so it is drawn as text and is not a button.
+                .child(
+                    text(story.url.clone())
+                        .key(format!("news-url-{pane}"))
+                        .font(tokens::LABEL)
+                        .color(tokens::ink_dim()),
+                );
+            for (index, article) in detail.articles.iter().enumerate() {
+                body = body.child(article_row(pane, index, article));
+            }
+        }
+        Some(Detail::Reading) | None => {
+            body = body.child(note(
+                pane,
+                "story-reading",
+                "reading the story…",
+                tokens::ink_dim(),
+            ));
+        }
+        Some(Detail::Failed(error)) => {
+            body = body
+                .child(note(
+                    pane,
+                    "story-failed",
+                    &format!("the story did not read: {error}"),
+                    tokens::ink(),
+                ))
+                .child(retry_word(pane));
+        }
+    }
+    el().key(format!("news-detail-{pane}"))
+        // Over the pane's whole box, including the tab strip and the footer.
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .fill(tokens::panel())
+        .clip_rounded(0.0)
+        // A press on the detail is not a press on the row underneath it: the list is still mounted, and
+        // this is what keeps it out of the hand.
+        .on_press(|_: &mut State| {})
+        .child(body)
+}
+
+/// `back`, and the story's title in the heading style. The word is the exit the mouse has; Escape is the
+/// exit the keyboard has, and both go through the same function.
+fn back_row(pane: ViewId, view: &View) -> El {
+    let title = match view.detail.as_ref() {
+        Some(Detail::Ready(detail)) => detail.story.title.clone(),
+        _ => String::new(),
+    };
+    row()
+        .key(format!("news-back-row-{pane}"))
+        .w_full()
+        .gap(tokens::GAP)
+        .items_center()
+        .child(
+            text(BACK)
+                .key(format!("news-back-{pane}"))
+                .font(tokens::LABEL)
+                .color(tokens::ink())
+                .h(tokens::NEWS_TAB_H)
+                .px(tokens::GAP)
+                .radius(tokens::NEWS_TAB_H / 2.0)
+                .fill(tokens::name_plate())
+                .role("button")
+                .label("Back to the list")
+                .on_press(move |state: &mut State| press_back(state, pane)),
+        )
+        .child(
+            text(title)
+                .key(format!("news-story-title-{pane}"))
+                .font(tokens::TITLE)
+                .color(tokens::ink())
+                .grow(1.0),
+        )
+}
+
+/// `retry`, after a detail that failed to read.
+fn retry_word(pane: ViewId) -> El {
+    text(RETRY)
+        .key(format!("news-story-retry-{pane}"))
+        .font(tokens::LABEL)
+        .color(tokens::ink())
+        .h(tokens::NEWS_TAB_H)
+        .px(tokens::GAP)
+        .radius(tokens::NEWS_TAB_H / 2.0)
+        .fill(tokens::name_plate())
+        .role("button")
+        .label("Read the story again")
+        .on_press(move |state: &mut State| press_retry_detail(state, pane))
+}
+
+/// One line of the detail's prose, at the provenance line's height and vertically centred: the box is
+/// the token's, not whatever the glyphs happen to measure.
+fn prose_line(pane: ViewId, kind: &'static str, words: String, colour: rune::Color) -> El {
+    row()
+        .key(format!("news-{kind}-{pane}"))
+        .w_full()
+        .h(tokens::NEWS_LINE_H)
+        .items_center()
+        .child(text(words).font(tokens::LABEL).color(colour))
+}
+
+/// One outlet that carried the story: its domain and the time it was seen (WIB), the headline, and the
+/// facts the wire sent — each one only when it is there (`INV-01`).
+fn article_row(pane: ViewId, index: usize, article: &NewsArticle) -> El {
+    col()
+        .key(format!("news-article-{pane}-{index}"))
+        .w_full()
+        .h(tokens::NEWS_ARTICLE_H)
+        .gap(tokens::CARD_GAP)
+        .justify_center()
+        .child(
+            row()
+                .w_full()
+                .gap(tokens::GAP)
+                .child(
+                    text(article.domain.clone())
+                        .key(format!("news-domain-{pane}-{index}"))
+                        .font(tokens::LABEL)
+                        .color(tokens::ink()),
+                )
+                .child(spacer())
+                .child(
+                    text(wib(&article.seen_at))
+                        .key(format!("news-seen-{pane}-{index}"))
+                        .font(tokens::LABEL)
+                        .color(tokens::ink_dim()),
+                ),
+        )
+        .child(
+            text(headline(&article.title))
+                .key(format!("news-article-title-{pane}-{index}"))
+                .font(tokens::LABEL)
+                .color(tokens::ink()),
+        )
+        .child(
+            text(article_facts(article))
+                .key(format!("news-facts-{pane}-{index}"))
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim()),
+        )
 }
 
 /// The tab strip and the count: the feed's own `total_records`, so a reader knows how much is behind the
@@ -497,11 +770,53 @@ fn press_retry(state: &mut State, pane: ViewId) {
     state.layout_dirty = true;
 }
 
-/// A press on a row: remember it in **this pane** and focus the pane. The detail read is the next ticket.
+/// A press on a row: the story opens **in this pane**, and its detail is read off the UI thread. The
+/// list stays underneath, so `back` returns to the page the operator left.
 fn select(state: &mut State, pane: ViewId, story: i64) {
     state.layout.focus(pane);
+    let opened = state
+        .pane_mut(pane)
+        .and_then(|pane| pane.news.as_mut())
+        .is_some_and(|view| view.select(story));
+    if opened {
+        ask_story(state, pane, story);
+    }
+    state.layout_dirty = true;
+}
+
+/// Send the detail read, or say why there is none: a wall with no reads thread must not show "reading the
+/// story…" for the life of the process.
+fn ask_story(state: &mut State, pane: ViewId, story: i64) {
+    match &state.backend {
+        Some(backend) => backend.request(crate::data::Command::Story(story)),
+        None => {
+            if let Some(view) = state.pane_mut(pane).and_then(|pane| pane.news.as_mut()) {
+                view.detail = Some(Detail::Failed(
+                    "this wall has no reads thread: no credential is configured".to_string(),
+                ));
+            }
+        }
+    }
+}
+
+/// `back`: the list, exactly as it was left. The same function Escape reaches.
+fn press_back(state: &mut State, pane: ViewId) {
+    state.layout.focus(pane);
     if let Some(view) = state.pane_mut(pane).and_then(|pane| pane.news.as_mut()) {
-        view.selected = Some(story);
+        view.back();
+    }
+    state.layout_dirty = true;
+}
+
+/// `retry` after a detail that failed: one more read of the same story.
+fn press_retry_detail(state: &mut State, pane: ViewId) {
+    state.layout.focus(pane);
+    let asked = state
+        .pane_mut(pane)
+        .and_then(|pane| pane.news.as_mut())
+        .and_then(|view| view.retry_detail());
+    if let Some(story) = asked {
+        ask_story(state, pane, story);
     }
     state.layout_dirty = true;
 }
@@ -517,6 +832,11 @@ fn ask(state: &mut State, query: NewsQuery) {
 // ---------------------------------------------------------------------------------------------
 // The words.
 // ---------------------------------------------------------------------------------------------
+
+/// What the detail's exit says (#137). A word, because a wall has no title bar to point at.
+pub const BACK: &str = "back";
+/// What a failed detail offers, and the list's own footer button says the same word.
+pub const RETRY: &str = "retry";
 
 /// `dd MMM yyyy, HH.mm WIB`: the mockup's format, from the server's UTC.
 pub fn wib(at: &DateTime<Utc>) -> String {
@@ -550,6 +870,61 @@ pub fn sources(story: &NewsStory) -> String {
         1 => format!("1 source · {}", story.source),
         count => format!("{count} sources · {}", story.source),
     }
+}
+
+/// The detail's provenance line: when the story was first learned and when it was last seen, both in
+/// WIB, then `3 sources · rappler.com` — the count and the lead, from the wire.
+pub fn provenance_line(story: &NewsStory) -> String {
+    format!(
+        "{} → {} · {}",
+        wib(&story.first_seen),
+        wib(&story.last_seen),
+        sources(story)
+    )
+}
+
+/// The Negara/Lokasi line: the country and the city, with a dash for either absence, and the confidence
+/// as a **fact** — `0.72 confidence` — because the store's number is what the corpus said, not a filter
+/// this client re-applies. Absent country is a dash and nothing else.
+pub fn country_line(story: &NewsStory) -> String {
+    match &story.country {
+        None => "—".to_string(),
+        Some(country) => format!(
+            "{} · {} · {:.2} confidence",
+            country.name,
+            country.place.as_deref().unwrap_or("—"),
+            country.confidence
+        ),
+    }
+}
+
+/// One article's facts, in the order they are read: an unclassified source is a **word** and comes first
+/// (an operator has a question to answer), then the people, the tone with its sign, the CAMEO code and
+/// the class. Every one is drawn only when the wire sent it; a measured `tone` of `0.0` is `+0.0` and
+/// still draws (`INV-01`).
+pub fn article_facts(article: &NewsArticle) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if article.flagged {
+        parts.push("unclassified source".to_string());
+    }
+    if let Some(persons) = &article.persons
+        && !persons.is_empty()
+    {
+        parts.push(persons.join(", "));
+    }
+    if let Some(tone) = article.tone {
+        parts.push(format!("tone {tone:+.1}"));
+    }
+    if let Some(code) = &article.event_code {
+        parts.push(format!("event {code}"));
+    }
+    if let Some(class) = article.quad_class {
+        parts.push(format!("class {class}"));
+    }
+    if parts.is_empty() {
+        return "—".to_string();
+    }
+    parts.join(" · ")
 }
 
 /// The headline, cut to the newsroom's own width with a drawn ellipsis. Not the pane-name rule: a name is
@@ -766,6 +1141,177 @@ mod tests {
             "the cap plus the ellipsis"
         );
         assert!(shown.ends_with(ELLIPSIS));
+    }
+
+    fn article(domain: &str, seen: u32) -> NewsArticle {
+        NewsArticle {
+            id: i64::from(seen),
+            title: format!("{domain} headline"),
+            domain: domain.to_string(),
+            url: format!("https://{domain}/x"),
+            flagged: false,
+            persons: None,
+            tone: None,
+            event_code: None,
+            quad_class: None,
+            seen_at: Utc.with_ymd_and_hms(2026, 11, 11, 9, seen, 0).unwrap(),
+        }
+    }
+
+    fn detail(story: NewsStory, articles: Vec<NewsArticle>) -> NewsStoryDetail {
+        NewsStoryDetail { story, articles }
+    }
+
+    /// **`back` returns to the page the operator left**, not to page 1 (#137): the detail is a mode over
+    /// the list, so the tab, the page, the rows and the footer are exactly what they were.
+    #[test]
+    fn back_returns_to_the_page_the_operator_left() {
+        let mut view = View::new();
+        let first = view.ask();
+        view.apply(first, &Ok(page("one", 128, 6, 1, true, false, 25)));
+        let second = view.press_page(1).expect("page 2 exists");
+        let page_two = page("two", 128, 6, 2, true, true, 25);
+        let second_title = page_two.rows[0].title.clone();
+        view.apply(second, &Ok(page_two));
+        assert_eq!(view.page, 2);
+
+        let id = view.stories[0].id;
+        assert!(view.select(id), "a press opens the story");
+        assert_eq!(view.selected, Some(id));
+        assert_eq!(view.detail, Some(Detail::Reading));
+        assert!(
+            !view.select(id),
+            "the story already open is not a second read"
+        );
+        let story = view.stories[0].clone();
+        assert!(view.apply_detail(
+            id,
+            &Ok(Box::new(detail(story, vec![article("rappler.com", 19)])))
+        ));
+
+        assert!(view.back(), "back closes the story");
+        assert_eq!(view.selected, None);
+        assert_eq!(view.detail, None);
+        assert_eq!(
+            view.page, 2,
+            "the list comes back on the page it was left on"
+        );
+        assert_eq!(view.stories[0].title, second_title);
+        assert_eq!(
+            view.pagination.map(|pagination| pagination.current_page),
+            Some(2),
+            "and the footer still says so"
+        );
+        assert!(!view.back(), "nothing open, nothing to close");
+    }
+
+    /// **A detail that lands after the operator left the story is discarded** (#137): the reply is
+    /// compared with the selection, so `back` and a second press both make the slow story harmless.
+    #[test]
+    fn a_detail_for_a_story_the_operator_left_is_discarded() {
+        let mut view = View::new();
+        let asked = view.ask();
+        view.apply(asked, &Ok(page("one", 128, 6, 1, true, false, 25)));
+        let first = view.stories[0].clone();
+        let second = view.stories[1].clone();
+
+        view.select(first.id);
+        // The operator presses another row before the first story lands.
+        view.select(second.id);
+        let late = detail(first.clone(), vec![article("rappler.com", 19)]);
+        assert!(
+            !view.apply_detail(first.id, &Ok(Box::new(late))),
+            "a story the pane has left is not applied"
+        );
+        assert_eq!(
+            view.detail,
+            Some(Detail::Reading),
+            "the pane is still waiting for the row it is on"
+        );
+
+        // And after `back`, nothing lands at all.
+        view.back();
+        let after_back = detail(second.clone(), vec![article("rappler.com", 19)]);
+        assert!(!view.apply_detail(second.id, &Ok(Box::new(after_back))));
+        assert_eq!(view.detail, None);
+        assert_eq!(view.selected, None);
+    }
+
+    /// The detail's words, where absence is not zero (`INV-01`) and a measured zero still draws at one
+    /// decimal: `tone +0.0`, persons joined, the CAMEO code and class only when the wire sent them.
+    #[test]
+    fn the_detail_words_name_the_facts_and_the_absences() {
+        let mut flagged = article("malaysiasun.com", 41);
+        flagged.flagged = true;
+        assert_eq!(article_facts(&flagged), "unclassified source");
+
+        let mut measured = article("rappler.com", 19);
+        measured.persons = Some(vec!["Rina Kartika".into(), "Bayu Setiawan".into()]);
+        measured.tone = Some(0.0);
+        measured.event_code = Some("042".into());
+        measured.quad_class = Some(1);
+        assert_eq!(
+            article_facts(&measured),
+            "Rina Kartika, Bayu Setiawan · tone +0.0 · event 042 · class 1",
+            "a measured zero is drawn with its sign, and the fields are in reading order"
+        );
+
+        let mut negative = article("en.antaranews.com", 30);
+        negative.tone = Some(-3.42);
+        assert_eq!(article_facts(&negative), "tone -3.4", "one decimal, signed");
+
+        assert_eq!(
+            article_facts(&article("thejakartapost.com", 22)),
+            "—",
+            "an article with no facts at all draws a dash rather than an empty line"
+        );
+
+        // The story's place line: a dash for an absent country, and the confidence as a fact.
+        let mut story = measured_story();
+        story.country = None;
+        assert_eq!(country_line(&story), "—");
+        story.country = Some(crate::data::types::NewsCountry {
+            code: "MY".into(),
+            name: "Malaysia".into(),
+            place: None,
+            confidence: 0.55,
+        });
+        assert_eq!(country_line(&story), "Malaysia · — · 0.55 confidence");
+        story.country = Some(crate::data::types::NewsCountry {
+            code: "ID".into(),
+            name: "Indonesia".into(),
+            place: Some("Jakarta".into()),
+            confidence: 0.72,
+        });
+        assert_eq!(
+            country_line(&story),
+            "Indonesia · Jakarta · 0.72 confidence"
+        );
+    }
+
+    fn measured_story() -> NewsStory {
+        let at = Utc.with_ymd_and_hms(2026, 11, 11, 9, 19, 0).unwrap();
+        NewsStory {
+            id: 1103,
+            title: "Fisheries agency detains a cargo ship".into(),
+            source_count: 3,
+            country: None,
+            source: "rappler.com".into(),
+            url: "https://rappler.com/2026/11/story-1103".into(),
+            first_seen: at,
+            last_seen: at,
+        }
+    }
+
+    /// The provenance line is both clocks and the count, in WIB: what a reader needs to know who had the
+    /// story first.
+    #[test]
+    fn the_provenance_line_is_wib_and_the_source_count() {
+        let story = measured_story();
+        assert_eq!(
+            provenance_line(&story),
+            "11 Nov 2026, 16.19 WIB → 11 Nov 2026, 16.19 WIB · 3 sources · rappler.com"
+        );
     }
 
     /// The three tabs are the panel's three scopes, in reading order, and `unknown` is **not** a tab.

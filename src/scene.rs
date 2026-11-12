@@ -16,9 +16,9 @@
 use std::path::PathBuf;
 
 use crate::data::types::{
-    Envelope, FeedPosition, Installation, InstallationType, NewsQuery, Pages, StoryPage,
-    TacticalObjectFacets, TacticalObjectManifest, TacticalObjectPlacement, TniCommandPost,
-    UnitOrganisationDetail,
+    Envelope, FeedPosition, Installation, InstallationType, NewsQuery, NewsStoryDetail, Pages,
+    StoryPage, TacticalObjectFacets, TacticalObjectManifest, TacticalObjectPlacement,
+    TniCommandPost, UnitOrganisationDetail,
 };
 use crate::map::geometry::Camera;
 use crate::ui::State;
@@ -967,23 +967,26 @@ fn split_ratio(state: &mut State, share: f32) {
     }
 }
 
-/// The `newsroom` scene: **a map pane and the feed beside it**, the feed focused, page 1 of the
-/// international tab in the pane's state.
+/// The wall the newsroom scenes share: **a map pane and the feed beside it**, the feed focused.
 ///
-/// The pane comes from the header control's own function (`ui::open_newsroom_pane`), and the page arrives
-/// as the reply the reads thread sends — wire data → pane → rows, not a shortcut into the state.
-fn newsroom(state: &mut State) {
+/// The pane comes from the header control's own function (`ui::open_newsroom_pane`), so a capture of a
+/// wall with a feed is a capture of the path a press takes. Returns the feed's id.
+fn newsroom_wall(state: &mut State) -> Option<crate::ui::ViewId> {
     load(state);
-    let map = state.layout.focused();
-    let camera = state.camera_of(map);
-    if state
-        .split_pane_as(map, camera, crate::ui::PaneContent::Newsroom)
-        .is_none()
-    {
-        return;
-    }
+    crate::ui::open_newsroom_pane(state);
     split_ratio(state, NEWSROOM_MAP_SHARE);
     let pane = state.layout.focused();
+    state
+        .pane(pane)
+        .and_then(|pane| pane.news.as_ref())
+        .map(|_| pane)
+}
+
+/// The `newsroom` scene: the wall above, with page 1 of the international tab in the pane's state.
+fn newsroom(state: &mut State) {
+    let Some(pane) = newsroom_wall(state) else {
+        return;
+    };
     apply_page(state, pane, "newsroom-international-1.json");
 }
 
@@ -991,17 +994,9 @@ fn newsroom(state: &mut State) {
 /// exists and knows there is a page 2; then the press goes through the pane's own `press_page`, and the
 /// reply moves the footer.
 fn newsroom_page_2(state: &mut State) {
-    load(state);
-    let map = state.layout.focused();
-    let camera = state.camera_of(map);
-    if state
-        .split_pane_as(map, camera, crate::ui::PaneContent::Newsroom)
-        .is_none()
-    {
+    let Some(pane) = newsroom_wall(state) else {
         return;
-    }
-    split_ratio(state, NEWSROOM_MAP_SHARE);
-    let pane = state.layout.focused();
+    };
     apply_page(state, pane, "newsroom-international-1.json");
     // The press is the view's, not a second way to set the page: `press_page` refuses a page the footer
     // would draw as disabled, and the footer moves only when the reply lands.
@@ -1054,6 +1049,92 @@ fn newsroom_scopes(state: &mut State) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// A story's provenance (#137): the row pressed, and the outlets that carried it, oldest first.
+// ---------------------------------------------------------------------------------------------
+
+/// The story the `newsroom-story` scene presses: the fourth row of page 1 of the international tab —
+/// the one with **no `country`**, so the capture has a dash where the place would be.
+pub const NEWSROOM_STORY: i64 = 1103;
+
+/// The story the `newsroom-story-back` scene presses: the first row of **page 2**, so the capture after
+/// the click proves `back` returned to page 2 rather than to page 1.
+pub const NEWSROOM_STORY_PAGE_2: i64 = 1200;
+
+/// One story's detail, wire-shaped (`GET /banglinstra/stories/{id}`): `{story, articles}`.
+pub fn newsroom_story_fixture(name: &str) -> Result<NewsStoryDetail, String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/scenes")
+        .join(name);
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let envelope: Envelope<NewsStoryDetail> = serde_json::from_str(&text).map_err(|error| {
+        format!(
+            "{} is not the story-detail envelope: {error}",
+            path.display()
+        )
+    })?;
+    Ok(envelope.data)
+}
+
+/// Press a row the way the wall does: the view's own `select`, then the detail arrives as the reply the
+/// reads thread would send for that story.
+fn select_story(state: &mut State, pane: crate::ui::ViewId, id: i64, file: &str) {
+    let opened = state
+        .pane_mut(pane)
+        .and_then(|pane| pane.news.as_mut())
+        .is_some_and(|view| view.select(id));
+    if !opened {
+        return;
+    }
+    match newsroom_story_fixture(file) {
+        Ok(detail) => {
+            crate::ui::apply_reply(state, &crate::data::Reply::Story(id, Ok(Box::new(detail))));
+        }
+        Err(error) => eprintln!("arcons-cc: scene: {error}"),
+    }
+}
+
+/// The `newsroom-story` scene: **a row pressed** — the story's provenance in the pane, three documents
+/// oldest first, one flagged, one with no CAMEO code, and a `—` where the country could not be resolved.
+fn newsroom_story(state: &mut State) {
+    let Some(pane) = newsroom_wall(state) else {
+        return;
+    };
+    apply_page(state, pane, "newsroom-international-1.json");
+    select_story(state, pane, NEWSROOM_STORY, "newsroom-story.json");
+}
+
+/// The `newsroom-story-back` scene: **page 2, a story open, and the operator presses `back`** —
+/// `fixtures/scripts/newsroom-story-back.json` clicks the word rather than the scene calling it, so the
+/// capture proves the button reaches a handler (#80) and the assertion proves the list came back on
+/// page 2 rather than page 1.
+fn newsroom_story_back(state: &mut State) {
+    let Some(pane) = newsroom_wall(state) else {
+        return;
+    };
+    apply_page(state, pane, "newsroom-international-1.json");
+    // Page 2, through the same press the footer makes.
+    let moved = state
+        .pane_mut(pane)
+        .and_then(|pane| pane.news.as_mut())
+        .and_then(|view| view.press_page(1));
+    if let Some(query) = moved {
+        match newsroom_page_fixture("newsroom-international-2.json") {
+            Ok(page) => {
+                crate::ui::apply_reply(state, &crate::data::Reply::Stories(query, Ok(page)));
+            }
+            Err(error) => eprintln!("arcons-cc: scene: {error}"),
+        }
+    }
+    select_story(
+        state,
+        pane,
+        NEWSROOM_STORY_PAGE_2,
+        "newsroom-story-page-2.json",
+    );
+}
+
 /// The scene registry, handed to `AppSpec::scenes`.
 pub const SCENES: &[Scene] = &[
     ("empty", empty),
@@ -1098,6 +1179,12 @@ pub const SCENES: &[Scene] = &[
     ("newsroom", newsroom),
     ("newsroom-scopes", newsroom_scopes),
     ("newsroom-page-2", newsroom_page_2),
+    // A story's provenance (#137): a row pressed, and the outlets that carried it — oldest first, an
+    // unclassified source in words, and a dash where the country is absent.
+    ("newsroom-story", newsroom_story),
+    // The same page after `back`, pressed by a **pointer** (`fixtures/scripts/newsroom-story-back.json`):
+    // the list returns on page 2, with its own footer.
+    ("newsroom-story-back", newsroom_story_back),
 ];
 
 /// Look a scene up by the name `scripts/capture.sh` was given.
@@ -1239,6 +1326,85 @@ mod tests {
         );
     }
 
+    /// **The two story scenes hold the detail the assertions read** (#137): a pressed row, three
+    /// documents oldest first, and page 2 under a story so `back` has a page to return to. A fixture
+    /// that stopped matching its list row — a changed title or `source_count` — fails here rather than
+    /// in a capture a human has to look at.
+    #[test]
+    fn the_story_scenes_hold_the_detail_the_assertions_read() {
+        let detail = newsroom_story_fixture("newsroom-story.json").expect("the story detail");
+        let page = newsroom_page_fixture("newsroom-international-1.json").expect("page 1");
+        let row = page
+            .rows
+            .iter()
+            .find(|story| story.id == NEWSROOM_STORY)
+            .expect("the pressed story is on page 1");
+        assert_eq!(
+            detail.story.id, row.id,
+            "the detail is for the row the scene presses"
+        );
+        assert_eq!(detail.story.title, row.title);
+        assert_eq!(
+            detail.story.source_count, row.source_count,
+            "the header and the list agree about how many outlets carried it"
+        );
+        assert_eq!(
+            detail.articles.len() as u32,
+            detail.story.source_count,
+            "on the detail route `source_count` equals `articles.len()`"
+        );
+        assert!(
+            detail.story.country.is_none(),
+            "the pressed story has no country, which is the dash the capture asserts"
+        );
+        assert!(
+            detail.articles.iter().any(|article| article.flagged),
+            "one article is flagged, so `unclassified source` is drawn"
+        );
+        assert!(
+            detail
+                .articles
+                .iter()
+                .any(|article| article.tone == Some(0.0)),
+            "one measured tone of 0.0 is drawn"
+        );
+
+        let state = state_for("newsroom-story");
+        let view = state
+            .panes
+            .iter()
+            .find_map(|pane| pane.news.as_ref())
+            .expect("the feed pane");
+        assert_eq!(view.selected, Some(NEWSROOM_STORY));
+        assert!(
+            matches!(view.detail, Some(crate::ui::newsroom::Detail::Ready(ref ready)) if ready.articles.len() == 3),
+            "the detail arrived through the reply path, got {:?}",
+            view.detail
+        );
+
+        // The back scene: page 2, a story open, and the script's click is what closes it.
+        let page_two = state_for("newsroom-story-back");
+        let view = page_two
+            .panes
+            .iter()
+            .find_map(|pane| pane.news.as_ref())
+            .expect("the feed pane");
+        assert_eq!(view.page, 2, "the scene pressed Next before pressing a row");
+        assert_eq!(view.selected, Some(NEWSROOM_STORY_PAGE_2));
+        assert!(matches!(
+            view.detail,
+            Some(crate::ui::newsroom::Detail::Ready(_))
+        ));
+        let page_2_rows = newsroom_page_fixture("newsroom-international-2.json").expect("page 2");
+        assert!(
+            page_2_rows
+                .rows
+                .iter()
+                .any(|story| story.id == NEWSROOM_STORY_PAGE_2),
+            "the story the scene presses is on page 2"
+        );
+    }
+
     #[test]
     fn every_scene_is_named_and_can_be_built() {
         // `--list-scenes` prints these; a scene that panics on build is a capture that fails at
@@ -1293,7 +1459,10 @@ mod tests {
                 // pane after one Next press.
                 "newsroom",
                 "newsroom-scopes",
-                "newsroom-page-2"
+                "newsroom-page-2",
+                // A story's provenance (#137): a row pressed, and the list returned to by `back`.
+                "newsroom-story",
+                "newsroom-story-back"
             ]
         );
         for name in names() {

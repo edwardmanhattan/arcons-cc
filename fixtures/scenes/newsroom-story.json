@@ -1,0 +1,48 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": {
+    "story": {
+      "id": 1103,
+      "title": "Fisheries agency detains a cargo ship without a manifest",
+      "source_count": 3,
+      "source": "rappler.com",
+      "url": "https://rappler.com/2026/11/story-1103",
+      "first_seen": "2026-11-11T09:19:00Z",
+      "last_seen": "2026-11-11T09:41:00Z"
+    },
+    "articles": [
+      {
+        "id": 3103,
+        "title": "Fisheries agency detains a cargo ship without a manifest",
+        "domain": "rappler.com",
+        "url": "https://rappler.com/2026/11/story-1103",
+        "flagged": false,
+        "persons": [
+          "Rina Kartika"
+        ],
+        "tone": 0.0,
+        "event_code": "042",
+        "quad_class": 1,
+        "seen_at": "2026-11-11T09:19:00Z"
+      },
+      {
+        "id": 3111,
+        "title": "Seized trawler escorted to port as owners object",
+        "domain": "en.antaranews.com",
+        "url": "https://en.antaranews.com/2026/11/story-3111",
+        "flagged": false,
+        "tone": -3.42,
+        "seen_at": "2026-11-11T09:30:00Z"
+      },
+      {
+        "id": 3119,
+        "title": "Crew of seized trawler released without charge",
+        "domain": "malaysiasun.com",
+        "url": "https://malaysiasun.com/2026/11/story-3119",
+        "flagged": true,
+        "seen_at": "2026-11-11T09:41:00Z"
+      }
+    ]
+  }
+}
