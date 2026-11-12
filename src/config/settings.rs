@@ -16,7 +16,6 @@
 //! - **Unreadable is not fatal**: a missing, corrupt or hand-edited file is a log line and the defaults.
 //!   The wall's job is to draw the sea, and it cannot be made to refuse that by a typo in a preference.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// The widest gap the display offers, in points. Above this the panes stop reading as one picture.
@@ -85,41 +84,11 @@ impl Settings {
         Ok(settings)
     }
 
-    /// Write the file atomically, and privately.
+    /// Write the file atomically, and privately — `config::write_atomically`, which the saved layout uses
+    /// too, because two copies of this would drift and this one is the one that knows about the power cut.
     pub fn write(&self, path: &Path) -> Result<(), String> {
-        let directory = path
-            .parent()
-            .ok_or_else(|| format!("{} has no directory", path.display()))?;
-        std::fs::create_dir_all(directory)
-            .map_err(|error| format!("{}: {error}", directory.display()))?;
-        // A temp file **in the same directory**, so the rename is a rename and not a copy across
-        // filesystems: `settings.toml.tmp` next to `settings.toml` is atomic; `/tmp/...` is not.
-        let temp = path.with_extension("toml.tmp");
         let text = toml::to_string_pretty(self).map_err(|error| error.to_string())?;
-        let mut file =
-            std::fs::File::create(&temp).map_err(|error| format!("{}: {error}", temp.display()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            // 0600 **before** the content is in it: a window in which the file exists, readable and
-            // empty, is shorter than one where it is readable and full, but it is free to close.
-            if let Err(error) = file.set_permissions(std::fs::Permissions::from_mode(0o600)) {
-                let _ = std::fs::remove_file(&temp);
-                return Err(format!("{}: {error}", temp.display()));
-            }
-        }
-        if let Err(error) = file
-            .write_all(text.as_bytes())
-            .and_then(|()| file.sync_all())
-        {
-            let _ = std::fs::remove_file(&temp);
-            return Err(format!("{}: {error}", temp.display()));
-        }
-        drop(file);
-        std::fs::rename(&temp, path).map_err(|error| {
-            let _ = std::fs::remove_file(&temp);
-            format!("{}: {error}", path.display())
-        })
+        super::write_atomically(path, &text)
     }
 }
 

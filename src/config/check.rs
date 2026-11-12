@@ -29,7 +29,7 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::config::{self, Args, Config, Env, Problem, Source, settings};
+use crate::config::{self, Args, Config, Env, Problem, Source, layout, settings};
 
 /// What a self-check can conclude, in the order the exit codes are numbered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,6 +171,18 @@ pub fn run(args: &Args, env: &Env, world: &dyn World, out: &mut dyn std::fmt::Wr
         "settings",
         note.trim_start_matches("settings: "),
         settings.pane_gap
+    );
+
+    // **The wall's arrangement** (#153): which file, and whether it was there. A wall with no file opens
+    // on the default wall, which is most walls, so this is a fact and not a verdict.
+    let layout_path = layout::layout_file();
+    let (saved, note) = layout::Saved::read(&layout_path);
+    let _ = writeln!(
+        out,
+        "  {:<11} ok  {} ({} workspace(s) remembered)",
+        "layout",
+        note.trim_start_matches("layout: "),
+        saved.map(|saved| saved.workspace.len()).unwrap_or(0)
     );
 
     match world.sign_in(&config) {
