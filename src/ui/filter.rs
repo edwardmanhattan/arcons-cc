@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn a_filter_belongs_to_the_pane_that_was_pressed() {
         let mut state = State::default();
-        let first = state.layout.focused();
+        let first = state.focused();
         let Some(second) = state.split_pane(first, Camera::START) else {
             panic!("the wall can hold two panes");
         };

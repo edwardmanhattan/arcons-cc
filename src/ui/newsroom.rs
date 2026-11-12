@@ -732,7 +732,7 @@ fn note(pane: ViewId, kind: &'static str, message: &str, colour: rune::Color) ->
 
 /// A press on a scope tab: focus the pane, change the scope, and ask page 1 — off the UI thread.
 fn press_scope(state: &mut State, pane: ViewId, scope: NewsScope) {
-    state.layout.focus(pane);
+    state.focus_pane(pane);
     let query = state
         .pane_mut(pane)
         .and_then(|pane| pane.news.as_mut())
@@ -746,7 +746,7 @@ fn press_scope(state: &mut State, pane: ViewId, scope: NewsScope) {
 /// A press on `previous`/`next`: the target comes from [`View::target`], so a disabled button cannot
 /// send a request.
 fn press_page(state: &mut State, pane: ViewId, step: i32) {
-    state.layout.focus(pane);
+    state.focus_pane(pane);
     let query = state
         .pane_mut(pane)
         .and_then(|pane| pane.news.as_mut())
@@ -759,7 +759,7 @@ fn press_page(state: &mut State, pane: ViewId, step: i32) {
 
 /// A press on `retry`: ask the page whose rows are on screen again.
 fn press_retry(state: &mut State, pane: ViewId) {
-    state.layout.focus(pane);
+    state.focus_pane(pane);
     let query = state
         .pane_mut(pane)
         .and_then(|pane| pane.news.as_mut())
@@ -773,7 +773,7 @@ fn press_retry(state: &mut State, pane: ViewId) {
 /// A press on a row: the story opens **in this pane**, and its detail is read off the UI thread. The
 /// list stays underneath, so `back` returns to the page the operator left.
 fn select(state: &mut State, pane: ViewId, story: i64) {
-    state.layout.focus(pane);
+    state.focus_pane(pane);
     let opened = state
         .pane_mut(pane)
         .and_then(|pane| pane.news.as_mut())
@@ -801,7 +801,7 @@ fn ask_story(state: &mut State, pane: ViewId, story: i64) {
 
 /// `back`: the list, exactly as it was left. The same function Escape reaches.
 fn press_back(state: &mut State, pane: ViewId) {
-    state.layout.focus(pane);
+    state.focus_pane(pane);
     if let Some(view) = state.pane_mut(pane).and_then(|pane| pane.news.as_mut()) {
         view.back();
     }
@@ -810,7 +810,7 @@ fn press_back(state: &mut State, pane: ViewId) {
 
 /// `retry` after a detail that failed: one more read of the same story.
 fn press_retry_detail(state: &mut State, pane: ViewId) {
-    state.layout.focus(pane);
+    state.focus_pane(pane);
     let asked = state
         .pane_mut(pane)
         .and_then(|pane| pane.news.as_mut())

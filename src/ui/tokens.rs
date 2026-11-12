@@ -137,6 +137,17 @@ pub const TREE_LINE: f32 = 20.0;
 /// edge would be a bracket, not a line.
 pub const TREE_ROW_GAP: f32 = 24.0;
 pub const TREE_COL_GAP: f32 = 16.0;
+/// **The workspace chips** (#138): the capsule's height, its horizontal padding, the gap between chips,
+/// the glyph inside one, and the gap between the glyph and the number. A chip is a control read from
+/// across a room, so it is a touch target's height, not a label's.
+pub const CHIP_H: f32 = 16.0;
+pub const CHIP_PAD: f32 = 6.0;
+pub const CHIP_GAP: f32 = 6.0;
+pub const CHIP_ICON: f32 = 10.0;
+/// The empty workspace's message, and the room above it: "No panes yet." is centred where the picture
+/// would be, with the panel's own padding around it.
+pub const EMPTY_GAP: f32 = 8.0;
+
 /// **The newsroom pane's metrics** (#136): the tab strip, one story's row, the footer, and the room the
 /// pane's chrome takes at the top. A tab is a control found by a hand, so it is the same 24 pt floor as a
 /// pane's buttons; a row is three lines at `LABEL`, measured from a capture rather than guessed.

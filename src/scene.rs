@@ -87,7 +87,7 @@ fn stale(state: &mut State) {
 
 fn card_open(state: &mut State) {
     load(state);
-    let focused = state.layout.focused();
+    let focused = state.focused();
     state.select_in(focused, CARD_UNIT);
 }
 
@@ -130,7 +130,9 @@ pub const PHOTO_FIXTURE: &[u8] = include_bytes!("../fixtures/scenes/hull.png");
 /// marker, not just the drawing half.
 fn photo(state: &mut State) {
     load(state);
-    state.focused_pane_mut().view.range = crate::units::mark::Range::Picture;
+    if let Some(pane) = state.focused_pane_mut() {
+        pane.view.range = crate::units::mark::Range::Picture;
+    }
     state.sizes.insert(
         PHOTO_UNIT,
         crate::units::mark::Size {
@@ -202,7 +204,7 @@ fn panes_range(state: &mut State) {
         return;
     };
     let centre = (drawn.lat, drawn.lon);
-    let first = state.layout.focused();
+    let first = state.focused();
     state.set_camera(Camera::new(centre, crate::units::mark::PHOTO_ZOOM));
     if state
         .split_pane(first, Camera::new(centre, PANES_RANGE_CHART))
@@ -210,7 +212,7 @@ fn panes_range(state: &mut State) {
     {
         return;
     }
-    state.layout.focus(first);
+    state.focus_pane(first);
     state.sizes.insert(
         PHOTO_UNIT,
         crate::units::mark::Size {
@@ -228,7 +230,7 @@ fn panes_range(state: &mut State) {
     // **The latch is the pane's** (#115), and the scene says which pane holds which. `poll` re-latches
     // both from their own frames; `verify` builds this state without a layout pass, so the ranges are
     // also set here, the way `photo` sets the single pane's.
-    for pane in &mut state.panes {
+    for pane in state.panes_mut() {
         pane.view.range = crate::units::mark::Range::Symbol;
     }
     if let Some(pane) = state.pane_mut(first) {
@@ -343,10 +345,10 @@ fn objects(state: &mut State) {
     // **Two panes, the same water, two zooms**: the layer must be projected against each pane's own
     // frame. The focused pane is the near one, so a wall-wide camera agrees with it and is wrong in
     // its neighbour — the falsifier the assertion names.
-    let first = state.layout.focused();
+    let first = state.focused();
     state.set_camera(Camera::new(OBJECTS_CENTRE, OBJECTS_ZOOMS.0));
     state.split_pane(first, Camera::new(OBJECTS_CENTRE, OBJECTS_ZOOMS.1));
-    state.layout.focus(first);
+    state.focus_pane(first);
 }
 
 /// `fixtures/rest/tactical-objects-facets.json` — the recorded filter vocabulary, wire-shaped. The
@@ -418,7 +420,7 @@ fn panes_filter(state: &mut State) {
     }
     // **The same water at the same zoom in both panes**: a difference between their pictures is the
     // filter and nothing else.
-    for pane in &mut state.panes {
+    for pane in state.panes_mut() {
         pane.camera = Camera::new(OBJECTS_CENTRE, PANES_FILTER_ZOOM);
     }
     let first = state.pane_rects()[0].0;
@@ -433,7 +435,7 @@ fn panes_filter(state: &mut State) {
         crate::ui::filter::toggle_in(state, first, crate::ui::filter::Target::Domain(domain));
     }
     state.begin(crate::ui::Begin::Filter { pane: first });
-    state.layout.focus(first);
+    state.focus_pane(first);
 }
 
 /// Wait, bounded, for the scene's decoded artwork — the same reason `wait_for_picture` waits: a
@@ -483,7 +485,7 @@ fn panes_pan(state: &mut State) {
 
 fn panes_wall(state: &mut State, drag_the_border: bool) {
     load(state);
-    let mut ids = vec![state.layout.focused()];
+    let mut ids = vec![state.focused()];
     for (index, (id_unit, zoom)) in PANES.iter().enumerate() {
         let camera = state
             .picture
@@ -504,7 +506,7 @@ fn panes_wall(state: &mut State, drag_the_border: bool) {
         }
     }
     if let Some(id) = ids.get(PANES_FOCUSED) {
-        state.layout.focus(*id);
+        state.focus_pane(*id);
     }
     // **One border dragged** (#69), through the two calls the gesture makes: find the border under the
     // pointer, ask it for the ratio the pointer means. The root split is dragged from half to 58%, so
@@ -516,9 +518,9 @@ fn panes_wall(state: &mut State, drag_the_border: bool) {
     }
     let viewport = state.pane_viewport();
     let middle = (viewport.w as f32 / 2.0, viewport.h as f32 / 2.0);
-    if let Some(border) = state.layout.border_at(viewport, middle, state.pane_grip()) {
+    if let Some(border) = state.border_at(middle, state.pane_grip()) {
         let pointer = border.start + border.span * PANES_DRAGGED;
-        state.layout.set_ratio(&border, border.ratio_for(pointer));
+        state.set_ratio(&border, border.ratio_for(pointer));
     }
 }
 
@@ -624,7 +626,7 @@ fn settings_dismiss(state: &mut State) {
 /// tall enough for both.
 fn panes_menu(state: &mut State) {
     panes(state);
-    let pane = state.layout.focused();
+    let pane = state.focused();
     state.begin(crate::ui::Begin::Menu { pane, at: MENU_AT });
 }
 
@@ -635,7 +637,7 @@ fn panes_menu(state: &mut State) {
 /// The capture is the witness the pointer-driven bug could not have: no test right-clicks.
 fn pane_menu(state: &mut State) {
     load(state);
-    let pane = state.layout.focused();
+    let pane = state.focused();
     state.begin(crate::ui::Begin::Menu { pane, at: MENU_AT });
 }
 
@@ -647,7 +649,6 @@ fn pane_menu(state: &mut State) {
 /// and the gap is drawn from the preview layout, so what the picture shows is where the pane lands.
 fn panes_drag(state: &mut State) {
     panes(state);
-    let viewport = state.pane_viewport();
     let Some((dragged, _)) = state.pane_rects().into_iter().last() else {
         return;
     };
@@ -662,14 +663,14 @@ fn panes_drag(state: &mut State) {
     // (#100). The top band of the first pane makes the picture show a stacked slot, and `verify` says
     // that slot is wider than it is tall.
     let at = (rect.x + rect.w / 2.0, rect.y + rect.h * 0.08);
-    let drop = state.layout.drop_for(viewport, dragged, at);
+    let drop = state.drop_for(dragged, at);
     state.begin(crate::ui::Begin::Lift(crate::ui::PaneDrag {
         pane: dragged,
         drop,
     }));
     // The pane being lifted is the one the operator picked up, so it is the focused one.
     if drop.is_some() {
-        state.layout.focus(dragged);
+        state.focus_pane(dragged);
     }
 }
 
@@ -717,7 +718,7 @@ fn supreme_fixture() -> Result<TniCommandPost, String> {
 /// capture covers wire data → pane → plate, and the assertion can ask the pane what it drew.
 fn pane_tree(state: &mut State) {
     load(state);
-    let map = state.layout.focused();
+    let map = state.focused();
     let camera = state.camera_of(map);
     let Some(tree) = state.split_pane_as(
         map,
@@ -733,10 +734,10 @@ fn pane_tree(state: &mut State) {
     // layout function.
     let viewport = state.pane_viewport();
     let middle = (viewport.w as f32 / 2.0, viewport.h as f32 / 2.0);
-    if let Some(border) = state.layout.border_at(viewport, middle, state.pane_grip()) {
-        state.layout.set_ratio(&border, TREE_MAP_SHARE);
+    if let Some(border) = state.border_at(middle, state.pane_grip()) {
+        state.set_ratio(&border, TREE_MAP_SHARE);
     }
-    state.layout.focus(tree);
+    state.focus_pane(tree);
     // The two reads the pane needs, through the replies the reads thread would send.
     match chain_of_command_fixture() {
         Ok(detail) => {
@@ -776,8 +777,7 @@ pub const TREE_ZOOM_AT: (f32, f32) = (300.0, 280.0);
 fn pane_tree_narrow(state: &mut State) {
     pane_tree(state);
     let Some(tree) = state
-        .layout
-        .ids()
+        .pane_ids()
         .into_iter()
         .find(|id| state.pane(*id).is_some_and(|pane| !pane.content.is_map()))
     else {
@@ -786,14 +786,12 @@ fn pane_tree_narrow(state: &mut State) {
     // **The border this pane is on**, found from the pane rather than from a point: after `pane_tree`
     // the split is at 34 %, so a press at the middle finds nothing. A scene that guessed the line's
     // position would silently draw the wide wall it is here to avoid.
-    let viewport = state.pane_viewport();
     if let Some(border) = state
-        .layout
-        .borders(viewport)
+        .borders()
         .into_iter()
         .find(|border| border.a == tree || border.b == tree)
     {
-        state.layout.set_ratio(&border, TREE_NARROW_MAP_SHARE);
+        state.set_ratio(&border, TREE_NARROW_MAP_SHARE);
     }
 }
 
@@ -892,13 +890,13 @@ fn installations_layer(state: &mut State) {
             return;
         }
     }
-    let first = state.layout.focused();
+    let first = state.focused();
     state.set_camera(Camera::new(INSTALLATIONS_CENTRE, INSTALLATIONS_ZOOMS.0));
     state.split_pane(
         first,
         Camera::new(INSTALLATIONS_CENTRE, INSTALLATIONS_ZOOMS.1),
     );
-    state.layout.focus(first);
+    state.focus_pane(first);
     crate::ui::installations::press(state, first, INSTALLATIONS_BASE);
 }
 
@@ -962,8 +960,8 @@ fn apply_page(state: &mut State, pane: crate::ui::ViewId, file: &str) -> bool {
 fn split_ratio(state: &mut State, share: f32) {
     let viewport = state.pane_viewport();
     let middle = (viewport.w as f32 / 2.0, viewport.h as f32 / 2.0);
-    if let Some(border) = state.layout.border_at(viewport, middle, state.pane_grip()) {
-        state.layout.set_ratio(&border, share);
+    if let Some(border) = state.border_at(middle, state.pane_grip()) {
+        state.set_ratio(&border, share);
     }
 }
 
@@ -975,7 +973,7 @@ fn newsroom_wall(state: &mut State) -> Option<crate::ui::ViewId> {
     load(state);
     crate::ui::open_newsroom_pane(state);
     split_ratio(state, NEWSROOM_MAP_SHARE);
-    let pane = state.layout.focused();
+    let pane = state.focused();
     state
         .pane(pane)
         .and_then(|pane| pane.news.as_ref())
@@ -1019,7 +1017,7 @@ fn newsroom_page_2(state: &mut State) {
 /// through the same `View::press_scope` the button calls, and the first pane's rows are untouched — the
 /// falsifier the ticket names is a wall-wide scope, which would switch both.
 fn newsroom_scopes(state: &mut State) {
-    let map = state.layout.focused();
+    let map = state.focused();
     let camera = state.camera_of(map);
     let Some(first) = state.split_pane_as(map, camera, crate::ui::PaneContent::Newsroom) else {
         return;
@@ -1030,9 +1028,9 @@ fn newsroom_scopes(state: &mut State) {
     // The feed is the wall: the map pane the wall opened with goes, and the two newsroom panes keep its
     // space. Two panes, two tabs, one press — and the pane is forgotten by the state as well as by the
     // layout, or the header counts a pane nothing draws (`close_from_menu` does both for the same reason).
-    state.layout.close(map);
-    state.panes.retain(|pane| pane.id != map);
-    state.layout.focus(second);
+    state.close_pane(map);
+    state.panes_mut().retain(|pane| pane.id != map);
+    state.focus_pane(second);
     apply_page(state, first, "newsroom-international-1.json");
     // The press: the second pane moves to Regional and asks page 1 of it.
     if let Some(query) = state
@@ -1135,6 +1133,56 @@ fn newsroom_story_back(state: &mut State) {
     );
 }
 
+// ---------------------------------------------------------------------------------------------
+// Workspaces (#138): named, independent tilings of panes. One is active; empty is valid.
+// ---------------------------------------------------------------------------------------------
+
+/// How many panes the `workspaces` scene gives workspace 1: the wall the operator had, so the capture
+/// is about the chips and not about a tiling nobody asked for.
+pub const WORKSPACE_PANES: usize = 2;
+
+/// Workspace 1 with **two panes**, and workspaces 2 and 3 empty beside it. The default state already has
+/// three workspaces; this gives the first the wall's usual two panes on two cameras.
+fn workspaces(state: &mut State) {
+    load(state);
+    let mut ids = vec![state.focused()];
+    for (index, (id_unit, zoom)) in PANES.iter().take(WORKSPACE_PANES).enumerate() {
+        let camera = state
+            .picture
+            .units()
+            .iter()
+            .find(|unit| unit.unit.id_unit == *id_unit)
+            .and_then(|unit| unit.drawn(state.now()))
+            .map(|drawn| Camera::new((drawn.lat, drawn.lon), *zoom))
+            .unwrap_or(Camera::new(CAMERA.center, *zoom));
+        if index == 0 {
+            state.set_camera(camera);
+        } else {
+            let from = ids[index - 1];
+            if let Some(new) = state.split_pane(from, camera) {
+                ids.push(new);
+            }
+        }
+    }
+    if let Some(id) = ids.last() {
+        state.focus_pane(*id);
+    }
+}
+
+/// The `workspaces-empty` scene: **workspace 2 active and empty.** Workspace 1 keeps its two panes, so
+/// the capture also says the panes are not drawn when their workspace is not on screen.
+fn workspaces_empty(state: &mut State) {
+    workspaces(state);
+    state.switch_to(1);
+}
+
+/// The `workspaces-switch` scene: workspace 1 with its panes, and
+/// `fixtures/scripts/workspaces-switch.json` presses the **third chip**. The scene leaves the wall on
+/// workspace 1, so the capture switching to workspace 3 is the press's doing and not a constructor's.
+fn workspaces_switch(state: &mut State) {
+    workspaces(state);
+}
+
 /// The scene registry, handed to `AppSpec::scenes`.
 pub const SCENES: &[Scene] = &[
     ("empty", empty),
@@ -1185,6 +1233,10 @@ pub const SCENES: &[Scene] = &[
     // The same page after `back`, pressed by a **pointer** (`fixtures/scripts/newsroom-story-back.json`):
     // the list returns on page 2, with its own footer.
     ("newsroom-story-back", newsroom_story_back),
+    // Workspaces (#138): the chips and the empty state, and a switch made by a **pointer**.
+    ("workspaces", workspaces),
+    ("workspaces-empty", workspaces_empty),
+    ("workspaces-switch", workspaces_switch),
 ];
 
 /// Look a scene up by the name `scripts/capture.sh` was given.
@@ -1255,7 +1307,7 @@ mod tests {
     fn the_newsroom_scenes_hold_the_pages_the_assertions_read() {
         let feeds = |state: &crate::ui::State| -> Vec<crate::ui::newsroom::View> {
             state
-                .panes
+                .panes()
                 .iter()
                 .filter_map(|pane| pane.news.clone())
                 .collect()
@@ -1282,8 +1334,8 @@ mod tests {
         assert_eq!(views[0].page, 1);
         assert_eq!(views[0].stories[0].title, first.rows[0].title);
         assert_eq!(
-            newsroom.layout.focused(),
-            newsroom.layout.ids()[1],
+            newsroom.focused(),
+            newsroom.pane_ids()[1],
             "the feed is focused"
         );
         assert_eq!(
@@ -1371,7 +1423,7 @@ mod tests {
 
         let state = state_for("newsroom-story");
         let view = state
-            .panes
+            .panes()
             .iter()
             .find_map(|pane| pane.news.as_ref())
             .expect("the feed pane");
@@ -1385,7 +1437,7 @@ mod tests {
         // The back scene: page 2, a story open, and the script's click is what closes it.
         let page_two = state_for("newsroom-story-back");
         let view = page_two
-            .panes
+            .panes()
             .iter()
             .find_map(|pane| pane.news.as_ref())
             .expect("the feed pane");
@@ -1462,7 +1514,11 @@ mod tests {
                 "newsroom-page-2",
                 // A story's provenance (#137): a row pressed, and the list returned to by `back`.
                 "newsroom-story",
-                "newsroom-story-back"
+                "newsroom-story-back",
+                // Workspaces (#138): the chips, the empty state, and a switch by a pointer.
+                "workspaces",
+                "workspaces-empty",
+                "workspaces-switch"
             ]
         );
         for name in names() {
@@ -1471,7 +1527,14 @@ mod tests {
                 assert!(state.picture.is_empty());
                 continue;
             }
-            if !state.panes.iter().any(|pane| pane.content.is_map()) {
+            // **Any pane, in any workspace** (#138): `workspaces-empty` has no map pane *on screen* and
+            // still loads the picture, because workspace 1 behind it holds the map panes that use it.
+            if !state
+                .workspaces
+                .iter()
+                .flat_map(|workspace| workspace.panes.iter())
+                .any(|pane| pane.content.is_map())
+            {
                 // A wall of feeds has no picture: nothing in it projects, so loading the fixture would
                 // be a picture nothing draws — and the header would claim 40 units the wall cannot show.
                 assert!(
@@ -1483,7 +1546,7 @@ mod tests {
             assert_eq!(state.picture.len(), 40, "{name} loads the fixture");
         }
         let card = state_for("card-open");
-        let focused = card.layout.focused();
+        let focused = card.focused();
         assert_eq!(
             card.selected_in(focused),
             Some(CARD_UNIT),
@@ -1494,9 +1557,9 @@ mod tests {
         // Multi View's witness: one pane per entry in `PANES`, at that entry's zoom, and the focus on
         // the one the constant names.
         let panes = state_for("panes");
-        assert_eq!(panes.panes.len(), PANES.len(), "one pane per camera");
+        assert_eq!(panes.pane_count(), PANES.len(), "one pane per camera");
         for (index, (id_unit, zoom)) in PANES.iter().enumerate() {
-            let id = panes.layout.ids()[index];
+            let id = panes.pane_ids()[index];
             let pane = panes.pane(id).expect("the scene's pane");
             assert_eq!(pane.camera.zoom, *zoom, "pane {index} is at its own zoom");
             let hull = panes
@@ -1513,16 +1576,16 @@ mod tests {
             );
         }
         assert_eq!(
-            panes.layout.focused(),
-            panes.layout.ids()[PANES_FOCUSED],
+            panes.focused(),
+            panes.pane_ids()[PANES_FOCUSED],
             "the focus is on the pane the constant names"
         );
 
         // The range witness (#115): one hull, two panes, one of each representation — and the decoded
         // bytes are the wall's, so a pane that switches representation is the latch and nothing else.
         let range = state_for("panes-range");
-        assert_eq!(range.panes.len(), 2, "a pane for each representation");
-        let focused = range.layout.focused();
+        assert_eq!(range.pane_count(), 2, "a pane for each representation");
+        let focused = range.focused();
         let focused_pane = range.pane(focused).expect("the focused pane");
         assert_eq!(
             focused_pane.view.range,
@@ -1531,7 +1594,7 @@ mod tests {
         );
         assert!(
             range
-                .panes
+                .panes()
                 .iter()
                 .filter(|pane| pane.id != focused)
                 .all(|pane| pane.view.range == crate::units::mark::Range::Symbol),
@@ -1573,8 +1636,12 @@ mod tests {
             objects.assets.values().all(|asset| asset.is_ready()),
             "the artwork is decoded before the first frame (INV-11)"
         );
-        assert_eq!(objects.panes.len(), 2, "two panes at two zooms");
-        for (pane, zoom) in objects.panes.iter().zip([OBJECTS_ZOOMS.0, OBJECTS_ZOOMS.1]) {
+        assert_eq!(objects.pane_count(), 2, "two panes at two zooms");
+        for (pane, zoom) in objects
+            .panes()
+            .iter()
+            .zip([OBJECTS_ZOOMS.0, OBJECTS_ZOOMS.1])
+        {
             assert_eq!(pane.camera.zoom, zoom, "each pane holds its own zoom");
             assert!(
                 (pane.camera.center.0 - OBJECTS_CENTRE.0).abs() < 1e-9
@@ -1588,7 +1655,7 @@ mod tests {
         // the buoy's domain. The vocabularies came through the reply path, so the panel is the wire's
         // rows; the panel is open on the pane that was filtered.
         let filtered = state_for("panes-filter");
-        assert_eq!(filtered.panes.len(), 2, "two panes on one water");
+        assert_eq!(filtered.pane_count(), 2, "two panes on one water");
         let first = filtered.pane_rects()[0].0;
         let second = filtered.pane_rects()[1].0;
         let buoy = filtered
@@ -1646,7 +1713,7 @@ mod tests {
             crate::ui::tokens::FILTER_MAX_H,
             "this vocabulary is taller than the panel, so it scrolls inside its maximum"
         );
-        for pane in &filtered.panes {
+        for pane in filtered.panes() {
             assert_eq!(
                 pane.camera.zoom, PANES_FILTER_ZOOM,
                 "one zoom in both panes"
@@ -1670,7 +1737,7 @@ mod tests {
                 .any(|row| row.coordinates().is_none()),
             "one row has no position, which is a real state and not a mark"
         );
-        assert_eq!(facilities.panes.len(), 2, "two zooms on one water");
+        assert_eq!(facilities.pane_count(), 2, "two zooms on one water");
         let located = facilities
             .installations
             .iter()
@@ -1696,7 +1763,7 @@ mod tests {
                 "no facility is drawn at the origin"
             );
         }
-        let first = facilities.layout.focused();
+        let first = facilities.focused();
         let second = facilities
             .pane_rects()
             .into_iter()
@@ -1718,8 +1785,8 @@ mod tests {
         // supreme command. The forest is a forest — two roots — and the supreme command is vacant on
         // this deployment, which draws its post and no invented name.
         let command = state_for("pane-tree");
-        assert_eq!(command.panes.len(), 2, "a tree pane beside a map pane");
-        let ids = command.layout.ids();
+        assert_eq!(command.pane_count(), 2, "a tree pane beside a map pane");
+        let ids = command.pane_ids();
         let tree = ids[1];
         assert!(
             matches!(
@@ -1736,7 +1803,7 @@ mod tests {
                 .is_some_and(|pane| pane.content.is_map()),
             "the first pane is still the map"
         );
-        assert_eq!(command.layout.focused(), tree, "the new pane has the keys");
+        assert_eq!(command.focused(), tree, "the new pane has the keys");
         let detail = command
             .organisation_trees
             .get(&TREE_ORGANISATION)

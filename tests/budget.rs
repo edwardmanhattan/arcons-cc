@@ -129,7 +129,7 @@ fn budget_four_panes_pan_frame_cpu() {
     let camera = Camera::new((-6.108, 106.910), 11.0);
     let (w, h) = PANE_SIZE;
     // Four panes, tiled like a wall: split twice, then the right half again.
-    let first = state.layout.ids()[0];
+    let first = state.pane_ids()[0];
     let mut ids = vec![first];
     for index in 1..PANES {
         let from = ids[index - 1];
@@ -146,8 +146,8 @@ fn budget_four_panes_pan_frame_cpu() {
             pane.frame = Some(frame);
         }
     }
-    state.layout.focus(ids[0]);
-    assert_eq!(state.panes.len(), PANES, "four panes");
+    state.focus_pane(ids[0]);
+    assert_eq!(state.pane_count(), PANES, "four panes");
 
     let mut runtime = rune::Runtime::new(
         state,
@@ -175,7 +175,7 @@ fn budget_four_panes_pan_frame_cpu() {
         let moved = Camera::new((-6.108, 106.910 + step), 11.0);
         // A pan on the FOCUSED pane only: the other three keep their cameras, which is the workload a
         // tiled wall actually has while the operator works one pane.
-        let focused = runtime.state.layout.focused();
+        let focused = runtime.state.focused();
         if let Some(pane) = runtime.state.pane_mut(focused) {
             pane.camera = moved;
             if let Some(frame) = pane.frame {
@@ -276,5 +276,119 @@ fn budget_200_markers_pan_zoom_frame_cpu() {
         reference_ms < LIMIT_MS,
         "INV-12: {per_frame_ms:.3} ms per frame with 200 markers is {reference_ms:.3} ms on the reference \
          machine (×{factor:.2}), which exceeds the {LIMIT_MS} ms budget"
+    );
+}
+
+/// **`INV-12`, restated for workspaces** (#138): three workspaces are not three walls' frames.
+///
+/// Only the active workspace is in the element tree, so the frame cost of a wall with two hidden
+/// workspaces behind it must be the same wall's cost — the same panes, the same 200 markers, the same
+/// tree. What a hidden workspace *does* cost is what it holds: its panes' structs (small) and, on a wall
+/// with the map engine, their threads — which `apply_cadence` parks at `HIDDEN_INTERVAL` so they render
+/// nothing. The switch is measured too: it sets an index, ends any held interaction and asks for one
+/// redraw.
+///
+/// **What this does not measure**: RSS with the map engine. The gate does not build the engine
+/// (`scripts/verify.sh` names that hole), so the number below is the drawing cost, and the thread cost
+/// is a property of the cadence constants rather than a measurement. Say so rather than implying it.
+#[test]
+#[ignore = "budget: scripts/verify.sh runs it by name"]
+fn budget_three_workspaces_cost_one_walls_frames() {
+    fn wall(state: &mut State) {
+        let camera = Camera::new((-6.108, 106.910), 11.0);
+        let first = state.pane_ids()[0];
+        let mut ids = vec![first];
+        for index in 1..PANES {
+            let from = ids[index - 1];
+            let id = state.split_pane(from, camera).expect("a split");
+            ids.push(id);
+        }
+        for (id, rect) in state.pane_rects() {
+            let frame = arcons_cc::ui::view::synthetic_frame(camera, rect, 1.0);
+            if let Some(pane) = state.pane_mut(id) {
+                pane.camera = camera;
+                pane.frame = Some(frame);
+            }
+        }
+        state.focus_pane(ids[0]);
+    }
+
+    /// Give a workspace **one pane nobody is looking at**, with the id the wall allocates: the shape the
+    /// move ticket leaves behind, and the one this measurement is about.
+    fn fill(state: &mut State, index: usize) {
+        let id = state.allocate_pane();
+        let pane = arcons_cc::ui::Pane::newsroom(id, Camera::new((-6.108, 106.910), 11.0));
+        let workspace = &mut state.workspaces[index];
+        workspace.layout = Some(arcons_cc::ui::view::Layout::single_with(id));
+        workspace.panes.push(pane);
+    }
+
+    fn per_frame(state: State) -> f64 {
+        let (w, h) = PANE_SIZE;
+        let mut runtime = rune::Runtime::new(
+            state,
+            arcons_cc::ui::view,
+            (f64::from(w) as f32 * 2.0, f64::from(h) as f32 * 2.0),
+            rune::Env {
+                system_dark: true,
+                scale: 1.0,
+            },
+        );
+        runtime.frame(0.0);
+        const FRAMES: u32 = 60;
+        let started = Instant::now();
+        for _ in 0..FRAMES {
+            runtime.frame(1.0 / 60.0);
+        }
+        started.elapsed().as_secs_f64() * 1000.0 / f64::from(FRAMES)
+    }
+
+    let mut one = State::new(picture_with(200));
+    one.panel = Some((
+        f64::from(PANE_SIZE.0) as f32 * 2.0,
+        f64::from(PANE_SIZE.1) as f32 * 2.0,
+    ));
+    wall(&mut one);
+    let alone = per_frame(one);
+
+    let mut three = State::new(picture_with(200));
+    three.panel = Some((
+        f64::from(PANE_SIZE.0) as f32 * 2.0,
+        f64::from(PANE_SIZE.1) as f32 * 2.0,
+    ));
+    wall(&mut three);
+    assert_eq!(
+        three.workspaces.len(),
+        3,
+        "the default wall has three workspaces"
+    );
+    fill(&mut three, 1);
+    fill(&mut three, 2);
+
+    // The switch's own cost, on the state rather than through a frame: an index, an interaction ended,
+    // one redraw asked for. It must not walk the panes or wake a thread.
+    let started = Instant::now();
+    let mut switches = 0;
+    for index in [1usize, 0, 2, 0] {
+        if three.switch_to(index) {
+            switches += 1;
+        }
+    }
+    let switch_us = started.elapsed().as_secs_f64() * 1_000_000.0 / f64::from(switches);
+
+    let with_three = per_frame(three);
+    let factor = machine_factor();
+    let allowance = alone * 1.25 + 0.05;
+    println!(
+        "INV-12 (#138): {alone:.3} ms frame CPU for one workspace of {PANES} panes, {with_three:.3} ms \
+         with two more workspaces behind it (machine ×{factor:.2}; allowance {allowance:.3} ms), and \
+         {switch_us:.2} µs to switch workspace. Hidden workspaces are not in the element tree; their \
+         map threads are parked at HIDDEN_INTERVAL. RSS with the map engine is not measured here."
+    );
+    assert!(
+        with_three <= allowance,
+        "INV-12: two hidden workspaces cost {with_three:.3} ms of frame CPU against {alone:.3} ms for \
+         the same wall alone — they are not drawn, so the tree should be the same size and the frames \
+         should cost the same"
     );
 }

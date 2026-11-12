@@ -43,7 +43,11 @@ use crate::live::LiveThread;
 use crate::map::geometry::Camera;
 use crate::units::Picture;
 
-/// The window title, and the wordmark's text.
+/// The **window title** — what a window manager and a task bar read.
+///
+/// It is no longer the wordmark's text: since #138 the header draws the **active workspace's name** where
+/// the app's name used to be, because that is the operator's question ("where am I?") and the app's name
+/// is what the window already says.
 pub const TITLE: &str = "Arcons Command Center";
 
 /// **What a pane is** (#116): a map, or a chain of command.
@@ -365,9 +369,14 @@ pub struct State {
     ///
     /// Each pane owns its camera, its map thread and the frame that thread last drew — which is what
     /// makes `INV-04` a per-pane claim: a marker projects against **its pane's** frame, never another's.
-    pub panes: Vec<Pane>,
-    /// How the panes tile, and which one the operator is working in.
-    pub layout: Layout,
+    /// **The workspaces, in the order the chips draw** (#138). The active one is the wall on screen; the
+    /// others keep their panes, cameras and frames, and their map threads are told to stand down.
+    pub workspaces: Vec<Workspace>,
+    /// Which workspace is active, as an index into [`State::workspaces`].
+    pub active: usize,
+    /// **One id space for every pane on the wall** (#138). A layout does not mint ids any more: a pane
+    /// that moves to another workspace keeps its number, and two tilings must not both hand out 2.
+    next_pane: ViewId,
     /// The picture panel's size in points, from its own layout. `None` until the first layout pass, when
     /// the panes are drawn into a provisional viewport the size of the window.
     pub panel: Option<(f32, f32)>,
@@ -522,8 +531,15 @@ impl Default for State {
         };
         Self {
             picture: Picture::default(),
-            panes: vec![Pane::new(1, camera)],
-            layout: Layout::single(),
+            // **Three workspaces, the operator's default** (#138): the first holds the pane the wall
+            // has always opened with, the other two are places panes can be put.
+            workspaces: vec![
+                Workspace::with_pane("Workspace 1".to_string(), Pane::new(1, camera)),
+                Workspace::empty("Workspace 2".to_string()),
+                Workspace::empty("Workspace 3".to_string()),
+            ],
+            active: 0,
+            next_pane: 2,
             settings: crate::config::settings::Settings::default(),
 
             scale: 1.0,
@@ -646,11 +662,11 @@ impl State {
 
     /// The pane the operator is working in. There is always one: closing the last pane is refused.
     pub fn focused_pane(&self) -> &Pane {
-        let id = self.layout.focused();
+        let id = self.focused();
         self.pane(id).unwrap_or_else(|| {
             // A layout naming a pane that is gone is a bug in the tree, not in the drawing; fall back
             // rather than panic in a view function, which would take the wall down at 2 a.m.
-            let first = self.layout.ids().first().copied().unwrap_or(1);
+            let first = self.pane_ids().first().copied().unwrap_or(1);
             self.pane(first).unwrap_or_else(|| {
                 static FALLBACK: std::sync::OnceLock<Pane> = std::sync::OnceLock::new();
                 FALLBACK.get_or_init(|| Pane::new(1, Camera::START))
@@ -658,21 +674,48 @@ impl State {
         })
     }
 
-    pub fn focused_pane_mut(&mut self) -> &mut Pane {
-        let id = self.layout.focused();
-        if !self.panes.iter().any(|pane| pane.id == id)
-            && let Some(first) = self.layout.ids().first().copied()
+    /// The focused pane, for a caller that is writing to it. `None` on a workspace with no panes: there
+    /// is no pane to write to, and a workspace is allowed to be empty (#138).
+    pub fn focused_pane_mut(&mut self) -> Option<&mut Pane> {
+        let id = self.focused();
+        if !self.panes().iter().any(|pane| pane.id == id)
+            && let Some(first) = self.pane_ids().first().copied()
         {
-            self.layout.focus(first);
+            self.focus_pane(first);
         }
-        let id = self.layout.focused();
-        if let Some(index) = self.panes.iter().position(|pane| pane.id == id) {
-            &mut self.panes[index]
-        } else {
-            self.panes.push(Pane::new(id, Camera::START));
-            let index = self.panes.len() - 1;
-            &mut self.panes[index]
+        let id = self.focused();
+        let index = self.panes().iter().position(|pane| pane.id == id)?;
+        self.panes_mut().get_mut(index)
+    }
+
+    /// **Switch workspaces** (#138): the wall on screen becomes another one.
+    ///
+    /// The interaction is ended rather than carried across: a menu, a filter panel or a rename names a
+    /// pane in the workspace it was opened on. Hidden workspaces' maps stand down on the next frame
+    /// (`apply_cadence`), so three workspaces are not three walls rendering.
+    pub fn switch_to(&mut self, index: usize) -> bool {
+        if index >= self.workspaces.len() || index == self.active {
+            return false;
         }
+        self.end();
+        self.active = index;
+        #[cfg(feature = "map")]
+        {
+            // Force the cadence pass on the next frame: the pane count may not have changed.
+            self.cadenced = None;
+        }
+        self.layout_dirty = true;
+        true
+    }
+
+    /// **Append a workspace and switch to it** (#138) — the header's `+`. It is **empty**: a new
+    /// workspace is a place to put panes, not a copy of the one on screen.
+    pub fn add_workspace(&mut self) -> usize {
+        let index = self.workspaces.len();
+        self.workspaces
+            .push(Workspace::empty(format!("Workspace {}", index + 1)));
+        self.switch_to(index);
+        index
     }
 
     /// The pane a menu is open on, and where — `None` when no menu is open.
@@ -731,7 +774,7 @@ impl State {
 
     /// The pane drawn over the tiling, from the layout that owns it.
     pub fn maximised(&self) -> Option<ViewId> {
-        self.layout.maximised()
+        self.layout().and_then(|layout| layout.maximised())
     }
 
     /// **Enter a state, if the table allows it** (#101). Returns whether it happened, so a caller can do the
@@ -765,12 +808,134 @@ impl State {
         true
     }
 
+    /// The workspace on screen.
+    pub fn active(&self) -> &Workspace {
+        &self.workspaces[self.active]
+    }
+
+    pub fn active_mut(&mut self) -> &mut Workspace {
+        &mut self.workspaces[self.active]
+    }
+
+    /// The active workspace's tiling, or `None` when it holds no panes.
+    pub fn layout(&self) -> Option<&Layout> {
+        self.active().layout.as_ref()
+    }
+
+    pub fn layout_mut(&mut self) -> Option<&mut Layout> {
+        self.active_mut().layout.as_mut()
+    }
+
+    /// The active workspace's panes.
+    pub fn panes(&self) -> &[Pane] {
+        &self.active().panes
+    }
+
+    pub fn panes_mut(&mut self) -> &mut Vec<Pane> {
+        &mut self.active_mut().panes
+    }
+
+    /// **A pane, whichever workspace holds it** (#138): ids are the wall's, so looking one up is not a
+    /// question about the active workspace.
     pub fn pane(&self, id: ViewId) -> Option<&Pane> {
-        self.panes.iter().find(|pane| pane.id == id)
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| workspace.panes.iter())
+            .find(|pane| pane.id == id)
     }
 
     pub fn pane_mut(&mut self, id: ViewId) -> Option<&mut Pane> {
-        self.panes.iter_mut().find(|pane| pane.id == id)
+        self.workspaces
+            .iter_mut()
+            .flat_map(|workspace| workspace.panes.iter_mut())
+            .find(|pane| pane.id == id)
+    }
+
+    /// The next pane id on the wall. The only place one is minted (#138).
+    pub fn allocate_pane(&mut self) -> ViewId {
+        let id = self.next_pane;
+        self.next_pane += 1;
+        id
+    }
+
+    // **Thin questions the view asks of the tiling.** They exist so two hundred call sites do not each
+    // unwrap an `Option<Layout>`; the ones that must handle an empty workspace ask `layout()` instead
+    // (`maximised`, the picture panel). On an empty workspace these answer "no panes" — `focused()`
+    // names no pane, so every lookup of it returns `None` rather than a wrong pane.
+    pub fn focused(&self) -> ViewId {
+        self.layout().map(|layout| layout.focused()).unwrap_or(0)
+    }
+
+    pub fn focus_pane(&mut self, id: ViewId) -> bool {
+        self.layout_mut().is_some_and(|layout| layout.focus(id))
+    }
+
+    pub fn pane_ids(&self) -> Vec<ViewId> {
+        self.layout().map(|layout| layout.ids()).unwrap_or_default()
+    }
+
+    pub fn pane_count(&self) -> usize {
+        self.layout().map(|layout| layout.len()).unwrap_or(0)
+    }
+
+    pub fn is_single_pane(&self) -> bool {
+        self.layout().is_some_and(|layout| layout.is_single())
+    }
+
+    pub fn pane_rect(&self, id: ViewId) -> Option<Rect> {
+        self.layout()?.rect_of(self.pane_viewport(), id)
+    }
+
+    pub fn set_ratio(&mut self, border: &view::Border, ratio: f32) -> bool {
+        self.layout_mut()
+            .is_some_and(|layout| layout.set_ratio(border, ratio))
+    }
+
+    pub fn border_at(&self, at: (f32, f32), grip: f32) -> Option<view::Border> {
+        self.layout()?.border_at(self.pane_viewport(), at, grip)
+    }
+
+    pub fn borders(&self) -> Vec<view::Border> {
+        self.layout()
+            .map(|layout| layout.borders(self.pane_viewport()))
+            .unwrap_or_default()
+    }
+
+    pub fn drop_for(&self, dragged: ViewId, at: (f32, f32)) -> Option<view::Drop> {
+        self.layout()?.drop_for(self.pane_viewport(), dragged, at)
+    }
+
+    pub fn preview(&self, drop: view::Drop) -> Option<Layout> {
+        self.layout()?.preview(drop)
+    }
+
+    pub fn apply_drop(&mut self, drop: view::Drop) -> bool {
+        self.layout_mut().is_some_and(|layout| layout.apply(drop))
+    }
+
+    pub fn maximise(&mut self, id: ViewId) -> bool {
+        self.layout_mut().is_some_and(|layout| layout.maximise(id))
+    }
+
+    pub fn restore_tiling(&mut self) {
+        if let Some(layout) = self.layout_mut() {
+            layout.restore();
+        }
+    }
+
+    /// Remove a pane from the active workspace: its slot collapses and its map thread is dropped.
+    ///
+    /// **The last pane of a workspace is still refused** — closing a workspace's last pane and landing
+    /// the focus on another workspace is #141's rule, and it is a different ticket. What #138 makes
+    /// expressible is a workspace that was *never* given a pane, or whose panes were moved away by the
+    /// move ticket: `Workspace::empty` is a valid state, and `layout()` answers `None` for it.
+    pub fn close_pane(&mut self, id: ViewId) -> bool {
+        if !self.layout_mut().is_some_and(|layout| layout.close(id)) {
+            return false;
+        }
+        self.panes_mut().retain(|pane| pane.id != id);
+        self.layout_dirty = true;
+        true
     }
 
     /// The focused pane's camera: what a gesture on the wall moves.
@@ -785,7 +950,9 @@ impl State {
     }
 
     pub fn set_camera(&mut self, camera: Camera) {
-        self.focused_pane_mut().camera = camera;
+        if let Some(pane) = self.focused_pane_mut() {
+            pane.camera = camera;
+        }
     }
 
     pub fn set_camera_of(&mut self, id: ViewId, camera: Camera) {
@@ -801,7 +968,9 @@ impl State {
 
     /// A frame for a scene or a test, on the focused pane. A wall's frames come from the map thread.
     pub fn set_frame(&mut self, frame: crate::map::geometry::Rendered) {
-        self.focused_pane_mut().frame = Some(frame);
+        if let Some(pane) = self.focused_pane_mut() {
+            pane.frame = Some(frame);
+        }
         self.layout_dirty = true;
     }
 
@@ -816,7 +985,9 @@ impl State {
     /// Where each pane is drawn, from the same function `verify` checks a capture with — the layout's
     /// cells, pulled in by the gap the operator chose (#82).
     pub fn pane_rects(&self) -> Vec<(ViewId, Rect)> {
-        view::panes_on(&self.layout, self.pane_viewport(), self.settings.pane_gap)
+        self.layout()
+            .map(|layout| view::panes_on(layout, self.pane_viewport(), self.settings.pane_gap))
+            .unwrap_or_default()
     }
 
     /// One fix's wait for a frame: recorded, and said out loud when it breaks v0.1's promise (#1).
@@ -877,19 +1048,20 @@ impl State {
         camera: Camera,
         content: PaneContent,
     ) -> Option<ViewId> {
-        let rect = self
-            .layout
-            .rect_of(self.pane_viewport(), target)
-            .unwrap_or(Rect {
-                x: 0.0,
-                y: 0.0,
-                w: self.pane_viewport().w as f32,
-                h: self.pane_viewport().h as f32,
-            });
-        let id = self.layout.split(target, rect.longer_edge())?;
+        let rect = self.pane_rect(target).unwrap_or(Rect {
+            x: 0.0,
+            y: 0.0,
+            w: self.pane_viewport().w as f32,
+            h: self.pane_viewport().h as f32,
+        });
+        // **The wall mints the id** (#138), not the layout: a pane that moves between workspaces keeps
+        // its number, and two tilings must not both hand out 2.
+        let id = self.allocate_pane();
+        let dir = rect.longer_edge();
+        self.layout_mut()?.split_with(target, dir, id)?;
         #[cfg(feature = "map")]
         let is_map = content.is_map();
-        self.panes.push(match content {
+        self.panes_mut().push(match content {
             PaneContent::Map => Pane::new(id, camera),
             PaneContent::Tree { organisation } => Pane::tree(id, camera, organisation),
             PaneContent::Newsroom => Pane::newsroom(id, camera),
@@ -900,8 +1072,7 @@ impl State {
             // so a pane is not a special case of a pane (`#68`).
             let viewport = self.pane_viewport();
             let half = self
-                .layout
-                .rect_of(viewport, id)
+                .pane_rect(id)
                 .map(|rect| (rect.w, rect.h))
                 .unwrap_or((viewport.w as f32, viewport.h as f32));
             if let Some(pane) = self.pane_mut(id) {
@@ -926,7 +1097,7 @@ impl State {
     pub fn pane_frames(&self) -> Vec<u64> {
         #[cfg(feature = "map")]
         {
-            self.panes
+            self.panes()
                 .iter()
                 .map(|pane| pane.map.as_ref().map(|map| map.frames()).unwrap_or(0))
                 .collect()
@@ -941,14 +1112,21 @@ impl State {
     /// others at a quarter of it (#71).
     #[cfg(feature = "map")]
     pub fn apply_cadence(&self) {
-        let focused = self.layout.focused();
-        for pane in &self.panes {
-            if let Some(map) = &pane.map {
-                map.set_cadence(if pane.id == focused {
-                    crate::map::thread::IDLE_INTERVAL
-                } else {
-                    crate::map::thread::UNFOCUSED_INTERVAL
-                });
+        // **Three workspaces are not three walls rendering** (#138): only the active workspace's panes
+        // get a cadence; every hidden one is paused, so a switch is the only thing that wakes it.
+        for (index, workspace) in self.workspaces.iter().enumerate() {
+            let active = index == self.active;
+            let focused = workspace.layout.as_ref().map(|layout| layout.focused());
+            for pane in &workspace.panes() {
+                if let Some(map) = &pane.map {
+                    map.set_cadence(if !active {
+                        crate::map::thread::HIDDEN_INTERVAL
+                    } else if Some(pane.id) == focused {
+                        crate::map::thread::IDLE_INTERVAL
+                    } else {
+                        crate::map::thread::UNFOCUSED_INTERVAL
+                    });
+                }
             }
         }
     }
@@ -960,9 +1138,11 @@ impl State {
     /// shuts down, and the reason it is a named function rather than a hope about drop order.
     pub fn close_maps(&mut self) {
         #[cfg(feature = "map")]
-        for pane in &mut self.panes {
-            // Dropping the handle stops the thread and joins it.
-            pane.map = None;
+        for workspace in &mut self.workspaces {
+            for pane in &mut workspace.panes() {
+                // Dropping the handle stops the thread and joins it.
+                pane.map = None;
+            }
         }
     }
 
@@ -992,7 +1172,7 @@ impl State {
     /// There is no wall-wide selection to read any more (#99): the focus ring says which pane the keys
     /// are in, and this follows it.
     pub fn selection(&self) -> Option<i64> {
-        self.selected_in(self.layout.focused())
+        self.selected_in(self.focused())
     }
 
     /// The hull **one pane** is asking about.
@@ -1223,6 +1403,43 @@ pub enum Link {
     Failed(String),
 }
 
+/// **A named, independent tiling of panes** (#138). One is active at a time.
+///
+/// A workspace owns its panes and the layout that tiles them, so two workspaces have two cameras, two
+/// focus rings and two tilings. **Empty is valid**: `layout` is `None` and `panes` is empty, and the
+/// picture panel says "No panes yet." — a workspace is a place panes *can* be, not a place panes are.
+///
+/// Pane ids are **not** the layout's: `State::next_pane` mints them for the whole wall, so a pane can be
+/// moved between workspaces and keep its id, its map thread and its frame.
+pub struct Workspace {
+    pub name: String,
+    /// The tiling, or `None` when this workspace holds no panes. There is no "empty layout": a layout
+    /// with no panes would be a tiling of nothing, which is what `None` says.
+    pub layout: Option<Layout>,
+    pub panes: Vec<Pane>,
+}
+
+impl Workspace {
+    /// A workspace with one pane and its tiling: the wall as it opens.
+    pub fn with_pane(name: String, pane: Pane) -> Self {
+        let layout = Layout::single_with(pane.id);
+        Self {
+            name,
+            layout: Some(layout),
+            panes: vec![pane],
+        }
+    }
+
+    /// A workspace with nowhere to put a pane yet: the state the operator asked for.
+    pub fn empty(name: String) -> Self {
+        Self {
+            name,
+            layout: None,
+            panes: Vec::new(),
+        }
+    }
+}
+
 /// The whole window.
 pub fn view(state: &State, cx: &mut Cx<State>) -> El {
     // The first frame is where the scale is known. `view` gets `&State`, so the camera and the map
@@ -1240,8 +1457,8 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
     // The pane count is in the header as soon as there is more than one (#71): a tiled wall should say
     // how many pictures it is showing, and "panes=3" next to "127 units" is the line a reader needs when
     // one of them is not drawing.
-    let units = if state.panes.len() > 1 {
-        format!("{units} · panes={}", state.panes.len())
+    let units = if state.pane_count() > 1 {
+        format!("{units} · panes={}", state.pane_count())
     } else {
         units
     };
@@ -1278,12 +1495,15 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
     let header = row()
         .w_full()
         .gap(tokens::GAP)
+        // **The active workspace's name, where the wordmark was** (#138): the operator's arrow. The app's
+        // own name stays the *window* title (`TITLE`), which is where a window manager looks for it.
         .child(
-            text(TITLE)
-                .key("wordmark")
+            text(state.active().name.clone())
+                .key("workspace-title")
                 .font(tokens::WORDMARK)
                 .color(tokens::accent()),
         )
+        .child(workspace_chips(state))
         .child(spacer())
         .child(
             text(link)
@@ -1367,6 +1587,85 @@ pub const TREE_LABEL: &str = "chain of command";
 /// What the header's newsroom control says (#136). A word, like the two beside it.
 pub const NEWSROOM_LABEL: &str = "newsroom";
 
+/// What an empty workspace says, where the picture would be (#138): a state, not an error and not a
+/// placeholder for a read that failed.
+pub const NO_PANES: &str = "No panes yet.";
+
+/// The workspace chips and the `+` (#138): a selector, in the header, after the workspace's name.
+///
+/// A chip is Rune's workspace glyph and its number; the active one is raised (the name plate's fill and
+/// the focus edge, the ink of the words on it), the others are dim. The a11y shape is a tab list, because
+/// that is what the operator is choosing between — a `rune-kit::TabStrip` is for document tabs with drag
+/// and tear-out, none of which a workspace selector wants, so this borrows the visuals and not the widget.
+fn workspace_chips(state: &State) -> El {
+    let mut chips = row()
+        .key("workspace-chips")
+        .h(tokens::CHIP_H)
+        .items_center()
+        .gap(tokens::CHIP_GAP)
+        .role("tablist")
+        .label("Workspaces");
+    for index in 0..state.workspaces.len() {
+        let active = index == state.active;
+        let ink = if active {
+            tokens::ink()
+        } else {
+            tokens::ink_dim()
+        };
+        chips = chips.child(
+            row()
+                .key(format!("workspace-chip-{index}"))
+                .h(tokens::CHIP_H)
+                .px(tokens::CHIP_PAD)
+                .radius(tokens::CHIP_H / 2.0)
+                .items_center()
+                .gap(tokens::CHIP_PAD / 2.0)
+                .fill(if active {
+                    tokens::name_plate()
+                } else {
+                    tokens::clear()
+                })
+                .border(
+                    tokens::HAIRLINE,
+                    if active {
+                        tokens::focus_edge()
+                    } else {
+                        tokens::hairline()
+                    },
+                )
+                .role("tab")
+                .checked(active)
+                .label(state.workspaces[index].name.clone())
+                .on_press(move |state: &mut State| {
+                    if state.switch_to(index) {
+                        state.layout_dirty = true;
+                    }
+                })
+                .child(
+                    rune::icon(&icons::WORKSPACE, tokens::CHIP_ICON)
+                        .key(format!("workspace-chip-icon-{index}"))
+                        .color(ink),
+                )
+                .child(
+                    text(format!("{}", index + 1))
+                        .key(format!("workspace-chip-label-{index}"))
+                        .font(tokens::LABEL)
+                        .color(ink),
+                ),
+        );
+    }
+    chips.child(
+        rune::icon(&icons::WORKSPACE_NEW, tokens::CHIP_ICON)
+            .key("workspace-new")
+            .color(tokens::ink_dim())
+            .help("New workspace")
+            .on_press(|state: &mut State| {
+                state.add_workspace();
+                state.layout_dirty = true;
+            }),
+    )
+}
+
 /// The header's tree control (#116): **the chain of command in a pane of its own**.
 ///
 /// It splits the layout the way `Focus on new pane` does — the tree takes a pane beside the one the
@@ -1376,7 +1675,7 @@ pub const NEWSROOM_LABEL: &str = "newsroom";
 /// whole. `/tni-commander` is one post shared by every branch, so the supreme command is the single root
 /// and TNI AL, TNI AD and TNI AU are siblings under it, never children of one another.
 pub(crate) fn open_tree_pane(state: &mut State) {
-    let target = state.layout.focused();
+    let target = state.focused();
     let camera = state.camera_of(target);
     let content = PaneContent::Tree { organisation: None };
     if state.split_pane_as(target, camera, content).is_some() {
@@ -1391,7 +1690,7 @@ pub(crate) fn open_tree_pane(state: &mut State) {
 /// first read — so a one-pane wall gets its first newsroom the way a split wall gets another, and a
 /// second newsroom pane sits on its own tab and its own page.
 pub(crate) fn open_newsroom_pane(state: &mut State) {
-    let target = state.layout.focused();
+    let target = state.focused();
     let camera = state.camera_of(target);
     if let Some(id) = state.split_pane_as(target, camera, PaneContent::Newsroom) {
         // The first page is asked on **this** frame, and the reply lands between frames: the pane draws
@@ -1428,7 +1727,7 @@ pub(crate) fn open_newsroom_pane(state: &mut State) {
 fn ask_tree_reads(state: &mut State) {
     let mut wanted = Vec::new();
     let mut any_tree = false;
-    for pane in &state.panes {
+    for pane in state.panes() {
         if let PaneContent::Tree { organisation } = &pane.content {
             any_tree = true;
             match organisation {
@@ -1762,7 +2061,7 @@ fn filter_anchor(state: &State, pane: ViewId) -> String {
 
 /// A press on the filter toggle: open the panel, or close it if this pane's is already open.
 fn toggle_filter(state: &mut State, pane: ViewId) {
-    state.layout.focus(pane);
+    state.focus_pane(pane);
     if state.filtering() == Some(pane) {
         state.end();
     } else {
@@ -1944,7 +2243,18 @@ fn picture(state: &State, scale: f32) -> El {
         })
         .on_layout(|state: &mut State, [_, _, width, height]| panel_laid_out(state, width, height));
 
-    let mut body = if state.layout.is_single() {
+    // **An empty workspace is a state, not a failure** (#138): there is no tiling to draw, so the panel
+    // says where panes would be. The header, the chips and the settings sheet are outside this panel and
+    // draw as they always do.
+    if state.layout().is_none() {
+        return body.center().gap(tokens::EMPTY_GAP).child(
+            text(NO_PANES)
+                .key("no-panes")
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim()),
+        );
+    }
+    let mut body = if state.is_single_pane() {
         match state.pane_rects().into_iter().next() {
             Some((id, rect)) => single_pane(state, id, rect, scale, body),
             None => return body,
@@ -1987,7 +2297,7 @@ fn gutters(state: &State, body: El) -> El {
         return body;
     }
     let mut body = body;
-    for border in state.layout.borders(state.pane_viewport()) {
+    for border in state.borders() {
         let rect = border.gutter(gap);
         if rect.w <= 0.0 || rect.h <= 0.0 {
             continue;
@@ -2035,7 +2345,7 @@ fn single_pane(state: &State, id: ViewId, rect: Rect, scale: f32, body: El) -> E
 /// One pane: its picture, its markers, its own frame, the handle that moves it, and the ring that says
 /// the keys are here.
 fn pane(state: &State, id: ViewId, rect: Rect, scale: f32) -> El {
-    let focused = state.layout.focused() == id;
+    let focused = state.focused() == id;
     // A pane with space around it is a surface of its own, so it is rounded; a pane that shares a border
     // with its neighbour is a piece of one surface, and rounds nothing (#82).
     let gapped = state.settings.pane_gap > 0.0;
@@ -2180,7 +2490,6 @@ fn handle(id: ViewId, rect: Rect) -> El {
 /// The drop is recomputed from the pointer each move and the **preview** layout is what draws the gap,
 /// so the gap is the place the pane lands — `Layout::preview` and `Layout::apply` are one operation.
 fn lift(state: &mut State, id: ViewId, rect: Rect, drag: &mut rune::Drag) {
-    let viewport = state.pane_viewport();
     // **The handle is its own element.** `Drag::x`/`y` are local to *it* (`runtime/input/gesture.rs`),
     // and the handle is a 28 × 4 box at the top centre of a pane that is itself at `rect` — so a drag
     // that skipped these offsets asked `drop_for` about a point near the window's top-left corner, which
@@ -2192,10 +2501,10 @@ fn lift(state: &mut State, id: ViewId, rect: Rect, drag: &mut rune::Drag) {
                 pane: id,
                 drop: None,
             }));
-            state.layout.focus(id);
+            state.focus_pane(id);
         }
         rune::Phase::Move => {
-            let drop = state.layout.drop_for(viewport, id, at);
+            let drop = state.drop_for(id, at);
             if let Interaction::Lifted(drag) = &mut state.interaction
                 && drag.drop != drop
             {
@@ -2207,7 +2516,7 @@ fn lift(state: &mut State, id: ViewId, rect: Rect, drag: &mut rune::Drag) {
             let drop = state.dragging().and_then(|drag| drag.drop);
             state.end();
             if let Some(drop) = drop
-                && state.layout.apply(drop)
+                && state.apply_drop(drop)
             {
                 state.end();
             }
@@ -2237,8 +2546,12 @@ fn ghost(state: &State, scale: f32, body: El) -> El {
         return body;
     };
     let Some(drop) = drag.drop else { return body };
-    let Some(landing) = view::landing_rect(&state.layout, drop, state.pane_viewport(), drag.pane)
-    else {
+    let Some(landing) = view::landing_rect(
+        state.layout().expect("the scene has a tiling"),
+        drop,
+        state.pane_viewport(),
+        drag.pane,
+    ) else {
         return body;
     };
     let Some(pane) = state.pane(drag.pane) else {
@@ -2592,7 +2905,7 @@ pub(crate) fn pane_laid_out(state: &mut State, id: ViewId, width: f32, height: f
             return;
         }
     }
-    if state.layout.is_single() {
+    if state.is_single_pane() {
         return;
     }
     let Some(pane) = state.pane_mut(id) else {
@@ -2615,7 +2928,7 @@ fn menu_view(state: &State, scale: f32, body: El) -> El {
         return body;
     };
     let viewport = state.pane_viewport();
-    let Some(rect) = state.layout.rect_of(viewport, menu.pane).map(|rect| {
+    let Some(rect) = state.pane_rect(menu.pane).map(|rect| {
         if state.maximised() == Some(menu.pane) {
             // A right-click on the full-size picture is a right-click on the picture the operator is
             // looking at, so the menu opens on that rectangle and not on the slot behind the scrim.
@@ -2675,11 +2988,11 @@ fn begin_rename(state: &mut State, pane: ViewId) {
 /// toggle calls the same function, in one press.
 fn full_size_from_menu(state: &mut State, pane: ViewId) {
     state.end();
-    if !state.layout.maximise(pane) {
+    if !state.maximise(pane) {
         return;
     }
     // The keys and the highest cadence belong to the pane being looked at (`#71`).
-    state.layout.focus(pane);
+    state.focus_pane(pane);
     if let Some(panel) = state.panel {
         resize_map(state, pane, panel, state.scale);
     }
@@ -2696,12 +3009,11 @@ fn restore_full_size(state: &mut State) {
     let Some(pane) = state.maximised() else {
         return;
     };
-    state.layout.restore();
+    state.restore_tiling();
     // The map goes back to the pane's own rectangle, not to whatever it was before: the tiling may have
     // been dragged while the pane was full size.
     if let Some(rect) = state
-        .layout
-        .rect_of(state.pane_viewport(), pane)
+        .pane_rect(pane)
         .map(|rect| view::inset_rect(rect, state.settings.pane_gap / 2.0))
     {
         let size = (rect.w.max(1.0), rect.h.max(1.0));
@@ -2779,7 +3091,7 @@ pub fn menu_items(state: &State, pane: ViewId) -> Vec<MenuItem> {
         key: "menu-rename",
         action: begin_rename,
     });
-    if state.layout.len() > 1 {
+    if state.pane_count() > 1 {
         items.push(MenuItem {
             label: MENU_CLOSE,
             key: "menu-close",
@@ -2824,7 +3136,7 @@ pub const ELLIPSIS: char = '…';
 #[cfg(feature = "map")]
 fn open_menu(state: &mut State, id: ViewId, event: &rune::PointerEvent, scale: f32) {
     let scale = if scale > 0.0 { scale } else { 1.0 };
-    state.layout.focus(id);
+    state.focus_pane(id);
     // Through the machine, so a right-click during a lift is refused rather than opening a surface the
     // operator's held pointer cannot reach (#101).
     state.begin(Begin::Menu {
@@ -2836,7 +3148,7 @@ fn open_menu(state: &mut State, id: ViewId, event: &rune::PointerEvent, scale: f
 /// A primary press in a pane: close the menu (the click was not for it) and focus the pane.
 #[cfg(feature = "map")]
 fn press_in(state: &mut State, id: ViewId) {
-    state.layout.focus(id);
+    state.focus_pane(id);
     // **A press on a pane's water clears that pane** (#99): the map underneath is that pane's, and the
     // press must not walk over to the pane that happens to have the keys.
     state.press_background(id);
@@ -2851,14 +3163,14 @@ fn press_in(state: &mut State, id: ViewId) {
 /// third split.
 fn close_from_menu(state: &mut State, id: ViewId) {
     state.end();
-    if !state.layout.close(id) {
+    if !state.close_pane(id) {
         // The last pane: nothing happened, and the menu said so by not offering it. A redraw keeps the
         // menu from being left open on a pane that is still there.
         state.layout_dirty = true;
         return;
     }
     // Dropping the pane's `LiveMap` stops its thread and joins it (the rule `close_maps` relies on).
-    state.panes.retain(|pane| pane.id != id);
+    state.panes_mut().retain(|pane| pane.id != id);
     state.layout_dirty = true;
 }
 
@@ -2980,7 +3292,7 @@ fn drag_pane(state: &mut State, id: ViewId, rect: Rect, drag: &mut rune::Drag, s
     match drag.phase {
         rune::Phase::Down => {
             let at = view::viewport_point(rect, (drag.start_x, drag.start_y));
-            begin_resize(state, viewport, at);
+            begin_resize(state, at);
             if state.resizing().is_none() {
                 drag_map(state, id, drag);
             }
@@ -2995,7 +3307,7 @@ fn drag_pane(state: &mut State, id: ViewId, rect: Rect, drag: &mut rune::Drag, s
                     Dir::Horizontal => pointer.0,
                     Dir::Vertical => pointer.1,
                 };
-                if state.layout.set_ratio(&border, border.ratio_for(pointer)) {
+                if state.set_ratio(&border, border.ratio_for(pointer)) {
                     state.layout_dirty = true;
                 }
                 let _ = scale;
@@ -3017,8 +3329,8 @@ fn drag_pane(state: &mut State, id: ViewId, rect: Rect, drag: &mut rune::Drag, s
 
 /// Begin holding the border under the pointer, if there is one (#69, and a state since #101): a press
 /// within a grip of a border is a border's, anywhere else is the map's.
-fn begin_resize(state: &mut State, viewport: crate::map::geometry::Viewport, at: (f32, f32)) {
-    let Some(border) = state.layout.border_at(viewport, at, state.pane_grip()) else {
+fn begin_resize(state: &mut State, at: (f32, f32)) {
+    let Some(border) = state.border_at(at, state.pane_grip()) else {
         return;
     };
     state.begin(Begin::Resize(border));
@@ -3031,11 +3343,10 @@ fn begin_resize(state: &mut State, viewport: crate::map::geometry::Viewport, at:
 /// to the viewport's — the same conversion `drag_pane` makes for a pane (#80). Every question the layout
 /// answers (`border_at`, `ratio_for`) is asked in the viewport's points.
 fn drag_gutter(state: &mut State, rect: Rect, drag: &mut rune::Drag) {
-    let viewport = state.pane_viewport();
     match drag.phase {
         rune::Phase::Down => {
             let at = view::viewport_point(rect, (drag.start_x, drag.start_y));
-            begin_resize(state, viewport, at);
+            begin_resize(state, at);
         }
         rune::Phase::Move => {
             let Some(border) = state.resizing() else {
@@ -3044,10 +3355,7 @@ fn drag_gutter(state: &mut State, rect: Rect, drag: &mut rune::Drag) {
             // A point, not a delta: the ratio follows the line the operator is holding, and a gesture
             // that leaves the gutter and comes back lands where the pointer is.
             let pointer = view::viewport_point(rect, (drag.x, drag.y));
-            if state
-                .layout
-                .set_ratio(&border, border.ratio_for(border.axis_of(pointer)))
-            {
+            if state.set_ratio(&border, border.ratio_for(border.axis_of(pointer))) {
                 state.layout_dirty = true;
             }
         }
@@ -3062,11 +3370,10 @@ fn drag_gutter(state: &mut State, rect: Rect, drag: &mut rune::Drag) {
 /// Without the engine there is still something to drag: the border between two panes (#69).
 #[cfg(not(feature = "map"))]
 fn drag_pane(state: &mut State, _id: ViewId, rect: Rect, drag: &mut rune::Drag, _scale: f32) {
-    let viewport = state.pane_viewport();
     match drag.phase {
         rune::Phase::Down => {
             let at = view::viewport_point(rect, (drag.start_x, drag.start_y));
-            begin_resize(state, viewport, at);
+            begin_resize(state, at);
         }
         rune::Phase::Move => {
             if let Some(border) = state.resizing() {
@@ -3075,7 +3382,7 @@ fn drag_pane(state: &mut State, _id: ViewId, rect: Rect, drag: &mut rune::Drag, 
                     Dir::Horizontal => pointer.0,
                     Dir::Vertical => pointer.1,
                 };
-                if state.layout.set_ratio(&border, border.ratio_for(pointer)) {
+                if state.set_ratio(&border, border.ratio_for(pointer)) {
                     state.layout_dirty = true;
                 }
             }
@@ -3152,7 +3459,7 @@ fn drain_card_reads(state: &mut State) -> bool {
     // and one of them silently missing its commander row would be the shared-selection bug in a new
     // costume. Panes are few, so this is a walk, not an index.
     for reply in &replies {
-        for pane in state.panes.iter_mut() {
+        for pane in state.panes_mut().iter_mut() {
             if pane.view.selected.is_none() || pane.view.card.is_none() {
                 continue;
             }
@@ -3396,7 +3703,7 @@ pub(crate) fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool
         // asking any more — the detail is the pane's state, so it is compared, not merely delivered.
         crate::data::Reply::Story(id, result) => {
             let mut applied = 0;
-            for pane in &mut state.panes {
+            for pane in state.panes_mut() {
                 if let Some(view) = pane.news.as_mut()
                     && view.apply_detail(*id, result)
                 {
@@ -3432,7 +3739,7 @@ pub(crate) fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool
         // dropped on purpose.
         crate::data::Reply::Stories(query, result) => {
             let mut applied = 0;
-            for pane in &mut state.panes {
+            for pane in state.panes_mut() {
                 if let Some(view) = pane.news.as_mut()
                     && view.apply(*query, result)
                 {
@@ -3555,7 +3862,7 @@ fn tick_card_age(state: &mut State) -> bool {
     // rebuild depend on the first one's text.
     let now = state.now();
     let mut changed = false;
-    for pane in state.panes.iter_mut() {
+    for pane in state.panes_mut().iter_mut() {
         let Some(card) = &pane.view.card else {
             continue;
         };
@@ -3592,7 +3899,7 @@ fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool
         restore_full_size(state);
         return true;
     }
-    let focused = state.layout.focused();
+    let focused = state.focused();
     // The newsroom's detail first: it is a mode of the pane, and `back` is the same function the word
     // calls, so Escape and the button cannot disagree about what closing a story does.
     if state
@@ -3671,7 +3978,7 @@ fn apply_update(state: &mut State, update: crate::live::Update) {
             // A card is a view of one unit, so it follows that unit's fix. Rebuilt here rather than
             // every frame: a fix for another hull does not change this card's numbers.
             let asking: Vec<ViewId> = state
-                .panes
+                .panes()
                 .iter()
                 .filter(|pane| pane.view.selected == Some(fix.id_unit))
                 .map(|pane| pane.id)
@@ -3707,7 +4014,7 @@ fn setup(state: &mut State, waker: rune::Waker) {
         // before Multi View, and its goldens are byte-identical because of this line; a scene with more
         // panes gets each frame from that pane's own layout (`pane_laid_out`), which is where a wall
         // gets its frames too. `#71`'s golden pass unifies the two.
-        if state.layout.is_single() {
+        if state.is_single_pane() {
             let camera = state.camera();
             state.set_frame(crate::map::geometry::Rendered {
                 camera,
@@ -3754,7 +4061,7 @@ fn setup(state: &mut State, waker: rune::Waker) {
         // is already rendering the right ground while the layout is being computed. Every pane gets its
         // own thread through the same door (`State::split_pane`).
         let camera = state.camera();
-        if let Some(pane) = state.pane_mut(state.layout.focused()) {
+        if let Some(pane) = state.pane_mut(state.focused()) {
             pane.map = Some(crate::map::thread::MapThread::spawn(
                 camera,
                 (tokens::WINDOW_SIZE.0 as u32, tokens::WINDOW_SIZE.1 as u32),
@@ -3815,7 +4122,7 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
                 asked_lat = asked.center.0,
                 asked_lon = asked.center.1,
                 asked_zoom = asked.zoom,
-                panes = state.panes.len(),
+                panes = state.pane_count(),
                 "the map's first frame"
             );
             if frame.camera != asked {
@@ -3836,26 +4143,26 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     // live** (#71). Told to the threads when the focus changes, so a wall at rest does not send a
     // message a frame.
     #[cfg(feature = "map")]
-    if !state.headless && state.cadenced != Some(state.layout.focused()) {
-        state.cadenced = Some(state.layout.focused());
+    if !state.headless && state.cadenced != Some(state.focused()) {
+        state.cadenced = Some(state.focused());
         state.apply_cadence();
     }
     // The frame each pane's map last handed over is what that pane's markers project against
     // (`INV-04`). Reading it here, rather than in the view, keeps the view a function of the state.
     #[cfg(feature = "map")]
     {
-        for index in 0..state.panes.len() {
-            let rendered = state.panes[index]
+        for index in 0..state.pane_count() {
+            let rendered = state.panes()[index]
                 .map
                 .as_ref()
                 .and_then(|map| map.rendered());
             if let Some(frame) = rendered
-                && state.panes[index].frame != Some(frame)
+                && state.panes()[index].frame != Some(frame)
             {
-                state.panes[index].frame = Some(frame);
+                state.panes()[index].frame = Some(frame);
             }
-            if state.panes[index].frame != state.panes[index].frame_seen {
-                state.panes[index].frame_seen = state.panes[index].frame;
+            if state.panes()[index].frame != state.panes()[index].frame_seen {
+                state.panes()[index].frame_seen = state.panes()[index].frame;
                 changed = true;
             }
         }
@@ -3868,7 +4175,7 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     // disagree, and a hull must not switch representation while it is still projected against the
     // previous frame. One latch per pane, because each pane has its own zoom — a pane zoomed into a
     // hull's picture must not switch its neighbour's representation.
-    for pane in &mut state.panes {
+    for pane in state.panes_mut() {
         if let Some(frame) = pane.frame {
             let latched = pane.view.range.update(frame.camera.zoom);
             if latched != pane.view.range {
@@ -3882,7 +4189,7 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     // decoded pictures and the per-frame budget are the wall's shared resources — one cache, several
     // views (#115) — so the ask is gated by any pane being in picture range, not by the focused one.
     if state
-        .panes
+        .panes()
         .iter()
         .any(|pane| pane.view.range == crate::units::mark::Range::Picture)
         && let Some(backend) = &state.backend
@@ -4248,10 +4555,10 @@ mod tests {
     #[test]
     fn the_header_control_opens_a_newsroom_pane_that_asks_page_one() {
         let mut state = State::default();
-        let first = state.layout.focused();
+        let first = state.focused();
         open_newsroom_pane(&mut state);
-        assert_eq!(state.panes.len(), 2, "the control splits the wall");
-        let opened = state.layout.focused();
+        assert_eq!(state.pane_count(), 2, "the control splits the wall");
+        let opened = state.focused();
         assert_ne!(
             opened, first,
             "the pane the operator asked for has the keys"
@@ -4276,10 +4583,10 @@ mod tests {
         );
         // And a second press is a second pane, on its own tab and page.
         open_newsroom_pane(&mut state);
-        assert_eq!(state.panes.len(), 3);
+        assert_eq!(state.pane_count(), 3);
         assert_eq!(
             state
-                .panes
+                .panes()
                 .iter()
                 .filter(|pane| pane.news.is_some())
                 .count(),
@@ -4299,7 +4606,7 @@ mod tests {
         );
         open_newsroom_pane(&mut state);
         let view = state
-            .panes
+            .panes()
             .iter()
             .find_map(|pane| pane.news.as_ref())
             .expect("the feed pane");
@@ -4323,7 +4630,7 @@ mod tests {
             page: 3,
         };
         let before = state
-            .panes
+            .panes()
             .iter()
             .find_map(|pane| pane.news.as_ref())
             .map(|view| (view.scope, view.state.clone(), view.asked))
@@ -4334,7 +4641,7 @@ mod tests {
         );
         assert!(!changed, "a late page is not a redraw");
         let view = state
-            .panes
+            .panes()
             .iter()
             .find_map(|pane| pane.news.as_ref())
             .expect("the feed pane");
@@ -4354,7 +4661,7 @@ mod tests {
     fn escape_closes_the_newsroom_story_and_nothing_else() {
         let mut state = State::default();
         open_newsroom_pane(&mut state);
-        let pane = state.layout.focused();
+        let pane = state.focused();
         let escape = rune::KeyEvent {
             key: rune::Key::Escape,
             mods: rune::Mods::default(),
@@ -4396,6 +4703,109 @@ mod tests {
             !on_key(&mut state, &escape, &mut tx),
             "with the list back, Escape is nothing again"
         );
+    }
+
+    /// **Three workspaces, and only the first has a pane** (#138): the wall opens as it always did and
+    /// two places to put panes sit beside it, empty.
+    #[test]
+    fn the_default_wall_has_three_workspaces_and_only_the_first_has_a_pane() {
+        let state = State::default();
+        assert_eq!(state.workspaces.len(), 3);
+        assert_eq!(state.active, 0);
+        let names: Vec<&str> = state
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["Workspace 1", "Workspace 2", "Workspace 3"]);
+        assert_eq!(state.panes().len(), 1, "the wall as it opens: one pane");
+        assert!(state.layout().is_some());
+        for workspace in state.workspaces.iter().skip(1) {
+            assert!(
+                workspace.layout.is_none() && workspace.panes.is_empty(),
+                "{:?} is a place panes can be, not a copy of the wall",
+                workspace.name
+            );
+        }
+    }
+
+    /// **Ids are the wall's** (#138): a pane keeps its number whichever workspace holds it, and a closed
+    /// pane's number is never handed out again — that is what makes a move between workspaces possible.
+    #[test]
+    fn a_pane_id_is_the_walls_and_is_never_reissued() {
+        let mut state = State::default();
+        let first = state.focused();
+        let second = state.split_pane(first, Camera::START).expect("a split");
+        assert!(state.pane(second).is_some());
+        assert!(
+            state.close_pane(second),
+            "a pane of a two-pane workspace closes"
+        );
+        assert!(state.pane(second).is_none());
+        let third = state
+            .split_pane(first, Camera::START)
+            .expect("another split");
+        assert_ne!(
+            third, second,
+            "a closed pane's id is not reused: a stale reference would find a stranger"
+        );
+        // And a pane in a hidden workspace is still *a pane of the wall*.
+        let hidden = state.allocate_pane();
+        state.workspaces[2].layout = Some(Layout::single_with(hidden));
+        state.workspaces[2]
+            .panes
+            .push(Pane::new(hidden, Camera::START));
+        assert!(state.pane(hidden).is_some());
+        assert!(
+            !state.pane_ids().contains(&hidden),
+            "the hidden workspace's pane is not in the active tiling"
+        );
+        assert_eq!(
+            state.pane_count(),
+            2,
+            "and not counted in the active one either"
+        );
+    }
+
+    /// **Switching keeps what each workspace was looking at** (#138): its panes, its cameras and its
+    /// focus ring, because they live on the workspace and not on the wall.
+    #[test]
+    fn switching_keeps_each_workspaces_panes_and_focus() {
+        let mut state = State::default();
+        let first = state.focused();
+        let second = state.split_pane(first, Camera::START).expect("a split");
+        state.focus_pane(first);
+        state.set_camera_of(second, Camera::new((1.5, 2.5), 9.0));
+
+        // A workspace of its own, with a pane of its own.
+        let index = state.add_workspace();
+        assert_eq!(index, 3);
+        assert_eq!(state.active, 3);
+        assert_eq!(state.active().name, "Workspace 4");
+        assert!(state.layout().is_none(), "the new workspace is empty");
+        let own = state.allocate_pane();
+        state.workspaces[index].layout = Some(Layout::single_with(own));
+        state.workspaces[index]
+            .panes
+            .push(Pane::new(own, Camera::START));
+
+        assert!(state.switch_to(0));
+        assert_eq!(
+            state.focused(),
+            first,
+            "workspace 1's focus ring is its own"
+        );
+        assert_eq!(state.camera_of(second).center, (1.5, 2.5));
+        assert_eq!(state.pane_count(), 2);
+
+        assert!(state.switch_to(index));
+        assert_eq!(state.focused(), own);
+        assert_eq!(state.pane_count(), 1);
+        assert!(
+            !state.switch_to(index),
+            "the workspace already on screen is not a switch"
+        );
+        assert!(!state.switch_to(99), "there is no such workspace");
     }
 
     #[test]
@@ -4499,13 +4909,13 @@ mod tests {
 
     /// The focused pane's card, for tests that are about one pane's card (#99).
     fn card_of(state: &State) -> Option<&crate::units::card::Card> {
-        state.card_in(state.layout.focused())
+        state.card_in(state.focused())
     }
 
     /// The age text the focused pane's card drew last, which is what `tick_card_age` compares.
     fn card_age(state: &State) -> String {
         state
-            .pane(state.layout.focused())
+            .pane(state.focused())
             .map(|pane| pane.view.last_age.clone())
             .unwrap_or_default()
     }
@@ -4609,7 +5019,7 @@ mod tests {
     #[test]
     fn the_card_redraws_on_the_frame_clock_and_not_the_wall_clock() {
         let mut state = state_with_two_hulls();
-        state.select_in(state.layout.focused(), 8);
+        state.select_in(state.focused(), 8);
         // Settle: the first tick after a selection records the text it drew.
         tick_card_age(&mut state);
         assert!(
@@ -4775,7 +5185,7 @@ mod tests {
     #[test]
     fn a_card_belongs_to_the_pane_that_asked_for_it() {
         let mut state = state_with_two_hulls();
-        let first = state.layout.focused();
+        let first = state.focused();
         let camera = state.camera_of(first);
         let second = state.split_pane(first, camera).expect("a second pane");
         state.select_in(first, 8);
@@ -4812,16 +5222,19 @@ mod tests {
     #[test]
     fn closing_a_pane_drops_its_card() {
         let mut state = state_with_two_hulls();
-        let first = state.layout.focused();
+        let first = state.focused();
         let camera = state.camera_of(first);
         let second = state.split_pane(first, camera).expect("a second pane");
         state.select_in(second, 8);
         assert!(state.card_in(second).is_some());
 
-        assert!(state.layout.close(second));
-        state.panes.retain(|pane| pane.id != second);
+        assert!(state.close_pane(second));
+        state.panes_mut().retain(|pane| pane.id != second);
         assert!(
-            state.panes.iter().all(|pane| pane.view.selected.is_none()),
+            state
+                .panes()
+                .iter()
+                .all(|pane| pane.view.selected.is_none()),
             "no pane is left holding the closed pane's selection"
         );
     }
@@ -4830,7 +5243,7 @@ mod tests {
     #[test]
     fn a_fix_updates_the_open_card() {
         let mut state = state_with_two_hulls();
-        state.select_in(state.layout.focused(), 8);
+        state.select_in(state.focused(), 8);
         assert_eq!(card_of(&state).map(|card| card.speed_kn), Some(Some(0.0)));
 
         apply_update(
@@ -4875,16 +5288,16 @@ mod tests {
     fn one_card_at_a_time_and_clearing_leaves_none() {
         // INV-10: selecting a hull replaces the selection. Two cards is the failure this exists for.
         let mut state = state_with_two_hulls();
-        state.select_in(state.layout.focused(), 8);
+        state.select_in(state.focused(), 8);
         assert_eq!(card_of(&state).map(|card| card.unit.id_unit), Some(8));
-        state.select_in(state.layout.focused(), 9);
+        state.select_in(state.focused(), 9);
         assert_eq!(
             card_of(&state).map(|card| card.unit.id_unit),
             Some(9),
             "the second selection replaces the first"
         );
         assert_eq!(state.selection(), Some(9));
-        let focused = state.layout.focused();
+        let focused = state.focused();
         state.clear_selection(focused);
         assert!(
             card_of(&state).is_none(),
@@ -4898,8 +5311,8 @@ mod tests {
         // The two handlers fire for one click. Whichever runs first, the marker's press wins and the
         // map's does not undo it — and pressing the same hull again closes the card.
         let mut state = state_with_two_hulls();
-        state.press_marker(state.layout.focused(), 8);
-        state.press_background(state.layout.focused());
+        state.press_marker(state.focused(), 8);
+        state.press_background(state.focused());
         assert_eq!(
             state.selection(),
             Some(8),
@@ -4908,16 +5321,16 @@ mod tests {
         assert!(card_of(&state).is_some());
 
         let mut state = state_with_two_hulls();
-        state.press_marker(state.layout.focused(), 8);
+        state.press_marker(state.focused(), 8);
         state.marker_press = false; // as the end of that frame does
-        state.press_marker(state.layout.focused(), 8);
+        state.press_marker(state.focused(), 8);
         assert!(
             card_of(&state).is_none(),
             "the second press on the same hull closes its card"
         );
 
         state.marker_press = false;
-        state.press_background(state.layout.focused());
+        state.press_background(state.focused());
         assert_eq!(state.selection(), None, "a press on the map clears");
     }
 
@@ -4927,7 +5340,7 @@ mod tests {
         // was loose text over the map. A drawn height is the proof, and the panel's own colour at its
         // centre is the second half of it.
         let mut state = state_with_two_hulls();
-        state.select_in(state.layout.focused(), 8);
+        state.select_in(state.focused(), 8);
         let rt = frame_once(state);
         let (rect, _) = rt.presented("card").expect("the card is drawn");
         assert!(
@@ -4945,7 +5358,7 @@ mod tests {
         // The decision is the machine's now (#101): Escape ends whatever is held, and while a pane is in
         // the air that is the lift — so the card behind it survives, which is the invariant's point.
         let mut state = state_with_two_hulls();
-        let focused = state.layout.focused();
+        let focused = state.focused();
         state.select_in(focused, 8);
         assert!(
             state.begin(Begin::Lift(PaneDrag {
@@ -4988,7 +5401,7 @@ mod tests {
             !on_key(&mut state, &escape, &mut tx),
             "Escape with nothing open is not consumed"
         );
-        let focused = state.layout.focused();
+        let focused = state.focused();
         state.select_in(focused, 8);
         let mut tx = rune::Tx::default();
         assert!(
@@ -5015,7 +5428,7 @@ mod tests {
         // INV-10 at the render level: the card exists, is on screen, and stays inside the window for
         // a marker at the very edge (where a careless card would clip).
         let mut state = state_with_two_hulls();
-        state.select_in(state.layout.focused(), 8);
+        state.select_in(state.focused(), 8);
         let rt = frame_once(state);
         let (rect, opacity) = rt.presented("card").expect("the card is drawn");
         assert!(opacity > 0.9);
@@ -5046,7 +5459,7 @@ mod tests {
         // **The key names its pane** (#99): two panes may draw the same hull, so a hit target keyed by
         // the hull alone would be the neighbour's. This test asked for `hit-8` until the pane went into
         // the key, which is how it learned the symbol marker's key had not been updated with the picture's.
-        let pane_key = rt.state.layout.focused();
+        let pane_key = rt.state.focused();
         let (x, y) = rt
             .find(&format!("hit-{pane_key}-8"))
             .expect("the marker has a hit target");
@@ -5055,7 +5468,7 @@ mod tests {
         rt.invalidate();
         rt.frame(1.0 / 60.0);
         assert!(
-            rt.state.card_in(rt.state.layout.focused()).is_some(),
+            rt.state.card_in(rt.state.focused()).is_some(),
             "a press on the marker opens its card"
         );
         let before = rt.presented("card").expect("card drawn").0;
@@ -5099,15 +5512,15 @@ mod tests {
                 && after[1] + after[3] <= tokens::WINDOW_SIZE.1,
             "INV-10: the card stayed inside the window after the pan: {after:?}"
         );
-        rt.state.clear_selection(rt.state.layout.focused());
-        assert!(rt.state.card_in(rt.state.layout.focused()).is_none());
+        rt.state.clear_selection(rt.state.focused());
+        assert!(rt.state.card_in(rt.state.focused()).is_none());
     }
 
     #[test]
     fn a_card_for_a_hull_without_a_hull_number_has_no_hull_row() {
         // An empty row is worse than a missing one: it claims the field exists and is blank.
         let mut state = state_with_two_hulls();
-        state.select_in(state.layout.focused(), 9);
+        state.select_in(state.focused(), 9);
         let rt = frame_once(state);
         assert!(rt.find("card-name").is_some());
         assert!(
@@ -5250,7 +5663,7 @@ mod tests {
     #[test]
     fn one_pane_has_no_handle_and_no_ring() {
         let state = crate::scene::state_for("picture");
-        assert!(state.layout.is_single());
+        assert!(state.is_single_pane());
         let rt = frame_once(state);
         assert!(
             rt.find("handle-1").is_none(),
@@ -5279,7 +5692,7 @@ mod tests {
             panel: Some((1280.0, 720.0)),
             ..State::default()
         };
-        let first = state.layout.ids()[0];
+        let first = state.pane_ids()[0];
         // The first pane's thread is the one `setup` starts on a wall; `split_pane` starts the others.
         if let Some(pane) = state.pane_mut(first) {
             pane.map = Some(crate::map::thread::MapThread::spawn(
@@ -5296,14 +5709,18 @@ mod tests {
             ids.push(id);
         }
         assert_eq!(
-            state.panes.iter().filter(|pane| pane.map.is_some()).count(),
+            state
+                .panes()
+                .iter()
+                .filter(|pane| pane.map.is_some())
+                .count(),
             4,
             "four panes, four map threads"
         );
         // Wait for each pane to publish a frame, so this test is about closing live contexts.
         let started = std::time::Instant::now();
         while started.elapsed() < std::time::Duration::from_secs(60)
-            && state.panes.iter().any(|pane| {
+            && state.panes().iter().any(|pane| {
                 pane.map
                     .as_ref()
                     .is_some_and(|map| map.rendered().is_none())
@@ -5312,7 +5729,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         let drawn = state
-            .panes
+            .panes()
             .iter()
             .filter(|pane| {
                 pane.map
@@ -5323,7 +5740,7 @@ mod tests {
         println!("panes: {drawn}/4 panes published a frame before shutdown");
         state.close_maps();
         assert!(
-            state.panes.iter().all(|pane| pane.map.is_none()),
+            state.panes().iter().all(|pane| pane.map.is_none()),
             "close_maps leaves no map thread running"
         );
         println!("panes: all four map threads joined, and this process is still up");
@@ -5352,7 +5769,7 @@ mod tests {
             panel: Some((1280.0, 720.0)),
             ..State::default()
         };
-        let first = state.layout.ids()[0];
+        let first = state.pane_ids()[0];
         if let Some(pane) = state.pane_mut(first) {
             pane.map = Some(MapThread::spawn(Camera::START, (640, 360)));
         }
@@ -5361,9 +5778,9 @@ mod tests {
             let from = ids[index - 1];
             ids.push(state.split_pane(from, Camera::START).expect("a split"));
         }
-        state.layout.focus(ids[0]);
+        state.focus_pane(ids[0]);
         state.apply_cadence();
-        for pane in &state.panes {
+        for pane in state.panes() {
             let Some(map) = &pane.map else { continue };
             assert_eq!(map.error(), None, "every pane's map started");
         }
@@ -5375,7 +5792,7 @@ mod tests {
         // load (the same reason `map_frame_cost` pumps before it times).
         let waiting = std::time::Instant::now();
         while waiting.elapsed() < Duration::from_secs(60)
-            && state.panes.iter().any(|pane| {
+            && state.panes().iter().any(|pane| {
                 pane.map
                     .as_ref()
                     .is_some_and(|map| map.frames() == 0 && map.error().is_none())
@@ -5385,8 +5802,8 @@ mod tests {
         }
         println!(
             "panes: {} panes, {} with a map thread, first frames after {:?}",
-            state.panes.len(),
-            state.panes.iter().filter(|p| p.map.is_some()).count(),
+            state.pane_count(),
+            state.panes().iter().filter(|p| p.map.is_some()).count(),
             waiting.elapsed()
         );
         let window = Duration::from_millis(3000);
@@ -5440,8 +5857,8 @@ mod tests {
     #[test]
     fn the_pane_menu_is_drawn_on_a_wall_with_one_pane() {
         let mut state = crate::scene::state_for("picture");
-        assert!(state.layout.is_single(), "the wall this test is about");
-        let pane = state.layout.focused();
+        assert!(state.is_single_pane(), "the wall this test is about");
+        let pane = state.focused();
         state.begin(Begin::Menu {
             pane,
             at: (200.0, 160.0),
@@ -5462,7 +5879,7 @@ mod tests {
     #[test]
     fn escape_closes_the_menu_before_the_card() {
         let mut state = crate::scene::state_for("card-open");
-        let pane = state.layout.focused();
+        let pane = state.focused();
         state.begin(Begin::Menu {
             pane,
             at: (10.0, 10.0),
@@ -5473,7 +5890,7 @@ mod tests {
 
         // What `on_key` does on Escape: the menu first, the selection untouched.
         let mut state = crate::scene::state_for("card-open");
-        let pane = state.layout.focused();
+        let pane = state.focused();
         state.begin(Begin::Menu {
             pane,
             at: (10.0, 10.0),
@@ -5494,9 +5911,9 @@ mod tests {
     #[test]
     fn escape_releases_one_thing_at_a_time() {
         let mut state = state_with_two_hulls();
-        let focused = state.layout.focused();
+        let focused = state.focused();
         state.select_in(focused, 8);
-        assert!(state.layout.maximise(focused), "the pane goes full size");
+        assert!(state.maximise(focused), "the pane goes full size");
         assert!(state.begin(Begin::Settings), "and the sheet is over it");
 
         let escape = rune::KeyEvent {
@@ -5626,29 +6043,29 @@ mod tests {
     fn full_size_and_back_changes_nothing_but_the_layer() {
         let mut state = crate::scene::state_for("panes");
         state.headless = true;
-        let tiles = state.layout.rects(state.pane_viewport());
-        let cameras: Vec<_> = state.panes.iter().map(|pane| pane.camera).collect();
+        let tiles = state.pane_rects();
+        let cameras: Vec<_> = state.panes().iter().map(|pane| pane.camera).collect();
         let id = tiles[1].0;
 
         full_size_for_scene(&mut state, id);
         assert_eq!(state.maximised(), Some(id));
         assert_eq!(
-            state.layout.focused(),
+            state.focused(),
             id,
             "the keys go to the pane being looked at"
         );
         assert_eq!(
-            state.layout.rects(state.pane_viewport()),
+            state.pane_rects(),
             tiles,
             "the tiling is untouched: a full-size pane is a bigger rectangle, not a new layout"
         );
 
         restore_full_size(&mut state);
         assert_eq!(state.maximised(), None);
-        assert_eq!(state.layout.rects(state.pane_viewport()), tiles);
+        assert_eq!(state.pane_rects(), tiles);
         assert_eq!(
             state
-                .panes
+                .panes()
                 .iter()
                 .map(|pane| pane.camera)
                 .collect::<Vec<_>>(),
@@ -5689,7 +6106,7 @@ mod tests {
     #[test]
     fn the_rename_sheet_names_a_pane_and_abandons_cleanly() {
         let mut state = crate::scene::state_for("panes");
-        let id = state.layout.focused();
+        let id = state.focused();
         begin_rename(&mut state, id);
         let rename = state.rename().expect("the sheet opens");
         assert_eq!(rename.pane, id);
@@ -5787,7 +6204,7 @@ mod tests {
         );
 
         let mut rt = frame_once(crate::scene::state_for("panes-named"));
-        let ids = rt.state.layout.ids();
+        let ids = rt.state.pane_ids();
         assert_eq!(ids.len(), 3);
         // The scene's third pane is the one nobody named, and its id is 3: `pane-03`, not `pane-01`.
         assert_eq!(
@@ -5858,17 +6275,14 @@ mod tests {
         // would be a test that changes the person running it.
         state.headless = true;
         assert_eq!(state.settings.pane_gap, 0.0, "the wall's own default");
-        let cells = state.layout.rects(state.pane_viewport());
+        let cells = state.pane_rects();
         let before = state.pane_rects();
         assert_eq!(before, cells, "at gap 0 the panes are the cells");
 
         // The middle of the border, where the gutter will be: 4 pt from the line once the gap is on.
         let mid = (cells[0].1.right(), cells[0].1.y + cells[0].1.h / 2.0);
         assert!(
-            state
-                .layout
-                .border_at(state.pane_viewport(), mid, state.pane_grip())
-                .is_some(),
+            state.border_at(mid, state.pane_grip()).is_some(),
             "the border is grabbable at gap 0"
         );
 
@@ -5888,10 +6302,7 @@ mod tests {
         // the narrow grip, which would miss it.
         assert!(state.pane_grip() >= tokens::GAP);
         assert!(
-            state
-                .layout
-                .border_at(state.pane_viewport(), mid, state.pane_grip())
-                .is_some(),
+            state.border_at(mid, state.pane_grip()).is_some(),
             "a pointer in the middle of the gutter still grabs the border"
         );
 
@@ -5907,7 +6318,7 @@ mod tests {
     #[test]
     fn the_menu_offers_close_only_when_there_is_something_to_close() {
         let one = crate::scene::state_for("pane-menu");
-        let pane = one.layout.focused();
+        let pane = one.focused();
         assert_eq!(
             crate::ui::menu_items(&one, pane)
                 .iter()
@@ -5918,7 +6329,7 @@ mod tests {
         );
 
         let tiled = crate::scene::state_for("panes-menu");
-        let pane = tiled.layout.focused();
+        let pane = tiled.focused();
         let items = crate::ui::menu_items(&tiled, pane);
         assert_eq!(
             items.iter().map(|item| item.label).collect::<Vec<_>>(),
@@ -5936,21 +6347,21 @@ mod tests {
     #[test]
     fn closing_a_pane_collapses_its_slot_and_keeps_a_focused_pane() {
         let mut state = crate::scene::state_for("panes-menu");
-        let closed = state.layout.focused();
-        let before = state.layout.rects(state.pane_viewport()).len();
+        let closed = state.focused();
+        let before = state.pane_rects().len();
         close_from_menu(&mut state, closed);
-        let rects = state.layout.rects(state.pane_viewport());
+        let rects = state.pane_rects();
         assert_eq!(rects.len(), before - 1, "one pane fewer");
         assert!(
             !rects.iter().any(|(id, _)| *id == closed),
             "the closed pane is gone from the layout"
         );
         assert!(
-            !state.panes.iter().any(|pane| pane.id == closed),
+            !state.panes().iter().any(|pane| pane.id == closed),
             "and gone from the wall, so its map thread is joined"
         );
         assert!(
-            rects.iter().any(|(id, _)| *id == state.layout.focused()),
+            rects.iter().any(|(id, _)| *id == state.focused()),
             "the focus is on a pane that still exists"
         );
         // The layout still covers the panel exactly: a close collapses a slot, it does not leave a hole.
@@ -5963,18 +6374,18 @@ mod tests {
         );
 
         // Down to the last pane, which is then refused and leaves the wall unchanged.
-        while state.layout.len() > 1 {
-            let next = state.layout.focused();
+        while state.pane_count() > 1 {
+            let next = state.focused();
             close_from_menu(&mut state, next);
         }
-        assert_eq!(state.panes.len(), 1, "one pane left, and one pane object");
-        let last = state.layout.focused();
+        assert_eq!(state.pane_count(), 1, "one pane left, and one pane object");
+        let last = state.focused();
         close_from_menu(&mut state, last);
         assert_eq!(
-            state.layout.rects(state.pane_viewport()).len(),
+            state.pane_rects().len(),
             1,
             "the last pane is not closeable: a wall with no panes draws nothing"
         );
-        assert_eq!(state.panes.len(), 1);
+        assert_eq!(state.pane_count(), 1);
     }
 }

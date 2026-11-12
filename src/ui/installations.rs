@@ -229,7 +229,7 @@ fn facility_shape() -> Shape {
 /// A hull card and a facility card are both "this pane's card", so selecting one closes the other:
 /// one pane, one card (`INV-10` per pane). This is the only way a facility selection changes.
 pub fn press(state: &mut crate::ui::State, pane: crate::ui::ViewId, id: i64) {
-    state.layout.focus(pane);
+    state.focus_pane(pane);
     if state.installation_in(pane) == Some(id) {
         state.clear_selection(pane);
     } else {
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn a_facility_is_selected_in_its_pane_and_never_beside_a_hull_card() {
         let mut state = crate::scene::state_for("installations");
-        let first = state.layout.focused();
+        let first = state.focused();
         let Some(second) = state.split_pane(first, Camera::START) else {
             panic!("the wall holds two panes");
         };

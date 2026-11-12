@@ -14,6 +14,11 @@ instead of by a function call — the only kind of test that catches a gesture t
 | --- | --- |
 | `panes-pan.json` | presses the border at 50% of the `panes` panel and drags it to 58%, which is the share `panes` sets in code. The two captures are the same picture, so one asserts the other |
 
+`workspaces-switch.json` presses the **third workspace chip** at (221, 27) — the point the header's chips
+put it at — so the switch in that capture is the call to `State::switch_to` the press makes, not the
+scene's own constructor (#138). Rendered without the script, the capture is workspace 1 with its panes
+and the assertion's two halves both fail.
+
 Coordinates are window points at `--scale 1`, and `verify` projects against the layout the gesture must produce.
 
 ## `rest/` — recorded 2026-11-06
