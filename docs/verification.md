@@ -137,6 +137,7 @@ cargo run -- --scenes            # empty · picture · stale · card-open · pho
                                  # pane-menu · pane-tree · pane-tree-narrow · pane-tree-zoom
                                  # pane-tree-pan · newsroom · newsroom-scopes · newsroom-page-2
                                  # newsroom-story · newsroom-story-back
+                                 # workspaces · workspaces-empty · workspaces-switch
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -275,6 +276,24 @@ tabs, its footer and its rows again — `back` returned to the page the operator
 `cargo test ui::newsroom` holds what a capture cannot: `back` leaves the tab, page and rows untouched, a
 detail for a story the operator has left is discarded, and the words — `unclassified source`, the signed
 tone at one decimal, the dash for an absent country, the provenance line in WIB — are the ones drawn.
+
+`workspaces` is the wall with **three workspaces and a row of chips** (#138): the first holds the
+operator's two panes, the second and third are empty behind it. The assertion counts the raised chip
+(the name plate's fill is a block at least a chip wide; the inactive chips' hairlines are one pixel and
+are filtered out), reads **where** it sits relative to the `+` — the first chip is the one furthest
+from it — and requires three workspaces with the first active and two panes tiled. The title is the
+workspace's name, not `TITLE`: the app's name is the window's.
+
+`workspaces-empty` is **workspace 2 active and empty**: the same wall, one chip pressed, and the panel
+says `No panes yet.` The assertion requires the centred words, **no marker ink** in the panel (an empty
+workspace has no tiling, so nothing is projected), and workspace 1's panes still present in the state and
+absent from the picture — a hidden workspace draws nothing.
+
+`workspaces-switch` is the same wall before a click: `fixtures/scripts/workspaces-switch.json` presses
+the **third chip**, so the capture is workspace 3's empty state with the third chip raised. The pixel
+half says the raised chip is the one nearest the `+`; the structure half says the scene started on
+workspace 1 with its two panes. A press that reached no handler leaves the first chip raised and the two
+panes drawn, and both halves go red.
 
 `pane-menu` is a wall with **one** pane and its right-click menu open (#77) — the one shape the menu was
 never drawn on, and the only wall that needs it, because "Focus on new pane" is the only route to a second

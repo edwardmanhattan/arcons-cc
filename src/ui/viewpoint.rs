@@ -32,7 +32,7 @@ pub(crate) fn ask(state: &mut State) {
     if state.viewpoint_pane.is_some() {
         return;
     }
-    let pane = state.layout.focused();
+    let pane = state.focused();
     let Some(backend) = &state.backend else {
         return;
     };
@@ -101,7 +101,7 @@ mod tests {
 
     /// Stand where `ask` stands: the pane on the wall now is the one the answer belongs to.
     fn waiting(state: &mut State) -> (crate::ui::ViewId, Camera) {
-        let pane = state.layout.focused();
+        let pane = state.focused();
         state.viewpoint_pane = Some(pane);
         (pane, state.camera_of(pane))
     }
@@ -118,7 +118,7 @@ mod tests {
             .split_pane(first, Camera::new((1.0, 2.0), 8.0))
             .expect("a second pane");
         assert_eq!(
-            state.layout.focused(),
+            state.focused(),
             second,
             "the split focuses the new pane, so a reply that read the focus would move it"
         );

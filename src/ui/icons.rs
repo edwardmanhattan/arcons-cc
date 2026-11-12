@@ -34,6 +34,23 @@ pub static RESTORE: Icon = Icon {
     body: r#"<path d="M8 1V6M11 3L8 6L5 3" stroke="currentColor"/><path d="M8 15V10M11 13L8 10L5 13" stroke="currentColor"/><path d="M4 8H6" stroke="currentColor"/><path d="M7 8H9" stroke="currentColor"/><path d="M10 8H12" stroke="currentColor"/>"#,
 };
 
+/// **A workspace**, from Rune's catalogue (`workspace`, #138): the glyph on each workspace chip.
+///
+/// Copied verbatim from the pinned rev like the pane icons, because the catalogue is a theme crate
+/// rather than part of the `rune` library — a path invented here would be a picture nobody can name.
+pub static WORKSPACE: Icon = Icon {
+    name: "workspace",
+    view: 16.0,
+    body: r#"<path d="M2 10.668V14.0013H10.6667M13.9974 10.6667V2H2.66406M13.9974 10.668V14.0013H10.6641M2 10V2H5.33333" stroke="currentColor" stroke-miterlimit="10" stroke-linecap="square"/><path d="M10.6693 10.6654V5.33203H5.33594V10.6654H10.6693Z" fill="currentColor"/>"#,
+};
+
+/// **A new workspace** (`workspace-new`, #138): the `+` after the last chip.
+pub static WORKSPACE_NEW: Icon = Icon {
+    name: "workspace-new",
+    view: 16.0,
+    body: r#"<path d="M2 10.7578V14.0011H5.24324M13.9991 5.24324V2H10.7559M13.9991 10.7578V14.0011H10.7559M2 5.24324V2H5.24324" stroke="currentColor" stroke-miterlimit="10" stroke-linecap="square"/><path d="M8 4.5V11.5M4.5 8H11.5" stroke="currentColor" stroke-linejoin="round"/>"#,
+};
+
 /// A post that runs a branch: Rune's `branch`, from the same catalogue and the same pinned rev. A
 /// chain of command draws it only when the wire names it — the recorded structure sends `""` for
 /// every post, which is no icon and not a default one (#116).

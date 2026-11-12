@@ -836,7 +836,7 @@ fn link_element(pane: ViewId, link: &Link) -> El {
 /// A post without an `id_unit` is a command post, not a hull: it selects nothing. Inventing a card for
 /// it would be a card about no unit, which is a different ticket (#116).
 pub fn press_post(state: &mut State, pane: ViewId, id_unit: Option<i64>) {
-    state.layout.focus(pane);
+    state.focus_pane(pane);
     if let Some(id_unit) = id_unit {
         if state.selected_in(pane) == Some(id_unit) {
             state.clear_selection(pane);
@@ -1177,11 +1177,11 @@ mod tests {
     #[test]
     fn the_header_control_opens_a_tree_pane_and_splits_the_layout() {
         let mut state = State::default();
-        let before = state.layout.len();
-        let map = state.layout.focused();
+        let before = state.pane_count();
+        let map = state.focused();
         crate::ui::open_tree_pane(&mut state);
-        assert_eq!(state.layout.len(), before + 1, "the wall gained a pane");
-        let tree = state.layout.focused();
+        assert_eq!(state.pane_count(), before + 1, "the wall gained a pane");
+        let tree = state.focused();
         assert_ne!(tree, map, "the new pane is the one the operator asked for");
         assert!(
             matches!(

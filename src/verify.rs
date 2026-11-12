@@ -537,6 +537,64 @@ fn word_runs(
     runs
 }
 
+/// The x runs of `colour` inside the y band, merged across gaps smaller than `merge` pixels: one run per
+/// filled control. `image.find_panel_rect` answers for a picture panel; a header chip is a run.
+fn colour_runs_in_band(
+    image: &Image,
+    band: (f64, f64),
+    colour: [u8; 3],
+    tolerance: u8,
+    merge: u32,
+) -> Vec<(f64, f64)> {
+    let y0 = band.0.max(0.0) as u32;
+    let y1 = (band.1.max(0.0) as u32).min(image.height);
+    let mut runs: Vec<(f64, f64)> = Vec::new();
+    let mut start: Option<u32> = None;
+    let mut last: u32 = 0;
+    for x in 0..image.width {
+        let hit = (y0..y1).any(|y| near(image.at(x, y), colour, tolerance));
+        if hit {
+            match start {
+                Some(_) if x - last <= merge => {}
+                Some(from) => {
+                    runs.push((f64::from(from), f64::from(last)));
+                    start = Some(x);
+                }
+                None => start = Some(x),
+            }
+            last = x;
+        }
+    }
+    if let Some(from) = start {
+        runs.push((f64::from(from), f64::from(last)));
+    }
+    runs
+}
+
+/// The rightmost column **up to `limit`** in the band that carries any of `colours`: the last control in a
+/// row that starts at the left edge. The limit keeps a right-aligned run of words — the status and the
+/// header's controls — out of a question about the chips.
+fn rightmost_ink(
+    image: &Image,
+    band: (f64, f64),
+    limit: u32,
+    colours: &[[u8; 3]],
+    tolerance: u8,
+) -> Option<f64> {
+    let y0 = band.0.max(0.0) as u32;
+    let y1 = (band.1.max(0.0) as u32).min(image.height);
+    (0..limit.min(image.width))
+        .rev()
+        .find(|x| {
+            (y0..y1).any(|y| {
+                colours
+                    .iter()
+                    .any(|colour| near(image.at(*x, y), *colour, tolerance))
+            })
+        })
+        .map(f64::from)
+}
+
 /// Check one scene's capture. Returns the lines it wants printed, or the failures.
 pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<String>> {
     let mut failures = Vec::new();
@@ -631,7 +689,11 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             };
             let state = scene::state_for("objects");
             let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
-            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let rects = crate::ui::view::panes_on(
+                state.layout().expect("the scene has a tiling"),
+                viewport,
+                state.settings.pane_gap,
+            );
             if rects.len() != 2 {
                 failures.push(format!(
                     "objects: {} panes, and the capture is the case for two — a wall-wide camera \
@@ -735,7 +797,11 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             };
             let state = scene::state_for("installations");
             let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
-            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let rects = crate::ui::view::panes_on(
+                state.layout().expect("the scene has a tiling"),
+                viewport,
+                state.settings.pane_gap,
+            );
             if rects.len() != 2 {
                 failures.push(format!(
                     "installations: {} panes for a two-pane scene",
@@ -751,7 +817,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 .collect();
             let unlocated = state.installations.len() - located.len();
             let facility = ink(tokens::facility_ink());
-            let selected = state.installation_in(state.layout.focused());
+            let selected = state.installation_in(state.focused());
             for (index, (id, rect)) in rects.iter().enumerate() {
                 let Some(pane) = state.pane(*id) else {
                     failures.push(format!("installations: pane {id} has no state"));
@@ -794,7 +860,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 // **The selection is the pane's** (#109): the focused pane rings its facility, and the
                 // neighbour rings nothing. A wall-wide ring would be #99's bug on a third card.
                 let ring = ink(tokens::focus_edge());
-                let focused = state.layout.focused() == *id;
+                let focused = state.focused() == *id;
                 for mark in &placed {
                     let x = origin_x + f64::from(rect.x) + mark.x;
                     let y = origin_y + f64::from(rect.y) + mark.y;
@@ -877,7 +943,11 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             };
             let state = scene::state_for("panes-filter");
             let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
-            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let rects = crate::ui::view::panes_on(
+                state.layout().expect("the scene has a tiling"),
+                viewport,
+                state.settings.pane_gap,
+            );
             if rects.len() != 2 {
                 failures.push(format!(
                     "panes-filter: {} panes for a two-pane scene",
@@ -1211,7 +1281,11 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             };
             let state = scene::state_for("panes-cards");
             let viewport = crate::map::geometry::Viewport::new(pw, ph);
-            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let rects = crate::ui::view::panes_on(
+                state.layout().expect("the scene has a tiling"),
+                viewport,
+                state.settings.pane_gap,
+            );
             let ink_colour = ink(tokens::ink());
             let mut counts: Vec<(crate::ui::ViewId, usize)> = Vec::new();
             for (id, rect) in rects {
@@ -1282,7 +1356,11 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             };
             let state = scene::state_for("panes-chrome");
             let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
-            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let rects = crate::ui::view::panes_on(
+                state.layout().expect("the scene has a tiling"),
+                viewport,
+                state.settings.pane_gap,
+            );
             let icon_ink = ink(tokens::ink());
             for (index, (id, rect)) in rects.iter().enumerate() {
                 let (filter, maximise) = crate::ui::view::chrome_buttons(*rect);
@@ -1398,7 +1476,11 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             };
             let state = scene::state_for("panes-range");
             let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
-            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let rects = crate::ui::view::panes_on(
+                state.layout().expect("the scene has a tiling"),
+                viewport,
+                state.settings.pane_gap,
+            );
             if rects.len() != 2 {
                 failures.push(format!(
                     "panes-range: {} panes for a two-pane scene",
@@ -1512,7 +1594,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             // pane this wall must be looking at is the one the scene focuses, named once in `scene`.
             let state = scene::state_for("panes-max");
             let rects = crate::ui::view::panes_on(
-                &state.layout,
+                state.layout().expect("the scene has a tiling"),
                 crate::map::geometry::Viewport::new(pw, ph),
                 state.settings.pane_gap,
             );
@@ -1595,7 +1677,11 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             };
             let state = scene::state_for("panes-named");
             let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
-            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let rects = crate::ui::view::panes_on(
+                state.layout().expect("the scene has a tiling"),
+                viewport,
+                state.settings.pane_gap,
+            );
             let plate = ink(tokens::name_plate());
             for (index, (id, rect)) in rects.iter().enumerate() {
                 let probe = crate::ui::view::name_probe(*rect);
@@ -1761,7 +1847,11 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             // The **drawn** rectangles: the cells pulled in by the gap the scene chose (#82), which is the
             // same function the view lays the panes out with.
             let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
-            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let rects = crate::ui::view::panes_on(
+                state.layout().expect("the scene has a tiling"),
+                viewport,
+                state.settings.pane_gap,
+            );
             if rects.len() != scene::PANES.len() {
                 failures.push(format!(
                     "panes: {} rectangles for {} panes",
@@ -1844,7 +1934,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             // *is* separable is the edge itself — the focused pane draws a bright 1 pt line, an
             // unfocused one a hairline that is barely above the panel. So: the median luma down each
             // pane's left edge, and the focused one must stand out by a margin a reader would see.
-            let focused = state.layout.focused();
+            let focused = state.focused();
             let mut edges = Vec::new();
             for (id, rect) in &rects {
                 let x = (origin_x + f64::from(rect.x)).max(0.0) as u32;
@@ -1961,7 +2051,11 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
             let rect = state
                 .menu()
-                .and_then(|menu| state.layout.rect_of(viewport, menu.pane))
+                .and_then(|menu| {
+                    state
+                        .layout()
+                        .and_then(|layout| layout.rect_of(viewport, menu.pane))
+                })
                 .unwrap_or(crate::ui::Rect {
                     x: 0.0,
                     y: 0.0,
@@ -2068,7 +2162,11 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             };
             let state = scene::state_for("pane-tree");
             let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
-            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let rects = crate::ui::view::panes_on(
+                state.layout().expect("the scene has a tiling"),
+                viewport,
+                state.settings.pane_gap,
+            );
             let tree = rects
                 .iter()
                 .find(|(id, _)| state.pane(*id).is_some_and(|pane| !pane.content.is_map()));
@@ -2242,7 +2340,11 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             };
             let state = scene::state_for(scene);
             let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
-            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let rects = crate::ui::view::panes_on(
+                state.layout().expect("the scene has a tiling"),
+                viewport,
+                state.settings.pane_gap,
+            );
             let Some((tree_id, tree_rect)) = rects
                 .iter()
                 .find(|(id, _)| state.pane(*id).is_some_and(|pane| !pane.content.is_map()))
@@ -2524,7 +2626,11 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             };
             let state = scene::state_for("panes-drag");
             let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
-            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let rects = crate::ui::view::panes_on(
+                state.layout().expect("the scene has a tiling"),
+                viewport,
+                state.settings.pane_gap,
+            );
             let Some(drag) = state.dragging() else {
                 failures.push("panes-drag: no pane is lifted in the scene".to_string());
                 return Err(failures);
@@ -2533,15 +2639,18 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 failures.push("panes-drag: the lifted pane has no drop under it".to_string());
                 return Err(failures);
             };
-            if state.layout.preview(drop).is_none() {
+            if state.preview(drop).is_none() {
                 failures.push(format!("panes-drag: {drop:?} has no preview"));
                 return Err(failures);
             }
             // The slot is inset by a gap on each side (the slot, not the whole pane) — one function, the
             // same one the picture draws and the ghost stands on.
-            let Some(landing) =
-                crate::ui::view::landing_rect(&state.layout, drop, viewport, drag.pane)
-            else {
+            let Some(landing) = crate::ui::view::landing_rect(
+                state.layout().expect("the scene has a tiling"),
+                drop,
+                viewport,
+                drag.pane,
+            ) else {
                 failures
                     .push("panes-drag: the preview does not place the dragged pane".to_string());
                 return Err(failures);
@@ -2601,7 +2710,12 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             // drawn in `gap_fill` and the ghost is the pane standing on it — its own frame, its own camera — so its hulls
             // are the slot's rectangle plus the pane's own projection. A ghost that is missing, or drawn on
             // any other rectangle, leaves no hull ink where this looks.
-            let landed = crate::ui::view::landing_rect(&state.layout, drop, viewport, drag.pane);
+            let landed = crate::ui::view::landing_rect(
+                state.layout().expect("the scene has a tiling"),
+                drop,
+                viewport,
+                drag.pane,
+            );
             let carried = state
                 .pane_rects()
                 .iter()
@@ -2767,7 +2881,11 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             };
             let state = scene::state_for(scene);
             let viewport = crate::map::geometry::Viewport::new(pw, ph);
-            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let rects = crate::ui::view::panes_on(
+                state.layout().expect("the scene has a tiling"),
+                viewport,
+                state.settings.pane_gap,
+            );
             let ink_colours = [ink(tokens::ink()), ink(tokens::ink_dim())];
             let mut feeds = 0;
             for (id, rect) in &rects {
@@ -2913,6 +3031,174 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 }
             }
         }
+        // **Workspaces** (#138): three chips and a `+`, exactly one chip raised, the title naming the
+        // active one, and an empty workspace that says so with no pane chrome and no marker ink.
+        //
+        // The pixel half of a switch cannot read *which* chip was pressed; it can read **where** the
+        // raised chip is, so the claim is geometric: on `workspaces` the raised chip is the one furthest
+        // from the `+`, on `workspaces-switch` it is the one nearest it. That scene leaves the wall on
+        // workspace 1, so a capture showing workspace 3 is the script's click.
+        "workspaces" | "workspaces-empty" | "workspaces-switch" => {
+            let state = scene::state_for(scene);
+            let header = (0.0, f64::from(tokens::CHIP_H) + f64::from(tokens::PAD));
+            // A chip's fill is a **block** at least as wide as a chip is tall; an inactive chip's
+            // hairline border reads as a similar colour at a loose tolerance and is one pixel wide, and
+            // an active chip's fill is a chip gap away from the next chip's border — so the runs are
+            // filtered by width and not merged across a gap.
+            let raised: Vec<(f64, f64)> =
+                colour_runs_in_band(image, header, ink(tokens::name_plate()), 10, 2)
+                    .into_iter()
+                    .filter(|(start, end)| end - start >= f64::from(tokens::CHIP_H))
+                    .collect();
+            if raised.len() != 1 {
+                failures.push(format!(
+                    "{scene}: {} raised chips in the header, and a row of chips has exactly one — \
+                     the active workspace is the one the operator is looking at",
+                    raised.len()
+                ));
+            }
+            let Some(&(raised_start, raised_end)) = raised.first() else {
+                return Err(failures);
+            };
+            let Some(plus) = rightmost_ink(
+                image,
+                header,
+                image.width / 2,
+                &[ink(tokens::ink()), ink(tokens::ink_dim())],
+                24,
+            ) else {
+                failures.push(format!("{scene}: no chip ink in the header at all"));
+                return Err(failures);
+            };
+            let distance = plus - raised_end;
+            let (want, why): (fn(f64) -> bool, &str) = match scene {
+                "workspaces" => (|d| d > 60.0, "the first chip, furthest from the `+`"),
+                "workspaces-empty" => (
+                    |d| (20.0..=80.0).contains(&d),
+                    "the second chip, between the first and the `+`",
+                ),
+                _ => (|d| d < 25.0, "the third chip, next to the `+`"),
+            };
+            if want(distance) {
+                lines.push(format!(
+                    "{scene}: the raised chip ends {distance:.0} px left of the `+` — {why}"
+                ));
+            } else {
+                failures.push(format!(
+                    "{scene}: the raised chip ends {distance:.0} px left of the `+`, starting at \
+                     {raised_start:.0} — the capture is not {why}, so the chip that is raised is not \
+                     the workspace on screen"
+                ));
+            }
+
+            // The empty state: the picture panel draws the words, and nothing projects into it.
+            if state.layout().is_none() {
+                let Some((px, py, pw, ph)) = image.find_panel_rect(ink(tokens::panel())) else {
+                    failures.push(format!(
+                        "{scene}: an empty workspace draws no picture panel"
+                    ));
+                    return Err(failures);
+                };
+                let centre = (px, py + ph / 3.0, pw, ph / 3.0);
+                let words = ink_bands(image, centre, &[ink(tokens::ink_dim())], 24);
+                if words.is_empty() {
+                    failures.push(format!(
+                        "{scene}: no words in the middle of an empty workspace — it says \
+                         \"No panes yet.\", not nothing"
+                    ));
+                } else {
+                    lines.push(format!(
+                        "{scene}: the empty workspace draws its message, centred"
+                    ));
+                }
+                let accent = count_colour_in(image, (px, py, pw, ph), ink(tokens::accent()), 24);
+                if accent > 0 {
+                    failures.push(format!(
+                        "{scene}: {accent} accent pixels in an empty workspace — no pane is drawn, so \
+                         nothing projects into it (INV-04)"
+                    ));
+                } else {
+                    lines.push(format!("{scene}: an empty workspace draws no marker ink"));
+                }
+            }
+            // The structure: the chips, the active index and the tiling.
+            if state.workspaces.len() != 3 {
+                failures.push(format!(
+                    "{scene}: {} workspaces, and the default is three",
+                    state.workspaces.len()
+                ));
+            }
+            let expected = match scene {
+                "workspaces" | "workspaces-switch" => 0,
+                _ => 1,
+            };
+            if state.active != expected {
+                failures.push(format!(
+                    "{scene}: workspace {} is active and the scene means workspace {}",
+                    state.active + 1,
+                    expected + 1
+                ));
+            } else {
+                lines.push(format!(
+                    "{scene}: {} workspaces, workspace {} active ({:?})",
+                    state.workspaces.len(),
+                    state.active + 1,
+                    state.active().name
+                ));
+            }
+            match scene {
+                "workspaces" => {
+                    if state.pane_count() != scene::WORKSPACE_PANES {
+                        failures.push(format!(
+                            "workspaces: {} panes, and the scene tiles {}",
+                            state.pane_count(),
+                            scene::WORKSPACE_PANES
+                        ));
+                    }
+                    if state
+                        .workspaces
+                        .iter()
+                        .skip(1)
+                        .any(|workspace| workspace.layout.is_some())
+                    {
+                        failures.push(
+                            "workspaces: a workspace beside the first holds a tiling — the scene's \
+                             point is that those two are empty"
+                                .into(),
+                        );
+                    }
+                }
+                "workspaces-empty" => {
+                    if state.layout().is_some() || state.pane_count() != 0 {
+                        failures.push(format!(
+                            "workspaces-empty: the active workspace holds {} panes",
+                            state.pane_count()
+                        ));
+                    }
+                    if state
+                        .workspaces
+                        .first()
+                        .is_some_and(|workspace| !workspace.panes.is_empty())
+                    {
+                        lines.push(
+                            "workspaces-empty: workspace 1 keeps its panes, and they are not drawn"
+                                .to_string(),
+                        );
+                    }
+                }
+                _ => {
+                    // The scene leaves workspace 1 with its panes; the **capture** is workspace 3's
+                    // empty state, which the pixel half above says by the chip and the words.
+                    if state.pane_count() != scene::WORKSPACE_PANES {
+                        failures.push(
+                            "workspaces-switch: the scene must start on workspace 1 with its panes, so \
+                             the switch in the capture is the click's"
+                                .into(),
+                        );
+                    }
+                }
+            }
+        }
         other => failures.push(format!("no assertions are written for scene {other:?}")),
     }
 
@@ -2991,7 +3277,10 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
 
     match scene {
         "panes" | "panes-chrome" | "panes-drag" | "panes-pan" | "panes-gaps"
-        | "panes-gap-resize" | "panes-named" | "panes-max" | "panes-range" => {
+        | "panes-gap-resize" | "panes-named" | "panes-max" | "panes-range"
+        // The workspaces scene is this wall with two more (empty) workspaces behind it, and the switch
+        // scene is the same wall before its click: both are two panes with a marker per reported hull.
+        | "workspaces" | "workspaces-switch" => {
             // One marker per hull with a fix **in every pane**: a pane that drew nothing, or drew the
             // same set twice, is not a view.
             let expected = state
@@ -3001,7 +3290,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                 .filter(|unit| unit.position.is_some())
                 .count();
             let rects = crate::ui::view::panes_on(
-                &state.layout,
+                state.layout().expect("the scene has a tiling"),
                 state.pane_viewport(),
                 state.settings.pane_gap,
             );
@@ -3038,7 +3327,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
             // projected into it (`INV-04`) — and it draws one node per post of the structure it names,
             // under the supreme command. The pane beside it is still a map with its own frame.
             let rects = crate::ui::view::panes_on(
-                &state.layout,
+                state.layout().expect("the scene has a tiling"),
                 state.pane_viewport(),
                 state.settings.pane_gap,
             );
@@ -3088,7 +3377,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
         | "newsroom-story"
         | "newsroom-story-back" => {
             let rects = crate::ui::view::panes_on(
-                &state.layout,
+                state.layout().expect("the scene has a tiling"),
                 state.pane_viewport(),
                 state.settings.pane_gap,
             );
@@ -3492,6 +3781,34 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                 _ => {}
             }
         }
+        // **An empty workspace projects nothing** (#138): no tiling, so no pane, so no frame for a mark
+        // to be placed against — `INV-04` holds literally. The wall beside it keeps its panes and they
+        // are not drawn.
+        "workspaces-empty" => {
+            if state.layout().is_some() || state.pane_count() != 0 {
+                failures.push(format!(
+                    "workspaces-empty: the active workspace holds {} panes and a tiling",
+                    state.pane_count()
+                ));
+            }
+            if state
+                .workspaces
+                .first()
+                .is_some_and(|workspace| workspace.panes.is_empty())
+            {
+                failures.push(
+                    "workspaces-empty: workspace 1 has no panes to hide, so the capture proves \
+                     nothing about a hidden workspace"
+                        .into(),
+                );
+            }
+            if failures.is_empty() {
+                lines.push(
+                    "workspaces-empty: no tiling, nothing projected, workspace 1's panes not drawn"
+                        .to_string(),
+                );
+            }
+        }
         "empty" => {
             if !markers.is_empty() {
                 failures.push(format!(
@@ -3547,7 +3864,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     if scene == "objects" {
         let expected = state.placements.len();
         let rects = crate::ui::view::panes_on(
-            &state.layout,
+            state.layout().expect("the scene has a tiling"),
             state.pane_viewport(),
             state.settings.pane_gap,
         );
@@ -3593,7 +3910,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
             .filter(|row| row.coordinates().is_some())
             .count();
         let rects = crate::ui::view::panes_on(
-            &state.layout,
+            state.layout().expect("the scene has a tiling"),
             state.pane_viewport(),
             state.settings.pane_gap,
         );
@@ -3622,7 +3939,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                 ));
             }
         }
-        let focused = state.layout.focused();
+        let focused = state.focused();
         let neighbour = state
             .pane_rects()
             .into_iter()
@@ -3654,7 +3971,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     // three. The two panes hold the same camera, so the only difference is the filter.
     if scene == "panes-filter" {
         let rects = crate::ui::view::panes_on(
-            &state.layout,
+            state.layout().expect("the scene has a tiling"),
             state.pane_viewport(),
             state.settings.pane_gap,
         );
@@ -3704,7 +4021,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     // asked per pane. A wall-wide count would pass with the same card in every pane — which is the bug
     // the operator photographed.
     let cards: Vec<(crate::ui::ViewId, i64)> = state
-        .panes
+        .panes()
         .iter()
         .filter_map(|pane| {
             pane.view

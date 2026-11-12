@@ -381,7 +381,6 @@ enum Node {
 pub struct Layout {
     root: Node,
     focused: ViewId,
-    next: ViewId,
     /// The pane drawn **full size over the tiling** (#85, and a layout fact since #101).
     ///
     /// It lives here rather than in the interaction state because it *is* a layout: the tiling behind it
@@ -398,14 +397,22 @@ impl Default for Layout {
 }
 
 impl Layout {
-    /// One pane filling the window: the wall as it has always been.
-    pub fn single() -> Self {
+    /// One pane filling the window, with **the id the wall gave it** (#138).
+    ///
+    /// The id is not the layout's to mint: pane ids are one space for the whole wall, so a pane can be
+    /// moved between workspaces without colliding with a pane that already holds its number. A layout
+    /// that allocated ids "next" would be two layouts allocating the same one.
+    pub fn single_with(id: ViewId) -> Self {
         Self {
-            root: Node::Leaf(1),
-            focused: 1,
-            next: 2,
+            root: Node::Leaf(id),
+            focused: id,
             maximised: None,
         }
+    }
+
+    /// One pane with the first id: a layout on its own, for a test or a fresh workspace.
+    pub fn single() -> Self {
+        Self::single_with(1)
     }
 
     /// The pane drawn over the tiling, if any.
@@ -468,14 +475,12 @@ impl Layout {
 
     /// Split a pane in two, in the direction the pane's own shape asks for. The new pane becomes the
     /// focused one: the operator just asked for it, so that is where they are looking.
-    pub fn split(&mut self, target: ViewId, dir: Dir) -> Option<ViewId> {
-        let id = self.next;
+    pub fn split_with(&mut self, target: ViewId, dir: Dir, id: ViewId) -> Option<ViewId> {
         let mut split = false;
         self.root = replace_leaf(self.root.clone(), target, dir, id, &mut split);
         if !split {
             return None;
         }
-        self.next += 1;
         self.focused = id;
         Some(id)
     }
@@ -627,8 +632,7 @@ impl Layout {
     }
 
     /// Split a pane, putting the new one on a named side (the drop's side, not always `b`).
-    pub fn split_side(&mut self, target: ViewId, side: Side) -> Option<ViewId> {
-        let id = self.next;
+    pub fn split_side_with(&mut self, target: ViewId, side: Side, id: ViewId) -> Option<ViewId> {
         self.splice(target, side.dir(), side.on_a(), id)
     }
 
@@ -640,7 +644,6 @@ impl Layout {
         if !split {
             return None;
         }
-        self.next = self.next.max(id + 1);
         self.focused = id;
         Some(id)
     }
@@ -927,6 +930,13 @@ fn split_length(length: f32, ratio: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    /// A layout's next id for a test that does not care which one it is: the layout stopped minting ids
+    /// in #138, so a test here picks the next one itself — the wall's allocator is the only real one.
+    fn split_next(layout: &mut Layout, target: ViewId, dir: Dir) -> Option<ViewId> {
+        let id = layout.ids().into_iter().max().unwrap_or(0) + 1;
+        layout.split_with(target, dir, id)
+    }
+
     use super::*;
 
     /// The repo's property-test generator, small enough to read: a 64-bit LCG.
@@ -964,7 +974,7 @@ mod tests {
                     } else {
                         Dir::Vertical
                     };
-                    layout.split(target, dir);
+                    split_next(&mut layout, target, dir);
                 }
                 1 if layout.len() > 1 => {
                     layout.close(target);
@@ -1040,7 +1050,7 @@ mod tests {
     fn a_split_takes_the_pane_it_was_aimed_at_and_no_other() {
         let mut layout = Layout::single();
         let first = layout.ids()[0];
-        let second = layout.split(first, Dir::Horizontal).expect("a split");
+        let second = split_next(&mut layout, first, Dir::Horizontal).expect("a split");
         assert_eq!(layout.len(), 2);
         assert_eq!(
             layout.focused(),
@@ -1057,7 +1067,7 @@ mod tests {
         );
 
         // A third splits the SECOND pane, not the first.
-        let third = layout.split(second, Dir::Vertical).expect("a split");
+        let third = split_next(&mut layout, second, Dir::Vertical).expect("a split");
         let rects = layout.rects(viewport());
         assert_eq!(rects.len(), 3);
         let third_rect = rects.iter().find(|(id, _)| *id == third).unwrap().1;
@@ -1066,15 +1076,19 @@ mod tests {
             "the third pane belongs to the right half, started at {}",
             third_rect.x
         );
-        assert_eq!(layout.split(999, Dir::Horizontal), None, "no such pane");
+        assert_eq!(
+            split_next(&mut layout, 999, Dir::Horizontal),
+            None,
+            "no such pane"
+        );
     }
 
     #[test]
     fn closing_a_pane_gives_its_space_to_its_sibling_and_never_leaves_a_hole() {
         let mut layout = Layout::single();
         let first = layout.ids()[0];
-        let second = layout.split(first, Dir::Horizontal).unwrap();
-        let _third = layout.split(second, Dir::Vertical).unwrap();
+        let second = split_next(&mut layout, first, Dir::Horizontal).unwrap();
+        let _third = split_next(&mut layout, second, Dir::Vertical).unwrap();
 
         assert!(layout.close(second), "closing a pane that has a sibling");
         let ids = layout.ids();
@@ -1103,7 +1117,7 @@ mod tests {
     fn a_ratio_below_the_minimum_clamps_instead_of_emptying_a_pane() {
         let mut layout = Layout::single();
         let first = layout.ids()[0];
-        let second = layout.split(first, Dir::Horizontal).unwrap();
+        let second = split_next(&mut layout, first, Dir::Horizontal).unwrap();
         // Drag the border all the way: the ratio is clamped, and the pane keeps a usable width.
         let border = layout
             .border_at(viewport(), (639.0, 360.0), tokens::PANE_GRIP)
@@ -1166,7 +1180,7 @@ mod tests {
     fn a_gap_pulls_the_panes_in_and_leaves_the_cells_alone() {
         let mut layout = Layout::single();
         let first = layout.ids()[0];
-        let _second = layout.split(first, Dir::Horizontal).unwrap();
+        let _second = split_next(&mut layout, first, Dir::Horizontal).unwrap();
         let cells = layout.rects(viewport());
 
         // At zero the drawn rectangles are the cells, to the point: the look the wall had before settings.
@@ -1203,7 +1217,7 @@ mod tests {
     fn a_press_is_measured_from_the_pane_it_landed_in() {
         let mut layout = Layout::single();
         let first = layout.ids()[0];
-        let second = layout.split(first, Dir::Horizontal).unwrap();
+        let second = split_next(&mut layout, first, Dir::Horizontal).unwrap();
         let grip = tokens::PANE_GRIP;
         let rect = layout
             .rect_of(viewport(), second)
@@ -1254,7 +1268,7 @@ mod tests {
     fn a_border_is_grabbed_only_on_the_line() {
         let mut layout = Layout::single();
         let first = layout.ids()[0];
-        let second = layout.split(first, Dir::Horizontal).unwrap();
+        let second = split_next(&mut layout, first, Dir::Horizontal).unwrap();
         let grip = tokens::PANE_GRIP;
 
         let on = layout
@@ -1293,8 +1307,8 @@ mod tests {
         // one that moves.
         let mut three = Layout::single();
         let left = three.ids()[0];
-        let right = three.split(left, Dir::Horizontal).unwrap();
-        let bottom = three.split(right, Dir::Vertical).unwrap();
+        let right = split_next(&mut three, left, Dir::Horizontal).unwrap();
+        let bottom = split_next(&mut three, right, Dir::Vertical).unwrap();
         let deepest = three
             .border_at(viewport(), (960.0, 360.0), 8.0)
             .expect("the border inside the right half");
@@ -1310,8 +1324,8 @@ mod tests {
         let vp = viewport();
         let mut layout = Layout::single();
         let left = layout.ids()[0];
-        let right = layout.split(left, Dir::Horizontal).unwrap();
-        let _bottom = layout.split(right, Dir::Vertical).unwrap();
+        let right = split_next(&mut layout, left, Dir::Horizontal).unwrap();
+        let _bottom = split_next(&mut layout, right, Dir::Vertical).unwrap();
         let gap = tokens::GAP;
 
         let borders = layout.borders(vp);
@@ -1383,7 +1397,7 @@ mod tests {
     fn a_lifted_pane_is_measured_from_the_handle_its_hand_closed_on() {
         let mut layout = Layout::single();
         let first = layout.ids()[0];
-        let second = layout.split(first, Dir::Vertical).unwrap();
+        let second = split_next(&mut layout, first, Dir::Vertical).unwrap();
         let rect = layout.rect_of(viewport(), second).expect("the lower pane");
         assert!(
             rect.y > 0.0,
@@ -1442,7 +1456,7 @@ mod tests {
     fn a_drop_is_a_swap_in_the_middle_and_a_re_tile_on_an_edge() {
         let mut layout = Layout::single();
         let left = layout.ids()[0];
-        let right = layout.split(left, Dir::Horizontal).unwrap();
+        let right = split_next(&mut layout, left, Dir::Horizontal).unwrap();
         let rect = layout.rect_of(viewport(), right).unwrap();
         let middle = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
 
@@ -1494,8 +1508,8 @@ mod tests {
         ] {
             let mut layout = Layout::single();
             let left = layout.ids()[0];
-            let right = layout.split(left, Dir::Horizontal).unwrap();
-            let dragged = layout.split(right, Dir::Horizontal).unwrap();
+            let right = split_next(&mut layout, left, Dir::Horizontal).unwrap();
+            let dragged = split_next(&mut layout, right, Dir::Horizontal).unwrap();
             let rect = layout.rect_of(vp, right).expect("the target pane");
             // A point in the band, and well inside it: 8% from the edge the side names.
             let at = match side {
@@ -1542,8 +1556,8 @@ mod tests {
     fn the_preview_of_a_drop_is_the_layout_the_drop_makes() {
         let mut layout = Layout::single();
         let first = layout.ids()[0];
-        let second = layout.split(first, Dir::Horizontal).unwrap();
-        let third = layout.split(second, Dir::Vertical).unwrap();
+        let second = split_next(&mut layout, first, Dir::Horizontal).unwrap();
+        let third = split_next(&mut layout, second, Dir::Vertical).unwrap();
 
         for drop in [
             Drop::Swap { a: first, b: third },
@@ -1589,7 +1603,7 @@ mod tests {
     fn a_swap_moves_both_panes_and_a_re_tile_splits_the_target() {
         let mut layout = Layout::single();
         let first = layout.ids()[0];
-        let second = layout.split(first, Dir::Horizontal).unwrap();
+        let second = split_next(&mut layout, first, Dir::Horizontal).unwrap();
         let before = layout.rects(viewport());
         let first_rect = before[0].1;
 
@@ -1613,7 +1627,7 @@ mod tests {
         // Re-tiling puts the dragged pane on the named side of its target.
         let mut layout = Layout::single();
         let a = layout.ids()[0];
-        let b = layout.split(a, Dir::Horizontal).unwrap();
+        let b = split_next(&mut layout, a, Dir::Horizontal).unwrap();
         assert!(layout.apply(Drop::Retile {
             dragged: a,
             target: b,
@@ -1642,7 +1656,7 @@ mod tests {
     fn a_point_belongs_to_exactly_one_pane() {
         let mut layout = Layout::single();
         let first = layout.ids()[0];
-        layout.split(first, Dir::Horizontal).unwrap();
+        split_next(&mut layout, first, Dir::Horizontal).unwrap();
         let mut rng = Rng(0x0068_F00D_2222_3333);
         for _ in 0..500 {
             let at = (

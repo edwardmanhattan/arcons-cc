@@ -30,6 +30,11 @@ pub const IDLE_INTERVAL: Duration = Duration::from_millis(250);
 /// cadence; the others are a map that is *there*, not a map that is *live*.
 pub const UNFOCUSED_INTERVAL: Duration = Duration::from_secs(1);
 
+/// **A pane in a workspace that is not on screen** (#138): its map keeps its frame and its context, and
+/// stops rendering. Three workspaces are not three walls drawing — a hidden pane wakes when its
+/// workspace becomes active, and the frame it shows then is the one it had.
+pub const HIDDEN_INTERVAL: Duration = Duration::from_secs(60);
+
 /// What the view loop asks the map thread for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Request {
