@@ -3670,6 +3670,11 @@ pub fn golden_bounds(scene: &str) -> Bounds {
         // text's own factor, and both CI runs now measure **1/255**, so the 8/255 exception this
         // scene used to need is gone.
         "pane-tree" | "pane-tree-pan" => Bounds::new(2, 200, 450),
+        // **The newsroom's rows** (#136): 12 pt text at 1:1, nine visible rows and three tabs. CI's
+        // lavapipe measured 656 px (`newsroom-scopes`), 785 (`newsroom-page-2`) and 828 (`newsroom`) as
+        // one-step rounding; the allowance is the measurement plus about half, and the change budget
+        // stays the ordinary 200, so a row that moved is still red.
+        "newsroom" | "newsroom-page-2" | "newsroom-scopes" => Bounds::new(2, 200, 1_200),
         _ => DEFAULT_BOUNDS,
     }
 }
