@@ -46,15 +46,21 @@ jobs:
       - name: clippy
         run: cargo clippy --all-targets --locked -- -D warnings
 
-  # #31: `--features map` on the two platforms that have a precompiled core. Allowed to fail, with the
-  # log in the job summary, because a broken map on macOS is a finding to record in
-  # docs/research/portability.md — not a reason no one can land a card fix. When this passes two runs in
-  # a row, delete `continue-on-error` and make it real.
+  # #31: `--features map` on the two platforms that have a precompiled core.
+  #
+  # **macOS is real as of #152**, and blocks: it is the second platform that compiles our map-gated code,
+  # and #138 → #152 proved what a red one means — four sites did not compile for five merges while nobody
+  # read the job. Two consecutive runs passed before the flag came off this half of the matrix.
+  #
+  # **Windows stays advisory**, and for a reason that is not our code: the vendored build script says so
+  # itself (`vendor/maplibre_native/build.rs:168`) — *"unsupported target: only linux and macos are
+  # currently supported by maplibre-native"*. #46 recorded that, and it closes when upstream ships a core
+  # the script looks for; the log stays in the job summary either way.
   map:
     name: map (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    continue-on-error: true
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -102,7 +108,9 @@ jobs:
             -o "$dir/headers.tar.gz" "$base/maplibre-native-headers.tar.gz"
           ls -l "$dir"
 
-      - name: cargo check, map engine
+      # The same check `VERIFY_WITH_MAP=1 scripts/verify.sh` runs, at the same standard: `cargo check`
+      # tolerates warnings, and code nothing compiles is exactly where a warning is rot already (#152).
+      - name: cargo clippy, map engine
         id: map
         run: |
           set -o pipefail
@@ -111,7 +119,7 @@ jobs:
             export MLN_CORE_LIBRARY_HEADERS_PATH="$HOME/.cache/arcons-cc/mln/headers.tar.gz"
             echo "using the cached core at $MLN_CORE_LIBRARY_PATH"
           fi
-          cargo check --features map --all-targets --locked 2>&1 | tee map.log
+          cargo clippy --features map --all-targets --locked -- -D warnings 2>&1 | tee map.log
         shell: bash
         env:
           # The precompiled core, when the platform has one: 378 MB of download beats an hour of C++. On
