@@ -138,7 +138,8 @@ cargo run -- --scenes            # empty · picture · stale · card-open · pho
                                  # pane-tree-pan · newsroom · newsroom-scopes · newsroom-page-2
                                  # newsroom-story · newsroom-story-back
                                  # workspaces · workspaces-empty · workspaces-switch
-                                 # workspaces-named
+                                 # workspaces-named · workspaces-menu · workspaces-moved
+                                 # workspaces-new
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -307,6 +308,28 @@ state: the three workspaces are `Workspace 1`, `Straits watch`, `Workspace 3` �
 another. `cargo test ui::rename` holds what a capture cannot: a rename commits to its target and nowhere
 else, an empty field falls back to `Workspace N` (a pane's empty field still removes its name), a long
 name is cut with the pane name's own ellipsis, and Escape commits nothing.
+
+`workspaces-menu` is the **waterfall** (#140): four workspaces, one named `Straits watch`, and a pane
+menu whose `Move to workspace` row is open. The menu is opened by the state a right-click sets and the
+second surface by the function a hover calls (`ui::open_submenu`), not by drawing one here. The assertion
+requires **two surfaces** (the menu's own `bg()` fill appears as two runs across the pane, the second to
+the right of the first), the trigger's children to be the three workspaces this pane is **not** in, by
+name — `Straits watch`, `Workspace 3`, `Workspace 4` — and the raised chip to be workspace 1's. A
+submenu that listed the pane's own workspace, or a waterfall that never opened, is red.
+
+`workspaces-moved` is **a feed moved to workspace 2** through `ui::move_pane_to`, the function the menu
+row calls. The assertion requires the pane's identity and view to have travelled (one pane in the target,
+workspace 1 still holding its map pane), **no marker ink** in the feed (a moved pane that came with a map
+would project into it), the second chip raised, and — in the structure half — workspace 1's map to be the
+only one outside the active workspace and not drawn. `cargo test ui::tests` holds what a capture cannot:
+the id, scope and page travel with the pane, the source keeps its other panes, moving a workspace's last
+pane leaves it empty, and a pane cannot move to the workspace it is already in.
+
+`workspaces-new` is **`Focus on new workspace` from a map pane**: a fourth workspace, active, with one
+new map pane at the source's camera, and the source workspace still holding its own. The assertion
+requires four workspaces with the last chip raised, one map pane in the new one, and one pane in the
+source. The action makes a **new** pane — a map gets its own thread, a newsroom a fresh view at its
+default tab and page — rather than copying the source's selection, filter or rows.
 
 `pane-menu` is a wall with **one** pane and its right-click menu open (#77) — the one shape the menu was
 never drawn on, and the only wall that needs it, because "Focus on new pane" is the only route to a second

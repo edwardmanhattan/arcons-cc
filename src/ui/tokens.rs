@@ -137,6 +137,9 @@ pub const TREE_LINE: f32 = 20.0;
 /// edge would be a bracket, not a line.
 pub const TREE_ROW_GAP: f32 = 24.0;
 pub const TREE_COL_GAP: f32 = 16.0;
+/// The waterfall's chevron (#140): the glyph on a row that opens a second surface, at a menu row's edge.
+pub const MENU_CHEVRON: f32 = 12.0;
+
 /// **The workspace chips** (#138): the capsule's height, its horizontal padding, the gap between chips,
 /// the glyph inside one, and the gap between the glyph and the number. A chip is a control read from
 /// across a room, so it is a touch target's height, not a label's.
