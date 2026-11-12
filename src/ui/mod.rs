@@ -1820,6 +1820,17 @@ fn workspace_chips(state: &State) -> El {
                         state.layout_dirty = true;
                     }
                 })
+                // **Name a workspace that is not on screen** (#154): a right-click on a chip opens the
+                // rename sheet for **that** chip, without switching to it. The gesture is the pane menu's
+                // (a secondary press names a thing), the sheet is #139's, and the target is the one thing
+                // `RenameTarget::Workspace` already carried — the index, not the active workspace.
+                //
+                // No menu in between: a one-row surface over a chip would be a second thing to learn for
+                // a thing the title already teaches, and `Interaction::Menu` is anchored to a pane.
+                .on_secondary_press(move |state: &mut State, _at, _tx: &mut rune::Tx| {
+                    begin_workspace_rename(state, index);
+                })
+                .help("Rename this workspace")
                 .child(
                     rune::icon(&icons::WORKSPACE, tokens::CHIP_ICON)
                         .key(format!("workspace-chip-icon-{index}"))
@@ -7028,6 +7039,67 @@ mod tests {
 /// **Closing a workspace's last pane** (#141): a workspace is allowed to be empty, and the wall lands on
 /// the nearest previous workspace that still has a pane — on **the pane the operator was last in there**,
 /// which is the one thing a "switch to the workspace" that forgot `Layout::focused()` would get wrong.
+/// **Naming a workspace that is not on screen** (#154): `RenameTarget::Workspace` carries an index, and
+/// the chip's right-click is the door. What a capture cannot say — that the commit lands on the *other*
+/// workspace and leaves the wall's title alone — is here.
+#[cfg(test)]
+mod hidden_rename_tests {
+    use super::*;
+
+    #[test]
+    fn a_hidden_workspace_is_renamed_and_the_title_is_not() {
+        let mut state = crate::scene::state_for("workspaces");
+        state.headless = true;
+        assert_eq!(state.active, 0);
+        begin_workspace_rename(&mut state, 1);
+        let Some(rename) = state.rename() else {
+            panic!("the chip's right-click opens the sheet");
+        };
+        assert_eq!(
+            rename.target,
+            RenameTarget::Workspace(1),
+            "the chip names **its** workspace, not the one on screen"
+        );
+        assert_eq!(
+            rename.edit.text, "Workspace 2",
+            "the field starts with the name the chip stands for"
+        );
+        if let Some(rename) = state.renaming_mut() {
+            rename.edit.text = "Straits watch".to_string();
+        }
+        commit_rename(&mut state);
+
+        assert_eq!(state.workspaces[1].name, "Straits watch");
+        assert_eq!(
+            state.workspaces[0].name, "Workspace 1",
+            "and nothing else was renamed"
+        );
+        assert_eq!(state.active, 0, "and the wall did not switch to it");
+        assert_eq!(
+            workspace_title(&state.workspaces[0], 0),
+            "Workspace 1",
+            "the title is the active workspace's, so it did not change"
+        );
+        assert_eq!(workspace_title(&state.workspaces[1], 1), "Straits watch");
+        assert!(state.menu().is_none());
+    }
+
+    /// **Escape leaves a hidden workspace as it was** — the sheet is the title's, and its way out is the
+    /// same whether the workspace it names is on screen or not.
+    #[test]
+    fn escaping_a_hidden_rename_changes_nothing() {
+        let mut state = crate::scene::state_for("workspaces");
+        state.headless = true;
+        begin_workspace_rename(&mut state, 1);
+        if let Some(rename) = state.renaming_mut() {
+            rename.edit.text = "Half a name".to_string();
+        }
+        state.end();
+        assert_eq!(state.workspaces[1].name, "Workspace 2");
+        assert!(state.rename().is_none());
+    }
+}
+
 #[cfg(test)]
 mod workspace_close_tests {
     use super::*;

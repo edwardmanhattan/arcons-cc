@@ -1205,6 +1205,16 @@ fn workspaces_named(state: &mut State) {
 /// would cover the surface that opened it, which is a different picture from the one this scene is about.
 pub const WORKSPACES_MENU_AT: (f32, f32) = (48.0, 150.0);
 
+/// The `workspaces-rename-hidden` scene: **the rename sheet, open on a workspace that is not on screen** (#154).
+///
+/// Workspace 1 stays the wall on screen and the title stays its name. The sheet and the words in it are
+/// **the gesture's**: `fixtures/scripts/workspaces-rename-hidden.json` right-clicks chip 2 and types
+/// "Straits watch", so the capture is a secondary press on a chip and not a function call standing in for
+/// one. The scene leaves three workspaces and the wall where the operator's would be.
+fn workspaces_rename_hidden(state: &mut State) {
+    workspaces(state);
+}
+
 /// The `workspaces-menu` scene: **four workspaces, one of them named, and the waterfall open.**
 ///
 /// The menu is opened by the state the right-click sets (`Begin::Menu`) and the submenu by the function a
@@ -1347,6 +1357,8 @@ pub const SCENES: &[Scene] = &[
     // Closing a workspace's last pane (#141): the wall lands on the nearest previous workspace, and focus
     // goes to the pane the operator was last in there.
     ("workspaces-close", workspaces_close),
+    // A workspace that is not on screen can be named (#154): the sheet is the title's, offered on a chip.
+    ("workspaces-rename-hidden", workspaces_rename_hidden),
 ];
 
 /// Look a scene up by the name `scripts/capture.sh` was given.
@@ -1633,7 +1645,8 @@ mod tests {
                 "workspaces-menu",
                 "workspaces-moved",
                 "workspaces-new",
-                "workspaces-close"
+                "workspaces-close",
+                "workspaces-rename-hidden"
             ]
         );
         for name in names() {
