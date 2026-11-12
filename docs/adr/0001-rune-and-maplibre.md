@@ -168,9 +168,11 @@ diff is attributable rather than assumed** — and this time the direction is th
   ink mask at the old threshold is *identical* and its best overlap is at (0,0): positions did not
   move, coverage did.
 - **Run cells rasterize at their text's raster factor** (#599), so a count under a scaled tree is as
-  crisp as the words beside it. The tree canvas (#127) is the call site, and the 6/255 tolerance
-  those two scenes needed in `verify::golden_bounds` (#130) is exactly the scaled-text difference
-  this addresses.
+  crisp as the words beside it. The tree canvas (#127) is the call site, and this **removed the
+  8/255 tolerance exception** those two scenes needed in `verify::golden_bounds` (#130): measured on
+  lavapipe across two runs, the tree scenes now differ by **1/255**, so every scene keeps the
+  two-step colour contract. The rounding counts did not fall (296 and 289 one-step pixels); the
+  colour difference did, which is the difference between glyph coverage and glyph shape.
 - **A scaled or moving canvas stays centred in its snapped box** (r267), again the tree canvas.
 - **One mask fill for the CPU and the GPU** (#622, #630), and masks kept across launches (#684):
   the same bytes on both paths, which is the direction `INV-11` and the golden bounds want.
