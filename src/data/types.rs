@@ -635,3 +635,180 @@ pub struct TniCommandPost {
     #[serde(default)]
     pub commander: Option<TniCommander>,
 }
+
+// ---------------------------------------------------------------------------------------------
+// The newsroom (#135): Minos' strategic-environment feed. The API's word for the route is
+// `banglinstra`; this crate's word is the newsroom, which is what the panel is called.
+//
+// A row is a **story**, not an article: the same wire story that seven outlets carried is one row
+// with `source_count: 7`, and the detail is that story with the documents behind it, oldest first.
+//
+// Every field the server omits is `Option` (`INV-01`): a story's `country` when the corpus carried
+// no usable geography, that country's `place` unless half the location rows agreed, and an
+// article's `persons`, `tone`, `event_code` and `quad_class`. The panel draws a dash for each;
+// none of them may become `""` or `0`.
+// ---------------------------------------------------------------------------------------------
+
+/// Which tab a story is filed under: a predicate over the **event's** country, not the outlet's.
+///
+/// `Unknown` is a real scope and not a null — roughly 30% of documents carry no usable location —
+/// so it is modelled rather than folded into an absence. The panel has no fourth tab: the wall's
+/// `min_confidence` drops `unknown` stories anyway, because a story with no country carries no
+/// confidence to compare.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewsScope {
+    International,
+    Regional,
+    National,
+    Unknown,
+}
+
+impl NewsScope {
+    /// The wire's word, for the query string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NewsScope::International => "international",
+            NewsScope::Regional => "regional",
+            NewsScope::National => "national",
+            NewsScope::Unknown => "unknown",
+        }
+    }
+}
+
+/// The `Terkini`/`Arsip` toggle, as the wire names it.
+///
+/// **`Latest` is the last 24 hours OF THE DATA HELD**, anchored by the server to the newest article
+/// it has — never to this machine's clock. The client therefore sends the word and computes no
+/// cutoff: an air-gapped box started on a three-day-old corpus shows those three days rather than
+/// an empty tab, which is the failure the rule exists for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NewsWindow {
+    #[default]
+    Latest,
+    Archive,
+}
+
+impl NewsWindow {
+    /// The wire's word, for the query string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NewsWindow::Latest => "latest",
+            NewsWindow::Archive => "archive",
+        }
+    }
+}
+
+/// What the newsroom asked for: the tab, the window and the page.
+///
+/// The query travels **with the reply** (`Command::Stories` → `Reply::Stories`) so a page that
+/// arrives after the operator changed tab or pressed Next can be compared with what is on screen
+/// now and discarded. Applying "the newest arrival" would draw page 2 of the regional tab under the
+/// national heading.
+///
+/// `min_confidence` and `page_size` are deliberately not fields: the wall makes one choice for
+/// each (`http::MIN_CONFIDENCE`, `http::NEWS_PAGE_SIZE`), so no caller can ask for a page the panel
+/// has no control for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NewsQuery {
+    pub scope: NewsScope,
+    pub window: NewsWindow,
+    /// 1-based, as the server counts pages.
+    pub page: u32,
+}
+
+impl NewsQuery {
+    /// Where the panel opens: the latest 24 hours of one tab, page one.
+    pub fn latest(scope: NewsScope) -> Self {
+        Self {
+            scope,
+            window: NewsWindow::Latest,
+            page: 1,
+        }
+    }
+}
+
+/// The Negara/Lokasi column: the country the event happened in, and the share of the corpus behind
+/// it. Kept together because half of it is misleading on its own — a weak match must read as weak.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct NewsCountry {
+    /// ISO 3166-1 alpha-2, resolved at ingest from GDELT's FIPS 10-4 code.
+    pub code: String,
+    /// The country as the corpus wrote it. This is what the panel shows.
+    pub name: String,
+    /// The city, present **only** when it held at least half of the document's location rows.
+    /// Absent means "not established", not "no city".
+    #[serde(default)]
+    pub place: Option<String>,
+    /// The share of the document's location rows behind `code`, 0–1. A fact to show, never a
+    /// filter to re-apply: the server has already applied the one the operator asked for.
+    pub confidence: f64,
+}
+
+/// One row of the panel.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct NewsStory {
+    pub id: i64,
+    /// The headline as the story was first named, never rewritten as copies arrive.
+    pub title: String,
+    /// How many documents carried it. Seven means seven outlets ran it, which is why the panel
+    /// lists stories rather than articles.
+    pub source_count: u32,
+    /// **Absent** when the corpus carried no usable geography. The panel draws a dash; it does not
+    /// guess, and `code: ""` is never sent.
+    #[serde(default)]
+    pub country: Option<NewsCountry>,
+    /// The lead article's registrable domain.
+    pub source: String,
+    /// The lead article's URL — **provenance, not a browsing affordance**: on an air-gapped wall it
+    /// cannot be opened, so it is drawn as text and never as a button.
+    pub url: String,
+    pub first_seen: DateTime<Utc>,
+    pub last_seen: DateTime<Utc>,
+}
+
+/// One document inside a story, oldest first in the detail.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct NewsArticle {
+    pub id: i64,
+    pub title: String,
+    pub domain: String,
+    pub url: String,
+    /// The domain is on **neither** the allow nor the deny list. Shown rather than filtered: an
+    /// unclassified source is a question for an operator, and an invisible gap is worse.
+    pub flagged: bool,
+    #[serde(default)]
+    pub persons: Option<Vec<String>>,
+    /// GDELT's average document tone. Absent when the source carried none; `Some(0.0)` is a
+    /// measured neutral and must still draw (`INV-01`).
+    #[serde(default)]
+    pub tone: Option<f64>,
+    /// CAMEO code, absent for roughly 73% of documents — those are still articles.
+    #[serde(default)]
+    pub event_code: Option<String>,
+    #[serde(default)]
+    pub quad_class: Option<u32>,
+    /// GDELT's own processing clock, UTC.
+    pub seen_at: DateTime<Utc>,
+}
+
+/// `GET /banglinstra/stories/{id}` — the story and the documents that carried it.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct NewsStoryDetail {
+    pub story: NewsStory,
+    /// **Oldest first**, so the list reads as provenance: who had it first, and who repeated it.
+    /// On this route `story.source_count` always equals `articles.len()`, because both are derived
+    /// from the same rows.
+    pub articles: Vec<NewsArticle>,
+}
+
+/// One page of the list: the rows **and** the pagination block.
+///
+/// The read does not walk pages. `paged()` answers "the whole fleet" one page at a time at the
+/// server's maximum page size, which is the register's question; the newsroom asks the operator's
+/// one — page `n` of 25 stories — and a client that walked every page would make page 2
+/// unreachable. `total_records` is still carried, so the panel can say how much it is not showing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoryPage {
+    pub rows: Vec<NewsStory>,
+    pub pagination: Pagination,
+}

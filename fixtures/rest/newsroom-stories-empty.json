@@ -1,0 +1,13 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": [],
+  "metadata": {
+    "total_records": 0,
+    "total_pages": 0,
+    "page_size": 25,
+    "current_page": 1,
+    "has_next_page": false,
+    "has_previous_page": false
+  }
+}

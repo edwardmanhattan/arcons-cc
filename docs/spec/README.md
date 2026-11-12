@@ -5,8 +5,8 @@ silent breakage. Nothing in this directory is ours to edit.
 
 | file | source | from |
 | --- | --- | --- |
-| `minos-api.yaml` | `minos/docs/openapi/minos-api.yaml` | `minos` @ `0e165781b3e0` (2026-11-10, branch `wip`) |
-| `realtime-protocol.md` | `minos/docs/realtime-protocol.md` | `minos` @ `01f8fbe2ca88` (2026-11-04) — byte-identical at `0e165781b3e0`, so it was not re-copied |
+| `minos-api.yaml` | `minos/docs/openapi/minos-api.yaml` | `minos` @ `5758f37` (2026-11-11) — added the newsroom (`/banglinstra`), 288 lines, no other change against `0e165781b3e0` |
+| `realtime-protocol.md` | `minos/docs/realtime-protocol.md` | `minos` @ `01f8fbe2ca88` (2026-11-04) — byte-identical at `0e165781b3e0` and at `5758f37`, so it was not re-copied |
 
 ## Re-vendoring
 
@@ -26,7 +26,8 @@ in #107 — `ViewpointSummary`, `InstallationTypeSummary`, `InstallationSummary`
 `TacticalObjectManifestEntry`, `TacticalObjectFacets`, `TacticalObjectDomainFacet`,
 `TacticalObjectCategoryFacet`, `TacticalObjectPlacement`, `UnitOrganisationSummary`,
 `UnitOrganisationNodeSummary`, `UnitOrganisationDetail`, `NodeCommanderSummary`,
-`TniCommanderSummary` and `TniCommandPostSummary`. It parses the snapshot as **text**
+`TniCommanderSummary`, `TniCommandPostSummary` and — added in #135 — `BanglinstraCountry`,
+`BanglinstraStory`, `BanglinstraArticle`, `BanglinstraStoryDetail`. It parses the snapshot as **text**
 (no YAML dependency): find the schema block, read its `required:` list, compare against a const field list
 in Rust. Crude on purpose — it is a tripwire, not a validator.
 
@@ -64,3 +65,29 @@ Operational resources (#107):
   and `asset_url` are all absent in real responses, and none may default (`INV-01`). Two of them,
   `label` and `rotation_deg`, are even listed as `required` on `TacticalObjectPlacement` while the
   server omits them — which is why the client models the wire, not the `required` list.
+
+The newsroom (#135): the API's word for the route is `banglinstra`, and this code calls the panel
+the newsroom:
+
+- `GET /banglinstra/stories` requires `read` on **`/system/banglinstra`**, and so does
+  `GET /banglinstra/stories/{id}`. There is no write action to grant: nothing writes an article
+  through this API.
+- **A row is a story, not an article.** `source_count` is how many documents carried it, and on the
+  detail route it always equals `articles.len()`.
+- `window=latest` is the last 24 hours **of the data held** — the server anchors it to the newest
+  article it has (`max(seendate)`), **never to `now()`**. A client that computed its own cutoff would
+  show an empty tab on an air-gapped box holding a three-day-old corpus. `window=archive` has no lower
+  bound, which "nothing is ever deleted" makes possible.
+- `min_confidence` **also drops `unknown`-scope stories**: a story whose country could not be resolved
+  carries no confidence, so it cannot satisfy any positive minimum. That is the intent, not a bug.
+- The four scopes are predicates over the event's country: `national` is Indonesia, `regional` is the
+  deployment's list, `international` is everything else with a country, and `unknown` is a real scope
+  and not a null.
+- `country` is **absent** when the corpus had no usable geography, and `country.place` is absent
+  unless at least half the document's location rows agreed. `confidence` is a fact to show (below 0.5
+  the country is not settled), not a filter to re-apply.
+- An article's `persons`, `tone`, `event_code` and `quad_class` are all optional: `event_code` is
+  absent for roughly 73% of documents, and those are still articles. `flagged` means the domain is on
+  neither the allow nor the deny list — shown, not filtered.
+- `url` is provenance. On an air-gapped wall it cannot be opened, so it is never drawn as a browsing
+  affordance.

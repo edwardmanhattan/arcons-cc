@@ -1,0 +1,52 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": [
+    {
+      "id": 412,
+      "title": "Coast guard patrols resume in the North Natuna Sea",
+      "source_count": 3,
+      "country": {
+        "code": "ID",
+        "name": "Indonesia",
+        "place": "Jakarta",
+        "confidence": 0.83
+      },
+      "source": "en.antaranews.com",
+      "url": "https://en.antaranews.com/news/coast-guard-patrols-resume",
+      "first_seen": "2026-11-11T09:40:00Z",
+      "last_seen": "2026-11-11T12:15:00Z"
+    },
+    {
+      "id": 409,
+      "title": "Regional ministers agree on a joint disaster-response exercise",
+      "source_count": 4,
+      "country": {
+        "code": "MY",
+        "name": "Malaysia",
+        "confidence": 0.55
+      },
+      "source": "thejakartapost.com",
+      "url": "https://www.thejakartapost.com/world/regional-ministers-exercise",
+      "first_seen": "2026-11-11T07:05:00Z",
+      "last_seen": "2026-11-11T11:30:00Z"
+    },
+    {
+      "id": 404,
+      "title": "Undated wire copy names no location at all",
+      "source_count": 1,
+      "source": "malaysiasun.com",
+      "url": "https://malaysiasun.com/2026/11/undated-wire-copy",
+      "first_seen": "2026-11-11T05:20:00Z",
+      "last_seen": "2026-11-11T05:20:00Z"
+    }
+  ],
+  "metadata": {
+    "total_records": 128,
+    "total_pages": 6,
+    "page_size": 25,
+    "current_page": 1,
+    "has_next_page": true,
+    "has_previous_page": false
+  }
+}
