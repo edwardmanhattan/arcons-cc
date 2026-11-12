@@ -47,6 +47,7 @@ fn every_state() -> Vec<(&'static str, Interaction)> {
             Interaction::Menu {
                 pane: 1,
                 at: (4.0, 4.0),
+                open: None,
             },
         ),
         ("Filtering", Interaction::Filtering { pane: 1 }),
@@ -271,6 +272,7 @@ fn a_menu_gives_way_to_the_sheet_it_opens() {
     let menu = Interaction::Menu {
         pane: 1,
         at: (4.0, 4.0),
+        open: None,
     };
     assert!(
         Begin::Rename(Rename::new(RenameTarget::Pane(1), None)).allowed_from(&menu),

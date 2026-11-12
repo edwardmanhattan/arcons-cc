@@ -1200,6 +1200,61 @@ fn workspaces_named(state: &mut State) {
     crate::ui::commit_rename(state);
 }
 
+/// Where the `workspaces-menu` scene right-clicks, in the pane's own points: **far enough left that the
+/// waterfall opens to the right of its row and stays inside the pane** — a submenu that had to flip left
+/// would cover the surface that opened it, which is a different picture from the one this scene is about.
+pub const WORKSPACES_MENU_AT: (f32, f32) = (48.0, 150.0);
+
+/// The `workspaces-menu` scene: **four workspaces, one of them named, and the waterfall open.**
+///
+/// The menu is opened by the state the right-click sets (`Begin::Menu`) and the submenu by the function a
+/// hover calls (`ui::open_submenu`), not by drawing one here.
+fn workspaces_menu(state: &mut State) {
+    workspaces(state);
+    // A fourth workspace, so the waterfall has three rows rather than two.
+    state.add_workspace();
+    // And one of them named, through the sheet's own commit.
+    crate::ui::begin_workspace_rename(state, 1);
+    if let Some(rename) = state.renaming_mut() {
+        rename.edit.text = "Straits watch".to_string();
+        rename.edit.focus = rename.edit.text.chars().count();
+        rename.edit.anchor = rename.edit.focus;
+    }
+    crate::ui::commit_rename(state);
+    state.switch_to(0);
+    let pane = state.focused();
+    state.begin(crate::ui::Begin::Menu {
+        pane,
+        at: WORKSPACES_MENU_AT,
+    });
+    crate::ui::open_submenu(state, "menu-move");
+}
+
+/// The `workspaces-moved` scene: **a newsroom pane moved to workspace 2**, through the function the menu
+/// row calls (`ui::move_pane_to`) — so the capture is the move and not a second way of producing it.
+///
+/// Workspace 1 keeps its map. The moved pane keeps its id, its newsroom view and its rows.
+fn workspaces_moved(state: &mut State) {
+    load(state);
+    let map = state.focused();
+    let camera = state.camera_of(map);
+    let Some(newsroom) = state.split_pane_as(map, camera, crate::ui::PaneContent::Newsroom) else {
+        return;
+    };
+    split_ratio(state, NEWSROOM_MAP_SHARE);
+    apply_page(state, newsroom, "newsroom-international-1.json");
+    state.focus_pane(map);
+    crate::ui::move_pane_to(state, newsroom, 1);
+}
+
+/// The `workspaces-new` scene: **`Focus on new workspace` from the map pane** — a fourth workspace, active,
+/// with one new map pane at the source's camera, and the source workspace still holding its own.
+fn workspaces_new(state: &mut State) {
+    load(state);
+    let map = state.focused();
+    crate::ui::new_workspace_from_pane(state, map);
+}
+
 /// The scene registry, handed to `AppSpec::scenes`.
 pub const SCENES: &[Scene] = &[
     ("empty", empty),
@@ -1256,6 +1311,10 @@ pub const SCENES: &[Scene] = &[
     ("workspaces-switch", workspaces_switch),
     // A workspace named by the operator (#139): the title is the name, and the chips keep their numbers.
     ("workspaces-named", workspaces_named),
+    // Workspace actions (#140): the waterfall, a pane moved between workspaces, and a new workspace.
+    ("workspaces-menu", workspaces_menu),
+    ("workspaces-moved", workspaces_moved),
+    ("workspaces-new", workspaces_new),
 ];
 
 /// Look a scene up by the name `scripts/capture.sh` was given.
@@ -1538,7 +1597,10 @@ mod tests {
                 "workspaces",
                 "workspaces-empty",
                 "workspaces-switch",
-                "workspaces-named"
+                "workspaces-named",
+                "workspaces-menu",
+                "workspaces-moved",
+                "workspaces-new"
             ]
         );
         for name in names() {

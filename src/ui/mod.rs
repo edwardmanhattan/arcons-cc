@@ -380,6 +380,8 @@ pub fn shown_name(name: &str) -> Option<String> {
 pub struct Menu {
     pub pane: ViewId,
     pub at: (f32, f32),
+    /// The open submenu's key, when one is open (#140).
+    pub open: Option<&'static str>,
 }
 
 /// What the view loop holds. #3 fills the picture, #4 moves it, #6 draws it, #7 selects from it.
@@ -741,7 +743,7 @@ impl State {
     /// The pane a menu is open on, and where — `None` when no menu is open.
     pub fn menu(&self) -> Option<Menu> {
         match self.interaction {
-            Interaction::Menu { pane, at } => Some(Menu { pane, at }),
+            Interaction::Menu { pane, at, open } => Some(Menu { pane, at, open }),
             _ => None,
         }
     }
@@ -809,7 +811,11 @@ impl State {
         self.interaction = match begin {
             Begin::Lift(drag) => Interaction::Lifted(drag),
             Begin::Resize(border) => Interaction::Resizing(border),
-            Begin::Menu { pane, at } => Interaction::Menu { pane, at },
+            Begin::Menu { pane, at } => Interaction::Menu {
+                pane,
+                at,
+                open: None,
+            },
             Begin::Filter { pane } => Interaction::Filtering { pane },
             Begin::Rename(rename) => Interaction::Renaming(rename),
             Begin::Settings => Interaction::Settings,
@@ -869,6 +875,24 @@ impl State {
             .iter_mut()
             .flat_map(|workspace| workspace.panes.iter_mut())
             .find(|pane| pane.id == id)
+    }
+
+    /// **Which workspace holds this pane** (#140): the id is the wall's, so a pane is findable from any
+    /// workspace — and the one question the move and the submenu both ask.
+    pub fn workspace_of(&self, pane: ViewId) -> Option<usize> {
+        self.workspaces
+            .iter()
+            .position(|workspace| workspace.panes.iter().any(|held| held.id == pane))
+    }
+
+    /// One pane of one workspace, mutably — for a caller that has the index and the id and must not
+    /// search the active workspace for it (#140).
+    pub fn workspace_pane_mut(&mut self, index: usize, pane: ViewId) -> Option<&mut Pane> {
+        self.workspaces
+            .get_mut(index)?
+            .panes
+            .iter_mut()
+            .find(|held| held.id == pane)
     }
 
     /// The next pane id on the wall. The only place one is minted (#138).
@@ -1334,7 +1358,13 @@ pub enum Interaction {
     /// A border between two panes is being held (#69). The pointer is the border's.
     Resizing(view::Border),
     /// A pane's menu is open (#77, #81, #83). Passive: it holds nothing, so a press elsewhere closes it.
-    Menu { pane: ViewId, at: (f32, f32) },
+    Menu {
+        pane: ViewId,
+        at: (f32, f32),
+        /// **Which row's second surface is open** (#140), by its key: the waterfall. `None` is the first
+        /// surface only.
+        open: Option<&'static str>,
+    },
     /// A pane's filter panel is open (#111). **The pointer is the panel's**, but it is not modal: the
     /// picture stays visible behind it, and a press outside dismisses it.
     Filtering { pane: ViewId },
@@ -2995,22 +3025,87 @@ fn menu_view(state: &State, scale: f32, body: El) -> El {
         .radius(tokens::PANEL_RADIUS)
         .border(tokens::HAIRLINE, tokens::card_edge())
         .fill(tokens::bg());
-    for item in items {
+    for item in &items {
         // Each row is its own target, so a press says **which** item it hit. The key is the row's, not the
         // surface's, which is what lets a capture assert that a second row is drawn at all.
-        surface = surface.child(
-            row()
-                .key(item.key)
-                .h(tokens::MENU_ROW)
-                .w_full()
-                .items_center()
-                // A label touching the menu's own border reads as clipped, whatever the box says.
-                .px(tokens::GAP)
-                .child(text(item.label).font(tokens::LABEL).color(tokens::ink()))
-                .on_press(move |state: &mut State| item.run(state, menu.pane)),
-        );
+        let key = item.key.clone();
+        let mut row = row()
+            .key(key)
+            .h(tokens::MENU_ROW)
+            .w_full()
+            .items_center()
+            // A label touching the menu's own border reads as clipped, whatever the box says.
+            .px(tokens::GAP)
+            .child(
+                text(item.label.clone())
+                    .font(tokens::LABEL)
+                    .color(tokens::ink())
+                    .grow(1.0),
+            );
+        if item.opens() {
+            // **A waterfall opens on hover** (#140), as `rune-kit::Menu` does: a press that had to be
+            // found would make the second surface the third click of a two-click action. A press on the
+            // row opens it too, because a wall also has a hand and a trackpad with no hover.
+            if let MenuAction::Submenu(sub_key) = item.action {
+                row = row.on_hover(move |state: &mut State| open_submenu(state, sub_key));
+            }
+            row = row.child(
+                rune::icon(&icons::CHEVRON_RIGHT, tokens::MENU_CHEVRON)
+                    .key(format!("{}-chevron", item.key))
+                    .color(tokens::ink_dim()),
+            );
+        }
+        let run = item.clone();
+        let pane = menu.pane;
+        surface = surface.child(row.on_press(move |state: &mut State| run.run(state, pane)));
     }
-    body.child(surface)
+    let mut body = body.child(surface);
+
+    // **The second surface** (#140): to the right of its row, clamped inside the pane it was asked on —
+    // and flipped to the left when the pane is too narrow to hold it on the right, so a waterfall in a
+    // narrow pane opens inwards rather than off the wall.
+    if let Some(open) = menu.open
+        && let Some(index) = items.iter().position(|item| item.key == open)
+        && !items[index].children.is_empty()
+    {
+        let children = items[index].children.clone();
+        let (sw, sh) = tokens::menu_size(children.len());
+        let row_top = y + index as f32 * tokens::MENU_ROW;
+        let right = x + w + tokens::GAP / 2.0;
+        let sx = if right + sw <= rect.x + rect.w {
+            right
+        } else {
+            (x - sw - tokens::GAP / 2.0).max(rect.x)
+        };
+        let sy = row_top.min(rect.y + rect.h - sh).max(rect.y);
+        let mut sub = col()
+            .key("pane-submenu")
+            .absolute(sx, sy)
+            .size(sw, sh)
+            .radius(tokens::PANEL_RADIUS)
+            .border(tokens::HAIRLINE, tokens::card_edge())
+            .fill(tokens::bg());
+        for child in &children {
+            let run = child.clone();
+            let pane = menu.pane;
+            sub = sub.child(
+                row()
+                    .key(child.key.clone())
+                    .h(tokens::MENU_ROW)
+                    .w_full()
+                    .items_center()
+                    .px(tokens::GAP)
+                    .child(
+                        text(child.label.clone())
+                            .font(tokens::LABEL)
+                            .color(tokens::ink()),
+                    )
+                    .on_press(move |state: &mut State| run.run(state, pane)),
+            );
+        }
+        body = body.child(sub);
+    }
+    body
 }
 
 /// `Name this pane…`: open the rename sheet on this pane, with its current name in the field (#83).
@@ -3139,19 +3234,60 @@ pub(crate) fn commit_rename(state: &mut State) {
     state.layout_dirty = true;
 }
 
-/// One row of the pane menu: what it says, what a capture calls it, and what a press does.
-#[derive(Clone, Copy)]
+/// One row of the pane menu: what it says, what a capture calls it, what a press does — and **the second
+/// surface it opens**, if it opens one (#140).
+///
+/// The label is a `String` because a waterfall's rows are **workspace names** (`Straits watch`), not
+/// constants; the key is one too, because the row for a workspace is identified by its index.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MenuItem {
-    pub label: &'static str,
-    pub key: &'static str,
-    pub action: fn(&mut State, ViewId),
+    pub label: String,
+    pub key: String,
+    pub action: MenuAction,
+    /// The submenu's rows. Empty for a leaf.
+    pub children: Vec<MenuItem>,
 }
 
 impl MenuItem {
+    fn leaf(label: &str, key: &str, action: MenuAction) -> MenuItem {
+        MenuItem {
+            label: label.to_string(),
+            key: key.to_string(),
+            action,
+            children: Vec::new(),
+        }
+    }
+
+    fn submenu(label: &str, key: &'static str, children: Vec<MenuItem>) -> MenuItem {
+        MenuItem {
+            label: label.to_string(),
+            key: key.to_string(),
+            action: MenuAction::Submenu(key),
+            children,
+        }
+    }
+
+    /// Whether this row opens a second surface.
+    pub fn opens(&self) -> bool {
+        !self.children.is_empty()
+    }
+
     /// Run the row's action on the pane the menu was asked on. The menu closes in the action, not here:
     /// what a row does is the row's, and one of them has to close the menu *before* it changes the layout.
-    fn run(self, state: &mut State, pane: ViewId) {
-        (self.action)(state, pane);
+    fn run(&self, state: &mut State, pane: ViewId) {
+        match self.action {
+            MenuAction::Split => split_from_menu(state, pane),
+            MenuAction::NewWorkspace => {
+                new_workspace_from_pane(state, pane);
+            }
+            MenuAction::Rename => begin_rename(state, pane),
+            MenuAction::Close => close_from_menu(state, pane),
+            MenuAction::MoveTo(target) => {
+                move_pane_to(state, pane, target);
+            }
+            // A trigger's press opens the surface its hover would: the wall has a mouse and a hand.
+            MenuAction::Submenu(key) => open_submenu(state, key),
+        }
     }
 }
 
@@ -3161,24 +3297,39 @@ impl MenuItem {
 /// **Full size left the menu in #111.** It is the pane chrome's one-press toggle now; a row here was a
 /// right-click, a row read, and a press — three actions for a thing an operator does constantly.
 pub fn menu_items(state: &State, pane: ViewId) -> Vec<MenuItem> {
-    let mut items = vec![MenuItem {
-        label: MENU_SPLIT,
-        key: "menu-split",
-        action: split_from_menu,
-    }];
-    items.push(MenuItem {
-        label: MENU_RENAME,
-        key: "menu-rename",
-        action: begin_rename,
-    });
-    if state.pane_count() > 1 {
-        items.push(MenuItem {
-            label: MENU_CLOSE,
-            key: "menu-close",
-            action: close_from_menu,
-        });
+    let mut items = vec![
+        MenuItem::leaf(MENU_SPLIT, "menu-split", MenuAction::Split),
+        // **A new pane on a new workspace** (#140) sits beside the split it is a variation of: growth at
+        // the top, and the destructive row still last.
+        MenuItem::leaf(
+            MENU_NEW_WORKSPACE,
+            "menu-new-workspace",
+            MenuAction::NewWorkspace,
+        ),
+        MenuItem::leaf(MENU_RENAME, "menu-rename", MenuAction::Rename),
+    ];
+    // The waterfall lists every workspace **except the one this pane is already in**, by name — "Move to
+    // workspace > Straits watch" has to read, and a list of numbers would not.
+    let here = state.workspace_of(pane);
+    let elsewhere: Vec<MenuItem> = state
+        .workspaces
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| Some(*index) != here)
+        .map(|(index, workspace)| {
+            MenuItem::leaf(
+                &workspace_title(workspace, index),
+                &format!("menu-move-{index}"),
+                MenuAction::MoveTo(index),
+            )
+        })
+        .collect();
+    if !elsewhere.is_empty() {
+        items.push(MenuItem::submenu(MENU_MOVE, "menu-move", elsewhere));
     }
-    let _ = pane;
+    if state.pane_count() > 1 {
+        items.push(MenuItem::leaf(MENU_CLOSE, "menu-close", MenuAction::Close));
+    }
     items
 }
 
@@ -3204,8 +3355,25 @@ pub fn menu_origin(rect: Rect, at: (f32, f32), size: (f32, f32)) -> (f32, f32) {
 
 /// What the pane menu offers.
 pub const MENU_SPLIT: &str = "Focus on new pane";
+/// **Open a new pane on a new workspace** (#140). Growth at the top, beside the split it is a variation of.
+pub const MENU_NEW_WORKSPACE: &str = "Focus on new workspace";
+/// The waterfall's trigger: `Move to workspace > …` (#140).
+pub const MENU_MOVE: &str = "Move to workspace";
 pub const MENU_RENAME: &str = "Name this pane…";
 pub const MENU_CLOSE: &str = "Close pane";
+
+/// **What a menu row does** (#140): a value, so a row can name a workspace and a submenu can be a row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuAction {
+    Split,
+    NewWorkspace,
+    Rename,
+    Close,
+    /// Move this pane to the workspace at that index.
+    MoveTo(usize),
+    /// A row with a second surface: its children draw beside it, and this is the key that opens them.
+    Submenu(&'static str),
+}
 /// What the workspace rename sheet is called (#139). The pane's keeps its own words.
 pub const RENAME_WORKSPACE_TITLE: &str = "Name this workspace";
 /// What the maximised pane's own close plate says, and the header's note about it (#85).
@@ -3243,6 +3411,130 @@ fn press_in(state: &mut State, id: ViewId) {
 /// #81 `Close pane`: the pane goes, its slot collapses into its sibling, and its map thread is joined
 /// before it is forgotten — a wall that leaks a render thread per closed pane is a wall that dies at the
 /// third split.
+/// **A new pane on a new workspace** (#140): the workspace's `+` and the menu's row differ in one thing —
+/// this one also puts a pane in it, of the same kind and camera as the pane the menu was asked on.
+///
+/// A **new** pane, not a copy: a map gets its own thread at the source's camera, a tree the same
+/// structure with a fresh camera, a newsroom a fresh view at its default tab and page. The source
+/// workspace keeps its pane and its layout, exactly as `Focus on new pane` keeps the source pane.
+pub fn new_workspace_from_pane(state: &mut State, pane: ViewId) -> Option<ViewId> {
+    let source = state.pane(pane)?;
+    let content = source.content.clone();
+    let camera = source.camera;
+    // `add_workspace` appends, switches and focuses — the workspace is empty but for the pane below.
+    let index = state.add_workspace();
+    let id = state.allocate_pane();
+    let created = match content {
+        PaneContent::Map => Pane::new(id, camera),
+        PaneContent::Tree { organisation } => Pane::tree(id, camera, organisation),
+        PaneContent::Newsroom => Pane::newsroom(id, camera),
+    };
+    let workspace = &mut state.workspaces[index];
+    workspace.layout = Some(Layout::single_with(id));
+    workspace.panes.push(created);
+    #[cfg(feature = "map")]
+    if !state.headless && content.is_map() {
+        // The new workspace's pane is the whole panel: one pane, one thread, at the source's camera.
+        let viewport = state.pane_viewport();
+        if let Some(pane) = state.workspace_pane_mut(index, id) {
+            pane.map = Some(crate::map::thread::MapThread::spawn(
+                camera,
+                (
+                    viewport.w.round().max(1.0) as u32,
+                    viewport.h.round().max(1.0) as u32,
+                ),
+            ));
+        }
+    }
+    state.focus_pane(id);
+    state.end();
+    state.layout_dirty = true;
+    Some(id)
+}
+
+/// **Move this pane to another workspace** (#140).
+///
+/// The `Pane` itself travels — its map handle, its tree camera, its newsroom view, its name, its filter and
+/// its frame — so a map that moves does not blink, reload or lose its camera. **Nothing is cloned and no
+/// thread is closed**: the source's `Vec<Pane>` gives it up and the target's takes it, and `close_maps` is
+/// never called on the way.
+///
+/// The source keeps whatever else it had; if the moved pane was its last, the source is **empty**
+/// (`layout = None`), which the model allows. The target becomes active either way, because that is where
+/// the operator just put something.
+pub fn move_pane_to(state: &mut State, pane: ViewId, target: usize) -> bool {
+    let Some(source) = state.workspace_of(pane) else {
+        return false;
+    };
+    if target == source || target >= state.workspaces.len() {
+        return false;
+    }
+    let Some(position) = state.workspaces[source]
+        .panes
+        .iter()
+        .position(|held| held.id == pane)
+    else {
+        return false;
+    };
+    let moved = state.workspaces[source].panes.remove(position);
+    // The source's tiling: collapse the leaf, or — when it was the only one — keep no tiling at all.
+    let source_was_single = state.workspaces[source]
+        .layout
+        .as_ref()
+        .is_none_or(|layout| layout.len() <= 1);
+    if source_was_single {
+        state.workspaces[source].layout = None;
+    } else if let Some(layout) = state.workspaces[source].layout.as_mut() {
+        layout.close(pane);
+    }
+
+    // Into the target: its only pane, or beside the pane it is focused on.
+    let target_empty = state.workspaces[target].layout.is_none();
+    if target_empty {
+        state.workspaces[target].layout = Some(Layout::single_with(pane));
+    } else {
+        let focused = state.workspaces[target]
+            .layout
+            .as_ref()
+            .map(|layout| layout.focused());
+        let Some(focused) = focused else {
+            return false;
+        };
+        let inserted = state.workspaces[target]
+            .layout
+            .as_mut()
+            .and_then(|layout| layout.split_side_with(focused, view::Side::Right, pane));
+        if inserted.is_none() {
+            // The tiling refused the id (it was already there, or the leaf vanished): put the pane back
+            // rather than lose it, and say the move did not happen.
+            state.workspaces[source].panes.insert(position, moved);
+            if source_was_single {
+                state.workspaces[source].layout = Some(Layout::single_with(pane));
+            }
+            return false;
+        }
+    }
+    state.workspaces[target].panes.push(moved);
+    state.switch_to(target);
+    state.focus_pane(pane);
+    state.end();
+    state.layout_dirty = true;
+    true
+}
+
+/// Open a row's second surface (#140). The interaction carries which one, so a capture can say the
+/// waterfall is open and Escape can close it before the menu.
+pub fn open_submenu(state: &mut State, key: &'static str) {
+    if let Interaction::Menu { pane, at, .. } = state.interaction {
+        state.interaction = Interaction::Menu {
+            pane,
+            at,
+            open: Some(key),
+        };
+        state.layout_dirty = true;
+    }
+}
+
 fn close_from_menu(state: &mut State, id: ViewId) {
     state.end();
     if !state.close_pane(id) {
@@ -3974,6 +4266,22 @@ fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool
         return false;
     }
     if !matches!(state.interaction, Interaction::Idle) {
+        // **A waterfall closes one surface at a time** (#140): Escape takes the submenu first and the menu
+        // on the next press, which is the same "one thing at a time" rule the rest of the ladder keeps.
+        if let Interaction::Menu {
+            pane,
+            at,
+            open: Some(_),
+        } = state.interaction
+        {
+            state.interaction = Interaction::Menu {
+                pane,
+                at,
+                open: None,
+            };
+            state.layout_dirty = true;
+            return true;
+        }
         state.end();
         return true;
     }
@@ -4096,7 +4404,10 @@ fn setup(state: &mut State, waker: rune::Waker) {
         // before Multi View, and its goldens are byte-identical because of this line; a scene with more
         // panes gets each frame from that pane's own layout (`pane_laid_out`), which is where a wall
         // gets its frames too. `#71`'s golden pass unifies the two.
-        if state.is_single_pane() {
+        // **A feed or a tree in a one-pane scene gets no frame** (#140): a frame is what a pane's markers
+        // project against, and a pane that draws none must not have one to project into. `new_workspace`
+        // and a move can leave a newsroom as a workspace's only pane, which is exactly this case.
+        if state.is_single_pane() && state.focused_pane().content.is_map() {
             let camera = state.camera();
             state.set_frame(crate::map::geometry::Rendered {
                 camera,
@@ -4896,6 +5207,116 @@ mod tests {
     /// header has to say something; a pane's empty field removes its name, as it always has.
     /// **A long workspace name is cut with the same ellipsis a pane's is** (#139), and **Escape leaves the
     /// old one** — abandoning a rename is not a commit of nothing.
+    /// **`Focus on new workspace` keeps the source and makes a new pane of the same kind** (#140): a new
+    /// workspace, active, with one pane at the source's camera — the source workspace untouched.
+    #[test]
+    fn a_new_workspace_takes_a_pane_of_the_sources_kind() {
+        let mut state = State::default();
+        let source = state.focused();
+        let camera = Camera::new((1.25, 2.5), 9.5);
+        state.set_camera_of(source, camera);
+
+        let created =
+            new_workspace_from_pane(&mut state, source).expect("a new workspace and pane");
+        assert_eq!(state.workspaces.len(), 4, "the wall opens with three");
+        assert_eq!(state.active, 3, "and the new one is on screen");
+        assert_ne!(created, source, "a new pane, not a move");
+        let pane = state.pane(created).expect("the new pane");
+        assert!(pane.content.is_map(), "a map source makes a map pane");
+        assert_eq!(pane.camera.center, camera.center, "at the source's camera");
+        assert_eq!(state.pane_count(), 1, "one pane in the new workspace");
+        assert_eq!(
+            state.workspaces[0].panes.len(),
+            1,
+            "and the source workspace keeps its pane"
+        );
+        assert_eq!(state.focused(), created);
+        assert!(
+            state.menu().is_none(),
+            "the action closes the menu it was pressed in"
+        );
+
+        // A newsroom source makes a newsroom pane, at its default tab and page.
+        let mut state = State::default();
+        let map = state.focused();
+        let news = state
+            .split_pane_as(map, Camera::START, PaneContent::Newsroom)
+            .expect("a feed beside the map");
+        let created = new_workspace_from_pane(&mut state, news).expect("a new workspace");
+        let pane = state.pane(created).expect("the new pane");
+        assert!(pane.news.is_some(), "a feed source makes a feed pane");
+        let view = pane.news.as_ref().expect("its view");
+        assert_eq!(view.scope, crate::data::types::NewsScope::International);
+        assert_eq!(
+            view.page, 1,
+            "a fresh view, not a copy of the source's page"
+        );
+        assert!(
+            view.stories.is_empty(),
+            "and not a copy of the source's rows: a new pane, not a clone"
+        );
+    }
+
+    /// **A move takes the pane, not a copy** (#140): the id, the content and the view travel, the source
+    /// keeps whatever else it had, and the target becomes active.
+    #[test]
+    fn a_move_carries_the_pane_and_leaves_the_rest() {
+        let mut state = State::default();
+        let map = state.focused();
+        let news = state
+            .split_pane_as(map, Camera::START, PaneContent::Newsroom)
+            .expect("a feed beside the map");
+        // The feed has a page of its own to lose if the pane were cloned.
+        if let Some(view) = state.pane_mut(news).and_then(|pane| pane.news.as_mut()) {
+            view.scope = crate::data::types::NewsScope::Regional;
+            view.page = 2;
+        }
+        assert!(move_pane_to(&mut state, news, 1));
+        assert_eq!(state.active, 1, "the target is the workspace on screen");
+        let moved = state.pane(news).expect("the pane is still the wall's");
+        assert_eq!(moved.id, news, "and it kept its id");
+        let view = moved.news.as_ref().expect("its own view");
+        assert_eq!(view.scope, crate::data::types::NewsScope::Regional);
+        assert_eq!(view.page, 2, "the pane's own state travelled with it");
+        assert_eq!(state.pane_count(), 1, "alone in an empty target");
+        assert_eq!(
+            state.workspaces[0].panes.len(),
+            1,
+            "the source keeps its map"
+        );
+        assert!(state.workspaces[0].panes[0].content.is_map());
+        assert!(state.menu().is_none());
+        assert!(
+            !move_pane_to(&mut state, news, 1),
+            "a pane cannot move to where it is"
+        );
+    }
+
+    /// **Moving a workspace's last pane leaves it empty** (#140): an empty workspace is the model's, and
+    /// the source's tiling goes with its last pane.
+    #[test]
+    fn moving_the_last_pane_empties_its_workspace() {
+        let mut state = State::default();
+        // Workspace 2 gets a pane of its own, so moving it away empties it.
+        let index = state.add_workspace();
+        let id = state.allocate_pane();
+        state.workspaces[index].layout = Some(Layout::single_with(id));
+        state.workspaces[index]
+            .panes
+            .push(Pane::new(id, Camera::START));
+        assert!(move_pane_to(&mut state, id, 0));
+        assert!(
+            state.workspaces[index].layout.is_none() && state.workspaces[index].panes.is_empty(),
+            "the source workspace is empty, which is a state and not an error"
+        );
+        assert_eq!(state.active, 0, "and the target is active");
+        assert_eq!(
+            state.pane_count(),
+            2,
+            "the target's pane, and the one that moved in"
+        );
+    }
+
     #[test]
     fn the_window_can_be_told_to_have_no_decorations() {
         // A wall has no window manager affordances to click, and `borderless` is how Rune says so.
@@ -6356,9 +6777,11 @@ mod tests {
         assert_eq!(state.pane_rects(), cells);
     }
 
-    /// #81/#111: a wall with one pane offers two items, a tiled wall three, and the menu is as tall as the
-    /// items it has — the surface used to be `size()`d for one row, which clips the second. `Full size`
-    /// left the menu for the pane chrome, so the row count is one lower than it was.
+    /// #81/#111: a wall with one pane offers the growth rows and no `Close pane`, a tiled wall adds it,
+    /// and the menu is as tall as the items it has — the surface used to be `size()`d for one row, which
+    /// clips the second. `Full size` left the menu for the pane chrome, so the row count is one lower than
+    /// it was. #140 adds `Focus on new workspace` and the waterfall, in that order: growth at the top,
+    /// the destructive row last.
     #[test]
     fn the_menu_offers_close_only_when_there_is_something_to_close() {
         let one = crate::scene::state_for("pane-menu");
@@ -6366,24 +6789,51 @@ mod tests {
         assert_eq!(
             crate::ui::menu_items(&one, pane)
                 .iter()
-                .map(|item| item.label)
+                .map(|item| item.label.as_str())
                 .collect::<Vec<_>>(),
-            vec![MENU_SPLIT, MENU_RENAME],
-            "the last pane cannot be closed, so the menu does not offer it"
+            vec![MENU_SPLIT, MENU_NEW_WORKSPACE, MENU_RENAME, MENU_MOVE],
+            "the last pane cannot be closed, so the menu does not offer it; the waterfall is there \
+             because the wall has workspaces this pane is not in"
         );
 
         let tiled = crate::scene::state_for("panes-menu");
         let pane = tiled.focused();
         let items = crate::ui::menu_items(&tiled, pane);
         assert_eq!(
-            items.iter().map(|item| item.label).collect::<Vec<_>>(),
-            vec![MENU_SPLIT, MENU_RENAME, MENU_CLOSE]
+            items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                MENU_SPLIT,
+                MENU_NEW_WORKSPACE,
+                MENU_RENAME,
+                MENU_MOVE,
+                MENU_CLOSE
+            ]
         );
         assert_eq!(
             tokens::menu_size(items.len()),
-            (tokens::MENU_WIDTH, tokens::MENU_ROW * 3.0),
-            "three rows, not one row's box clipped"
+            (tokens::MENU_WIDTH, tokens::MENU_ROW * 5.0),
+            "five rows, not one row's box clipped"
         );
+        // **The waterfall lists the workspaces this pane is not in**, by name (#140): three by default,
+        // so two rows — and the trigger is the only row that opens a second surface.
+        let move_row = items
+            .iter()
+            .find(|item| item.label == MENU_MOVE)
+            .expect("the waterfall's row");
+        assert_eq!(
+            move_row
+                .children
+                .iter()
+                .map(|child| child.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Workspace 2", "Workspace 3"],
+            "the pane is in workspace 1, so the submenu offers the other two"
+        );
+        assert!(move_row.opens());
+        assert_eq!(move_row.action, MenuAction::Submenu("menu-move"));
     }
 
     /// #81: closing a pane takes its slot out of the layout, keeps the focus on a live pane, and refuses the

@@ -34,6 +34,15 @@ pub static RESTORE: Icon = Icon {
     body: r#"<path d="M8 1V6M11 3L8 6L5 3" stroke="currentColor"/><path d="M8 15V10M11 13L8 10L5 13" stroke="currentColor"/><path d="M4 8H6" stroke="currentColor"/><path d="M7 8H9" stroke="currentColor"/><path d="M10 8H12" stroke="currentColor"/>"#,
 };
 
+/// **A row that opens a second surface** (#140): Rune's `chevron-right`, from the same catalogue and the
+/// same pinned rev. The waterfall's trigger wears it, so "there is more behind this row" is a shape and
+/// not only a hope.
+pub static CHEVRON_RIGHT: Icon = Icon {
+    name: "chevron-right",
+    view: 20.0,
+    body: r#"<path d="M8 15L13 10L8 5" stroke="currentColor" stroke-linecap="square"/>"#,
+};
+
 /// **A workspace**, from Rune's catalogue (`workspace`, #138): the glyph on each workspace chip.
 ///
 /// Copied verbatim from the pinned rev like the pane icons, because the catalogue is a theme crate

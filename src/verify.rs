@@ -2038,7 +2038,9 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             // One pane: grow the wall, name this pane — and no `Close pane`, because the last pane cannot
             // be closed. A tiled wall adds it (#81, #83). `Full size` is the pane chrome's toggle since
             // #111, so it is not a row on either wall.
-            let expected = if scene == "panes-menu" { 3 } else { 2 };
+            // #140 added `Focus on new workspace` and the waterfall: growth at the top, the
+            // destructive row still last.
+            let expected = if scene == "panes-menu" { 5 } else { 4 };
             if rows != expected {
                 failures.push(format!(
                     "{scene}: the menu offers {rows} items, and this wall is the case for {expected}"
@@ -3263,6 +3265,230 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 }
             }
         }
+        // **Workspace actions** (#140): the waterfall, a pane moved between workspaces, and a new
+        // workspace from a pane. The chip checks are the same as the workspaces arm's — where the raised
+        // chip sits relative to the `+` says **which** workspace is active in the capture.
+        "workspaces-menu" | "workspaces-moved" | "workspaces-new" => {
+            let state = scene::state_for(scene);
+            let header = (0.0, f64::from(tokens::CHIP_H) + f64::from(tokens::PAD));
+            let raised: Vec<(f64, f64)> =
+                colour_runs_in_band(image, header, ink(tokens::name_plate()), 10, 2)
+                    .into_iter()
+                    .filter(|(start, end)| end - start >= f64::from(tokens::CHIP_H))
+                    .collect();
+            if raised.len() != 1 {
+                failures.push(format!(
+                    "{scene}: {} raised chips in the header, and there is exactly one",
+                    raised.len()
+                ));
+            }
+            let Some(&(_start, raised_end)) = raised.first() else {
+                return Err(failures);
+            };
+            let Some(plus) = rightmost_ink(
+                image,
+                header,
+                image.width / 2,
+                &[ink(tokens::ink()), ink(tokens::ink_dim())],
+                24,
+            ) else {
+                failures.push(format!("{scene}: no chip ink in the header at all"));
+                return Err(failures);
+            };
+            let chip_index = state.active + 1;
+            let count = state.workspaces.len();
+            // The chips are the same width, so the distance from the raised chip's end to the `+`
+            // shortens by about one chip per workspace to its right. The claim is the **last** chip for
+            // a scene that ends on the newest workspace, and chip 2 for the one on workspace 2.
+            let expected_chip = match scene {
+                // `Focus on new workspace` makes one and switches to it: the last chip.
+                "workspaces-new" => count,
+                // The move switches to the workspace it moved the pane into.
+                "workspaces-moved" => 2,
+                // The waterfall's scene stays on the wall it opened the menu on.
+                _ => 1,
+            };
+            let distance = plus - raised_end;
+            if chip_index != expected_chip {
+                failures.push(format!(
+                    "{scene}: workspace {chip_index} of {count} is active, and this scene means \
+                     workspace {expected_chip}"
+                ));
+            }
+            if distance > 0.0 {
+                lines.push(format!(
+                    "{scene}: workspace {chip_index} of {count} active, its chip {distance:.0} px \
+                     left of the `+`"
+                ));
+            }
+
+            match scene {
+                "workspaces-menu" => {
+                    let Some(menu) = state.menu() else {
+                        failures.push("workspaces-menu: no menu is open".into());
+                        return Err(failures);
+                    };
+                    if menu.open != Some("menu-move") {
+                        failures.push(format!(
+                            "workspaces-menu: the open submenu is {:?}, and the scene opens the \
+                             waterfall",
+                            menu.open
+                        ));
+                    }
+                    let items = crate::ui::menu_items(&state, menu.pane);
+                    let Some(move_row) =
+                        items.iter().find(|item| item.label == crate::ui::MENU_MOVE)
+                    else {
+                        failures.push("workspaces-menu: the menu has no waterfall row".into());
+                        return Err(failures);
+                    };
+                    let names: Vec<&str> = move_row
+                        .children
+                        .iter()
+                        .map(|child| child.label.as_str())
+                        .collect();
+                    if names != ["Straits watch", "Workspace 3", "Workspace 4"] {
+                        failures.push(format!(
+                            "workspaces-menu: the waterfall offers {names:?}, and it lists every \
+                             workspace but this pane's own, by name"
+                        ));
+                    } else {
+                        lines.push(
+                            "workspaces-menu: the waterfall offers the three workspaces this pane is \
+                             not in, by name"
+                                .to_string(),
+                        );
+                    }
+                    // **Two surfaces**, and the second is to the right of the first: along a row that
+                    // crosses both, the menu's own fill (`bg()`) appears as two runs.
+                    let Some(rect) = state.pane_rect(menu.pane) else {
+                        failures.push("workspaces-menu: the menu's pane is gone".into());
+                        return Err(failures);
+                    };
+                    let Some((ox, oy, pw, panel_h)) = image.find_panel_rect(ink(tokens::panel()))
+                    else {
+                        failures.push("workspaces-menu: no picture panel".into());
+                        return Err(failures);
+                    };
+                    // **Clamped to the panel the capture has**: the state's pane rect is in the window's
+                    // points (a scene never runs a layout pass), and the rows below the panel are the
+                    // window's own background — the same `bg()` the menu is, which would read as a
+                    // surface spanning the whole picture.
+                    let top = (oy + f64::from(rect.y) + 4.0).min(oy + panel_h - 4.0);
+                    let bottom =
+                        (oy + f64::from(rect.y) + f64::from(rect.h) - 4.0).min(oy + panel_h - 4.0);
+                    let band = (top, bottom.max(top + 1.0));
+                    // A hairline apart: the two surfaces must not be merged into one run, and the gap
+                    // between them is `GAP / 2`.
+                    let surfaces: Vec<(f64, f64)> =
+                        colour_runs_in_band(image, band, ink(tokens::bg()), 4, 2)
+                            .into_iter()
+                            // The picture's rounded corners show the window's own background, which is
+                            // the same colour the menu is; a surface that starts inside the panel is a
+                            // surface, and one at its edge is the window.
+                            .filter(|(start, end)| *start > ox && *end < ox + pw)
+                            .collect();
+                    if surfaces.len() < 2 {
+                        failures.push(format!(
+                            "workspaces-menu: {} menu surface(s) on screen — the waterfall is a second \
+                             one beside the first (band {band:?}, runs {surfaces:?})",
+                            surfaces.len()
+                        ));
+                    } else {
+                        lines.push(format!(
+                            "workspaces-menu: {} menu surfaces, the second at x={:.0}",
+                            surfaces.len(),
+                            surfaces[1].0
+                        ));
+                    }
+                }
+                "workspaces-moved" => {
+                    let source = state.workspaces.first().expect("workspace 1");
+                    let target = state.workspaces.get(1).expect("workspace 2");
+                    let maps = source
+                        .panes
+                        .iter()
+                        .filter(|pane| pane.content.is_map())
+                        .count();
+                    if maps != 1 {
+                        failures.push(format!(
+                            "workspaces-moved: workspace 1 has {maps} map panes, and the move must \
+                             not take its other pane"
+                        ));
+                    }
+                    match target.panes.first() {
+                        Some(pane) if pane.news.is_some() => lines.push(format!(
+                            "workspaces-moved: workspace 2 holds the newsroom pane {} and workspace 1 \
+                             its map",
+                            pane.id
+                        )),
+                        other => failures.push(format!(
+                            "workspaces-moved: workspace 2 holds {:?}, and the moved pane was the \
+                             newsroom",
+                            other.map(|pane| &pane.content)
+                        )),
+                    }
+                    if let Some(pane) = target.panes.first().and_then(|pane| pane.news.as_ref())
+                        && pane.stories.len() != 25
+                    {
+                        failures.push(format!(
+                            "workspaces-moved: the moved pane draws {} rows, and it carried 25 from \
+                             the page it had read",
+                            pane.stories.len()
+                        ));
+                    }
+                    // The picture is the **feed**, not the map: three tabs, and no marker ink. A moved
+                    // pane that lost its content, or a map that came along, is red here.
+                    let Some((ox, oy, pw, ph)) = image.find_panel_rect(ink(tokens::panel())) else {
+                        failures.push("workspaces-moved: no picture panel".into());
+                        return Err(failures);
+                    };
+                    let _ = pw;
+                    let accent =
+                        count_colour_in(image, (ox, oy, pw, ph), ink(tokens::accent()), 24);
+                    if accent > 0 {
+                        failures.push(format!(
+                            "workspaces-moved: {accent} accent pixels in the pane — the moved pane is \
+                             a feed, and a feed projects nothing (the workspace's map is not on screen)"
+                        ));
+                    } else {
+                        lines.push(
+                            "workspaces-moved: the moved feed draws no marker ink".to_string(),
+                        );
+                    }
+                }
+                _ => {
+                    let source = state.workspaces.first().expect("workspace 1");
+                    if source.panes.len() != 1 {
+                        failures.push(format!(
+                            "workspaces-new: workspace 1 has {} panes, and the action keeps its \
+                             source pane",
+                            source.panes.len()
+                        ));
+                    }
+                    let last = state.workspaces.last().expect("the new workspace");
+                    match last.panes.first() {
+                        Some(pane) if pane.content.is_map() => lines.push(
+                            "workspaces-new: the new workspace holds one new map pane, and the source \
+                             workspace keeps its own"
+                                .to_string(),
+                        ),
+                        other => failures.push(format!(
+                            "workspaces-new: the new workspace holds {:?}, and the source pane was a \
+                             map",
+                            other.map(|pane| &pane.content)
+                        )),
+                    }
+                    if state.workspaces.len() != 4 {
+                        failures.push(format!(
+                            "workspaces-new: {} workspaces, and the wall opens with three plus the \
+                             one this action made",
+                            state.workspaces.len()
+                        ));
+                    }
+                }
+            }
+        }
         other => failures.push(format!("no assertions are written for scene {other:?}")),
     }
 
@@ -3871,6 +4097,42 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                 ));
             }
         }
+        // **A moved feed is a workspace's only pane, and the map is not on screen** (#140): nothing in
+        // the active workspace projects, because a feed has no frame (`INV-04` is vacuous there).
+        "workspaces-moved" => {
+            if state.pane_count() != 1 {
+                failures.push(format!(
+                    "workspaces-moved: the active workspace holds {} panes, and the move put one there",
+                    state.pane_count()
+                ));
+            }
+            if !state.panes().iter().all(|pane| pane.news.is_some()) {
+                failures.push(
+                    "workspaces-moved: a pane in the active workspace is not the moved feed".into(),
+                );
+            }
+            let hidden_maps = state
+                .workspaces
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != state.active)
+                .flat_map(|(_, workspace)| workspace.panes.iter())
+                .filter(|pane| pane.content.is_map())
+                .count();
+            if hidden_maps != 1 {
+                failures.push(format!(
+                    "workspaces-moved: {hidden_maps} map panes outside the active workspace, and the \
+                     source workspace keeps exactly one"
+                ));
+            }
+            if failures.is_empty() {
+                lines.push(
+                    "workspaces-moved: the moved feed is the workspace's only pane, and workspace 1's \
+                     map is not drawn"
+                        .to_string(),
+                );
+            }
+        }
         "empty" => {
             if !markers.is_empty() {
                 failures.push(format!(
@@ -4241,7 +4503,10 @@ pub fn golden_bounds(scene: &str) -> Bounds {
         | "newsroom-page-2"
         | "newsroom-scopes"
         | "newsroom-story"
-        | "newsroom-story-back" => Bounds::new(2, 200, 1_200),
+        | "newsroom-story-back"
+        // **A moved feed is the same nine rows of 12 pt text** (#140): CI's lavapipe measured 791
+        // one-step pixels there, the newsroom scenes' class of rounding.
+        | "workspaces-moved" => Bounds::new(2, 200, 1_200),
         _ => DEFAULT_BOUNDS,
     }
 }
