@@ -149,6 +149,14 @@ pub const NEWS_FOOTER_H: f32 = 24.0;
 /// The height floor of the list's scroll viewport. Zero on purpose, for the reason
 /// [`FILTER_SCROLL_MIN_H`] gives: a scroll viewport in a flex column grows to its content without it.
 pub const NEWS_SCROLL_MIN_H: f32 = 0.0;
+/// One article in a story's detail (#137): three lines — the domain and its time, the title, the
+/// facts — and the space between articles.
+pub const NEWS_ARTICLE_H: f32 = 76.0;
+pub const NEWS_ARTICLE_GAP: f32 = 12.0;
+/// One line of the detail's prose (the provenance and the place). `LABEL` draws 20 pt tall and a row
+/// with a hair of leading reads better than one that touches its neighbours; the URL is left to wrap.
+pub const NEWS_LINE_H: f32 = 22.0;
+
 /// How many characters of a headline a row shows. A pane name is 28 because a name is short by
 /// construction; a headline is not, and a row is one line.
 pub const NEWS_TITLE_MAX_CHARS: usize = 96;

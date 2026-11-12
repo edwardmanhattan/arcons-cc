@@ -136,6 +136,7 @@ cargo run -- --scenes            # empty · picture · stale · card-open · pho
                                  # panes-filter · installations · settings · settings-dismiss
                                  # pane-menu · pane-tree · pane-tree-narrow · pane-tree-zoom
                                  # pane-tree-pan · newsroom · newsroom-scopes · newsroom-page-2
+                                 # newsroom-story · newsroom-story-back
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -254,6 +255,26 @@ cannot: a reply whose query is not the one asked is **discarded** (the late-page
 the page to 1 and the tab already shown asks nothing, the footer's page moves only when the reply lands, a
 disabled pager sends no request, WIB is a fixed +07:00 conversion of the server's UTC rather than a clock,
 and `unknown` has no tab.
+
+`newsroom-story` is **a row pressed** (#137): the story's provenance in the pane — `back` and the
+title, the two times and `3 sources · rappler.com`, the country line, the URL as text, then the three
+outlets that carried it, **oldest first**. The detail arrives through `ui::apply_reply` with the
+`Reply::Story` the reads thread would send, so the capture covers wire data → pane → rows. The assertion
+requires three articles whose `seen_at` ascends, the three domains in the wire's order, the story's
+`source_count` equal to the list's, **`unclassified source`** as words for the flagged domain, a `—`
+where the country is absent, a measured `tone` of `0.0` still drawn (`+0.0`), and **no marker ink** in
+the pane (a feed has no frame). The list is still mounted underneath — that is what keeps Rune's scroll
+viewport where the operator left it — so the pixel half also requires the footer to be **gone**, which
+is what says the surface covers the pane rather than sitting beside the list.
+
+`newsroom-story-back` is the same page **after `back`**: the scene leaves page 2 open on a story, and
+`fixtures/scripts/newsroom-story-back.json` clicks the word, so the capture proves the button reaches a
+handler (#80). The assertion splits the claim the way `panes-pan` does: the structure half says the
+scene started on page 2 with a story open, and the pixel half says the capture has the list's three
+tabs, its footer and its rows again — `back` returned to the page the operator left, not to page 1.
+`cargo test ui::newsroom` holds what a capture cannot: `back` leaves the tab, page and rows untouched, a
+detail for a story the operator has left is discarded, and the words — `unclassified source`, the signed
+tone at one decimal, the dash for an absent country, the provenance line in WIB — are the ones drawn.
 
 `pane-menu` is a wall with **one** pane and its right-click menu open (#77) — the one shape the menu was
 never drawn on, and the only wall that needs it, because "Focus on new pane" is the only route to a second

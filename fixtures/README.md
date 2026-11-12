@@ -105,6 +105,19 @@ carries the absences the ticket needs: stories with **no `country`**, countries 
 which is what makes "page 2 is not page 1" and "two panes, two scopes" assertable. **Replace them with
 recordings** the moment the deployment's intel ingest has rows; the same rule as the `rest/` pair above.
 
+`scenes/newsroom-story.json` and `scenes/newsroom-story-page-2.json` are the two **story details**
+(#137), derived from the pinned spec like the pages above: `GET /banglinstra/stories/{id}` is
+`{story, articles}`, and each file's `story` is the very row its list page carries — id, title,
+`source_count`, source and both clocks — so a header and a row cannot disagree. The first has three
+articles, oldest first: a lead with `tone: 0.0`, a person, `event_code` and `quad_class`; a second with
+a tone and **no** CAMEO fields; and a third that is `flagged: true` with none of them. Its story has
+**no `country`**, which is the dash the capture asserts. The second is the row the `newsroom-story-back`
+scene presses on page 2, with two articles.
+
+`scripts/newsroom-story-back.json` presses the detail's `back` word at (622, 86) — the pixel the
+`newsroom-story` capture puts it at — so the list's return is proven by a pointer rather than by the
+scene calling the function.
+
 `scenes/objects.json` is the `objects` scene's operational layer (#110): **derived from
 `rest/tactical-object-placements.json`**, the same three marks and the same coordinates, with two
 labels filled in ("North Cardinal 3", "Green cone 7") and the cone's bearing set to 45°. The third
