@@ -19,7 +19,7 @@ from a fixed clock, so a capture is reproducible and a test can count what is in
 `rune` (github.com/anomalyco/rune), **pinned by rev**:
 
 ```
-rune = "14e3c5d50ae4c26ebd6621e11cd8f846257e4cde"
+rune = "205b8d4f7e60fa6248b83bfbbb4c6a06096c59ff"
 ```
 
 Why:
@@ -157,6 +157,32 @@ the reference machine for one 1280×720 pane with 200 markers panning (limit 8) 
 for four 960×540 panes (limit 14), normalised by the same-run calibration workload. The spread is
 the calibration workload's, not the wall's — #79 recorded the same effect — and both ends are inside
 the limits, so the bump costs no budget and no budget decision.
+
+### Bumped again: `14e3c5d` → `205b8d4`
+
+164 commits on, 2026-11-12. **The changes that move the wall's pixels are named, so the goldens'
+diff is attributable rather than assumed** — and this time the direction is the one #130 asked for:
+
+- **A stroke no wider than a device pixel draws as a hairline** (#616), as Chromium draws it. Every
+  marker and facility symbol is a stroked glyph, so the antialiased edge of each symbol moves. The
+  ink mask at the old threshold is *identical* and its best overlap is at (0,0): positions did not
+  move, coverage did.
+- **Run cells rasterize at their text's raster factor** (#599), so a count under a scaled tree is as
+  crisp as the words beside it. The tree canvas (#127) is the call site, and the 6/255 tolerance
+  those two scenes needed in `verify::golden_bounds` (#130) is exactly the scaled-text difference
+  this addresses.
+- **A scaled or moving canvas stays centred in its snapped box** (r267), again the tree canvas.
+- **One mask fill for the CPU and the GPU** (#622, #630), and masks kept across launches (#684):
+  the same bytes on both paths, which is the direction `INV-11` and the golden bounds want.
+- `ImageZoom::gliding` (#685) is the predicate a glide-driven camera can poll; the tree camera does
+  not glide (`TreeCamera::touched` fits once and stays), so there is no call site yet.
+
+**The goldens were regenerated after the diff was read**: every change is glyph or icon coverage on
+a text/symbol row — the header text, name plates, card labels, marker and facility symbols — with no
+geometry, colour or marker-count change. `scripts/assert.sh` passed every structural assertion
+against the new renderer (`empty` has no marker ink; `panes` has 3 panes and 39 markers each) before
+`scripts/capture.sh --update-goldens` was run. The diff is 1,300–13,600 pixels per scene, all at
+symbol and glyph edges; the tree scenes are the largest because their text is scaled.
 
 ## Decision 2 — MapLibre Native (`maplibre_native`)
 
