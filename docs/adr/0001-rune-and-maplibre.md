@@ -190,6 +190,36 @@ against the new renderer (`empty` has no marker ink; `panes` has 3 panes and 39 
 `scripts/capture.sh --update-goldens` was run. The diff is 1,300–13,600 pixels per scene, all at
 symbol and glyph edges; the tree scenes are the largest because their text is scaled.
 
+### Bumped again: `04389ed` → `25db9cd`
+
+`04389ed930177f1f475ff3de5249304545b3d5b4` → `25db9cd122a6972816342fdb24db3c4ad0c72e0f`, in both
+`rune` and `rune-kit` and in `THIRD-PARTY-NOTICES.md`, in one commit.
+
+**Two commits, 2026-11-12**, and neither draws anything the wall can see:
+
+- **`93fa605c` — *Exercise the sibling cache budget in the layer walk (r298)*.** **Tests only**: it
+  tightens the walk in `crates/rune/src/render/layers/plan_tests.rs` so one frame provably keeps one
+  sibling cache while borrowing the other (`Disposition::Cached { cache: None }`), and fixes the second
+  spec's box to be the 32×16 its label claims. No production file is touched. A test that can now fail
+  is a reason to take the rev, not a reason to fear it.
+- **`25db9cd1` — *Windows: a launch trace splits the first frame's show (#721)*.** Five
+  `crate::marks::mark` calls (`loop.built`, `window.frame_installed`, `frame.first.done`,
+  `window.cloaked`, `window.uncloaked`), one of them inside `platform/win32/cloak.rs` (Windows-only
+  module), and a changelog entry. `marks::mark` writes a tracing instant; it paints no pixels, and the
+  hunk beside the custom title bar is under `#[cfg(target_os = "windows")]`.
+
+So the pixel surfaces this ADR watches — `Text`, `Icons`, `Render`, `canvas`, `image` — are untouched,
+and the honest evidence is **zero**: `scripts/capture.sh` reported every scene *identical to its golden,
+byte for byte* (no rounding, no tolerance needed) before this section was written. That is the case a rev
+bump is not allowed to invent: if a renderer change does not move the wall, the goldens must not move
+either, and #134's rule that a bump is a reviewed commit rather than an automation is what makes the
+difference sayable.
+
+The rev is taken now because the pin should hold a state we have read, not the state we happened to have
+read once: two commits behind is already a diff nobody reviewed, and the two we are behind are the two
+easiest to review there will ever be.
+
+
 ## Decision 2 — MapLibre Native (`maplibre_native`)
 
 Why: it renders a style with vector tiles **from a local seed**, which is what "cold start with no
