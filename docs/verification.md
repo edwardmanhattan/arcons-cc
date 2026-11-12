@@ -139,7 +139,7 @@ cargo run -- --scenes            # empty · picture · stale · card-open · pho
                                  # newsroom-story · newsroom-story-back
                                  # workspaces · workspaces-empty · workspaces-switch
                                  # workspaces-named · workspaces-menu · workspaces-moved
-                                 # workspaces-new
+                                 # workspaces-new · workspaces-close
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -324,6 +324,24 @@ would project into it), the second chip raised, and — in the structure half �
 only one outside the active workspace and not drawn. `cargo test ui::tests` holds what a capture cannot:
 the id, scope and page travel with the pane, the source keeps its other panes, moving a workspace's last
 pane leaves it empty, and a pane cannot move to the workspace it is already in.
+
+`workspaces-close` is **a workspace's last pane closed** (#141): workspace 1's two map panes, of which
+the second was last focused, and workspace 2 emptied by `State::close_pane` — the function the menu row
+calls. The assertion requires workspace 2 to be **empty, still in the chips and still named**, workspace 1
+active (the nearest previous workspace that has a pane), the focus on **its second pane** rather than the
+first leaf, one fewer pane in total, and — in pixels — the focus edge on the **right** pane's outer edge
+and none on the left's. The two panes share their top and bottom edges with the picture panel, so the
+honest pixel is a vertical one; a ring drawn on the wrong pane, or a wall that forgot `Layout::focused()`
+and landed on the first leaf, is red.
+
+`pane-menu` is also the **refused** case (#141): one pane on a wall of three workspaces, two of them
+empty. Its menu has four rows and no `Close pane`, and the assertion says why — `State::can_close` is
+false for that pane, and the row is built from the same answer, so the control and the action cannot
+disagree. `cargo test ui::workspace_close_tests` holds the rest: closing a one-pane workspace empties it
+and lands on the previous one with its remembered focus, closing a pane with a sibling keeps the
+workspace and focuses the sibling, the lone pane of the wall is refused (and becomes closeable the moment
+another workspace holds a pane), the scan prefers the nearest previous workspace and turns around at the
+first, and the menu and the maximised pane clear when the pane under them closes.
 
 `workspaces-new` is **`Focus on new workspace` from a map pane**: a fourth workspace, active, with one
 new map pane at the source's camera, and the source workspace still holding its own. The assertion

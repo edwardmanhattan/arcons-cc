@@ -1255,6 +1255,35 @@ fn workspaces_new(state: &mut State) {
     crate::ui::new_workspace_from_pane(state, map);
 }
 
+/// The `workspaces-close` scene: **workspace 2's only pane is closed, and the wall lands on workspace 1.**
+///
+/// Workspace 1 has two panes and was last focused on its **second**, so the capture is the focus ring on
+/// the remembered pane — not on the first leaf, which is the rule a "land on the workspace" that forgot
+/// `Layout::focused()` would draw (#141).
+///
+/// The newsroom pane reaches workspace 2 through `ui::move_pane_to` (#140) and is removed by
+/// `State::close_pane`, the function the menu row calls — the scene does not reimplement the switch, the
+/// emptying or the cadence.
+fn workspaces_close(state: &mut State) {
+    workspaces(state);
+    // The pane the operator was last in, in workspace 1: `workspaces` leaves it focused.
+    let remembered = state.focused();
+    let Some(newsroom) = state.split_pane_as(
+        remembered,
+        state.camera_of(remembered),
+        crate::ui::PaneContent::Newsroom,
+    ) else {
+        return;
+    };
+    // Back to the pane it was in, so workspace 1 remembers **that** one when the wall leaves.
+    state.focus_pane(remembered);
+    if !crate::ui::move_pane_to(state, newsroom, 1) {
+        return;
+    }
+    // Workspace 2 holds one pane, so this empties it and lands on workspace 1.
+    state.close_pane(newsroom);
+}
+
 /// The scene registry, handed to `AppSpec::scenes`.
 pub const SCENES: &[Scene] = &[
     ("empty", empty),
@@ -1315,6 +1344,9 @@ pub const SCENES: &[Scene] = &[
     ("workspaces-menu", workspaces_menu),
     ("workspaces-moved", workspaces_moved),
     ("workspaces-new", workspaces_new),
+    // Closing a workspace's last pane (#141): the wall lands on the nearest previous workspace, and focus
+    // goes to the pane the operator was last in there.
+    ("workspaces-close", workspaces_close),
 ];
 
 /// Look a scene up by the name `scripts/capture.sh` was given.
@@ -1600,7 +1632,8 @@ mod tests {
                 "workspaces-named",
                 "workspaces-menu",
                 "workspaces-moved",
-                "workspaces-new"
+                "workspaces-new",
+                "workspaces-close"
             ]
         );
         for name in names() {

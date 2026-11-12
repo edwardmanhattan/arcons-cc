@@ -485,8 +485,9 @@ impl Layout {
         Some(id)
     }
 
-    /// Remove a pane and give its space to its sibling: **collapse**, never a hole. The last pane
-    /// cannot be closed — a window with no map is not a view, it is a bug.
+    /// Remove a pane and give its space to its sibling: **collapse**, never a hole. A tiling never holds
+    /// nothing, so the last pane is refused here — a layout with no panes is `None` at the workspace's
+    /// level, and `Workspace::close` is what removes the last one (#141).
     pub fn close(&mut self, id: ViewId) -> bool {
         if self.len() <= 1 || !self.contains(id) {
             return false;
