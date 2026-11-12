@@ -19,7 +19,7 @@ from a fixed clock, so a capture is reproducible and a test can count what is in
 `rune` (github.com/anomalyco/rune), **pinned by rev**:
 
 ```
-rune = "205b8d4f7e60fa6248b83bfbbb4c6a06096c59ff"
+rune = "04389ed930177f1f475ff3de5249304545b3d5b4"
 ```
 
 Why:
@@ -158,7 +158,7 @@ for four 960×540 panes (limit 14), normalised by the same-run calibration workl
 the calibration workload's, not the wall's — #79 recorded the same effect — and both ends are inside
 the limits, so the bump costs no budget and no budget decision.
 
-### Bumped again: `14e3c5d` → `205b8d4`
+### Bumped again: `14e3c5d` → `04389ed`
 
 164 commits on, 2026-11-12. **The changes that move the wall's pixels are named, so the goldens'
 diff is attributable rather than assumed** — and this time the direction is the one #130 asked for:
@@ -178,6 +178,10 @@ diff is attributable rather than assumed** — and this time the direction is th
   the same bytes on both paths, which is the direction `INV-11` and the golden bounds want.
 - `ImageZoom::gliding` (#685) is the predicate a glide-driven camera can poll; the tree camera does
   not glide (`TreeCamera::touched` fits once and stays), so there is no call site yet.
+
+Two hours later the head moved two commits further, `205b8d4` → `04389ed` (the web accessibility
+mirror's rebuild cadence and a macOS precompiled-pipeline path); neither touches Linux rendering, so the
+pin is the newer rev and the goldens and measurements above stand.
 
 **The goldens were regenerated after the diff was read**: every change is glyph or icon coverage on
 a text/symbol row — the header text, name plates, card labels, marker and facility symbols — with no
