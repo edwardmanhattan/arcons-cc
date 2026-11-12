@@ -11,7 +11,7 @@
 //! it refused (and nothing moved at all).
 
 use arcons_cc::ui::view::Border;
-use arcons_cc::ui::{Begin, Interaction, PaneDrag, Rename, State};
+use arcons_cc::ui::{Begin, Interaction, PaneDrag, Rename, RenameTarget, State};
 
 /// Every state the wall can be in, with an instance of each. A new variant of `Interaction` fails to
 /// compile here until it is listed — which is the whole point: no state without a row in the table.
@@ -50,7 +50,10 @@ fn every_state() -> Vec<(&'static str, Interaction)> {
             },
         ),
         ("Filtering", Interaction::Filtering { pane: 1 }),
-        ("Renaming", Interaction::Renaming(Rename::new(1, None))),
+        (
+            "Renaming",
+            Interaction::Renaming(Rename::new(RenameTarget::Pane(1), None)),
+        ),
         ("Settings", Interaction::Settings),
     ]
 }
@@ -90,7 +93,10 @@ fn every_begin() -> Vec<(&'static str, Begin)> {
             },
         ),
         ("Filter", Begin::Filter { pane: 1 }),
-        ("Rename", Begin::Rename(Rename::new(1, None))),
+        (
+            "Rename",
+            Begin::Rename(Rename::new(RenameTarget::Pane(1), None)),
+        ),
         ("Settings", Begin::Settings),
     ]
 }
@@ -219,7 +225,10 @@ fn a_hold_cannot_be_started_over_another_hold() {
     assert!(!resize().allowed_from(&held), "not two gestures at once");
     assert!(!lift().allowed_from(&holding), "not two gestures at once");
     assert!(
-        !lift().allowed_from(&Interaction::Renaming(Rename::new(1, None))),
+        !lift().allowed_from(&Interaction::Renaming(Rename::new(
+            RenameTarget::Pane(1),
+            None
+        ))),
         "not a lift behind the rename sheet"
     );
     assert!(
@@ -227,7 +236,10 @@ fn a_hold_cannot_be_started_over_another_hold() {
         "not a lift behind the settings sheet"
     );
     assert!(
-        !Begin::Settings.allowed_from(&Interaction::Renaming(Rename::new(1, None))),
+        !Begin::Settings.allowed_from(&Interaction::Renaming(Rename::new(
+            RenameTarget::Pane(1),
+            None
+        ))),
         "not a sheet behind a sheet"
     );
     // The filter panel holds the pointer while it is open, so a lift or a border cannot start behind it —
@@ -243,8 +255,10 @@ fn a_hold_cannot_be_started_over_another_hold() {
         "not a filter panel on a pointer a gesture already holds"
     );
     assert!(
-        !Begin::Filter { pane: 1 }.allowed_from(&Interaction::Renaming(Rename::new(1, None)))
-            && !Begin::Filter { pane: 1 }.allowed_from(&Interaction::Settings),
+        !Begin::Filter { pane: 1 }.allowed_from(&Interaction::Renaming(Rename::new(
+            RenameTarget::Pane(1),
+            None
+        ))) && !Begin::Filter { pane: 1 }.allowed_from(&Interaction::Settings),
         "not a filter panel behind a sheet"
     );
 }
@@ -259,7 +273,7 @@ fn a_menu_gives_way_to_the_sheet_it_opens() {
         at: (4.0, 4.0),
     };
     assert!(
-        Begin::Rename(Rename::new(1, None)).allowed_from(&menu),
+        Begin::Rename(Rename::new(RenameTarget::Pane(1), None)).allowed_from(&menu),
         "the menu's own row opens the rename sheet"
     );
     assert!(

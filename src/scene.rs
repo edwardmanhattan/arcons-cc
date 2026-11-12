@@ -1183,6 +1183,23 @@ fn workspaces_switch(state: &mut State) {
     workspaces(state);
 }
 
+/// The `workspaces-named` scene: **workspace 2 active, and named by the operator.**
+///
+/// The name arrives through the sheet's own path — `begin_workspace_rename`, the field's text, and
+/// `commit_rename` (Enter) — rather than by assigning `Workspace::name` here, so the capture covers the
+/// interaction's commit and not a constructor.
+fn workspaces_named(state: &mut State) {
+    workspaces(state);
+    state.switch_to(1);
+    crate::ui::begin_workspace_rename(state, 1);
+    if let Some(rename) = state.renaming_mut() {
+        rename.edit.text = "Straits watch".to_string();
+        rename.edit.focus = rename.edit.text.chars().count();
+        rename.edit.anchor = rename.edit.focus;
+    }
+    crate::ui::commit_rename(state);
+}
+
 /// The scene registry, handed to `AppSpec::scenes`.
 pub const SCENES: &[Scene] = &[
     ("empty", empty),
@@ -1237,6 +1254,8 @@ pub const SCENES: &[Scene] = &[
     ("workspaces", workspaces),
     ("workspaces-empty", workspaces_empty),
     ("workspaces-switch", workspaces_switch),
+    // A workspace named by the operator (#139): the title is the name, and the chips keep their numbers.
+    ("workspaces-named", workspaces_named),
 ];
 
 /// Look a scene up by the name `scripts/capture.sh` was given.
@@ -1518,7 +1537,8 @@ mod tests {
                 // Workspaces (#138): the chips, the empty state, and a switch by a pointer.
                 "workspaces",
                 "workspaces-empty",
-                "workspaces-switch"
+                "workspaces-switch",
+                "workspaces-named"
             ]
         );
         for name in names() {
