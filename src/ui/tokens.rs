@@ -137,6 +137,22 @@ pub const TREE_LINE: f32 = 20.0;
 /// edge would be a bracket, not a line.
 pub const TREE_ROW_GAP: f32 = 24.0;
 pub const TREE_COL_GAP: f32 = 16.0;
+/// **The newsroom pane's metrics** (#136): the tab strip, one story's row, the footer, and the room the
+/// pane's chrome takes at the top. A tab is a control found by a hand, so it is the same 24 pt floor as a
+/// pane's buttons; a row is three lines at `LABEL`, measured from a capture rather than guessed.
+pub const NEWS_TOP: f32 = 36.0;
+pub const NEWS_PAD: f32 = 12.0;
+pub const NEWS_TAB_H: f32 = 24.0;
+pub const NEWS_ROW_H: f32 = 58.0;
+pub const NEWS_ROW_GAP: f32 = 6.0;
+pub const NEWS_FOOTER_H: f32 = 24.0;
+/// The height floor of the list's scroll viewport. Zero on purpose, for the reason
+/// [`FILTER_SCROLL_MIN_H`] gives: a scroll viewport in a flex column grows to its content without it.
+pub const NEWS_SCROLL_MIN_H: f32 = 0.0;
+/// How many characters of a headline a row shows. A pane name is 28 because a name is short by
+/// construction; a headline is not, and a row is one line.
+pub const NEWS_TITLE_MAX_CHARS: usize = 96;
+
 /// The tree's own margin inside its pane, and the room the pane's chrome takes at the top: the tree
 /// starts below the title plate and the two corner buttons rather than under them.
 pub const TREE_PAD: f32 = 12.0;

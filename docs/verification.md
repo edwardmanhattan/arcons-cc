@@ -135,7 +135,7 @@ cargo run -- --scenes            # empty · picture · stale · card-open · pho
                                  # panes-named · panes-max · panes-cards · panes-range · objects
                                  # panes-filter · installations · settings · settings-dismiss
                                  # pane-menu · pane-tree · pane-tree-narrow · pane-tree-zoom
-                                 # pane-tree-pan
+                                 # pane-tree-pan · newsroom · newsroom-scopes · newsroom-page-2
 scripts/verify.sh                # renders and asserts each one
 ```
 
@@ -229,6 +229,31 @@ the hit test cannot disagree; `cargo test ui::tree` holds the arithmetic (a fit 
 pane; a wheel zoom keeps the point under the pointer still, clamp included). Below
 `tokens::TREE_SECONDARY_MIN` the secondary lines are dropped and only names draw, which is what keeps an
 overview a shape rather than a grey block.
+
+`newsroom` is the **newsroom pane** (#136): the strategic-environment feed beside the map, on the
+International tab, page 1. The pane is opened by the header control's own function and the rows arrive
+through `ui::apply_reply` with the `NewsQuery` the pane asked, so the capture covers wire page → pane →
+rows. The assertion counts the **three tab labels** across the strip's own band (a missing tab, or a
+wall-wide one, changes the count), counts the **story titles** between the tabs and the footer — each is
+one band of primary ink, so the number is one a reader can count in the picture — requires a footer, and
+counts accent pixels inside the feed pane: **none**, because a newsroom pane has no frame and nothing is
+projected into it (`INV-04` holds literally), while the map beside it still draws its markers. It also
+requires the first row to be the wire's first story, and an absent `country`, or a country with no
+`place`, to draw a dash (`INV-01`).
+
+`newsroom-page-2` is the same pane after **one Next press**: the press goes through the view's own
+`press_page`, the footer moves only when the reply lands, and the assertion requires the first row to be
+page 2's first story **and** to differ from page 1's — a client that walked every page at the read size,
+or relabelled page 1 as page 2, is red.
+
+`newsroom-scopes` is **two newsroom panes on two tabs**: the second pane's tab is pressed through the same
+`View::press_scope` the button calls, and the assertion requires each pane's first row to be its own
+scope's wire page and the two to differ, plus each pane's own page count (6 and 3). The falsifier is a
+wall-wide scope, which would leave both panes on one tab. `cargo test ui::newsroom` holds what a capture
+cannot: a reply whose query is not the one asked is **discarded** (the late-page rule), a tab press resets
+the page to 1 and the tab already shown asks nothing, the footer's page moves only when the reply lands, a
+disabled pager sends no request, WIB is a fixed +07:00 conversion of the server's UTC rather than a clock,
+and `unknown` has no tab.
 
 `pane-menu` is a wall with **one** pane and its right-click menu open (#77) — the one shape the menu was
 never drawn on, and the only wall that needs it, because "Focus on new pane" is the only route to a second

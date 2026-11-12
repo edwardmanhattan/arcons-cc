@@ -442,6 +442,101 @@ fn solid_box(
     })
 }
 
+/// Count the pixels inside `rect` that are close to `colour`. A rectangle's answer where the rest of
+/// this module asks a whole image's: a newsroom pane is a region, and the accent ink a marker would
+/// leave is only a failure **inside** it.
+fn count_colour_in(
+    image: &Image,
+    rect: (f64, f64, f64, f64),
+    colour: [u8; 3],
+    tolerance: u8,
+) -> usize {
+    let (x0, y0, w, h) = rect;
+    let mut count = 0;
+    for y in (y0.max(0.0) as u32)..((y0 + h) as u32).min(image.height) {
+        for x in (x0.max(0.0) as u32)..((x0 + w) as u32).min(image.width) {
+            if near(image.at(x, y), colour, tolerance) {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// The bands of rows inside `region` that carry ink close to one of `colours`, merged when they touch:
+/// **one band per line of text**. A band shorter than three pixels is an edge or a rule, not a line.
+///
+/// This is how the newsroom's visible rows are counted without a text recogniser: one title is one band
+/// of `ink()`, and the assertion's number is the number a reader can count in the picture.
+fn ink_bands(
+    image: &Image,
+    region: (f64, f64, f64, f64),
+    colours: &[[u8; 3]],
+    tolerance: u8,
+) -> Vec<(u32, u32)> {
+    let (x0, y0, w, h) = region;
+    let first_y = y0.max(0.0) as u32;
+    let last_y = ((y0 + h) as u32).min(image.height);
+    let first_x = x0.max(0.0) as u32;
+    let last_x = ((x0 + w) as u32).min(image.width);
+    let mut bands: Vec<(u32, u32)> = Vec::new();
+    let mut run: Option<(u32, u32)> = None;
+    for y in first_y..last_y {
+        let inked = (first_x..last_x).any(|x| {
+            colours
+                .iter()
+                .any(|colour| near(image.at(x, y), *colour, tolerance))
+        });
+        if inked {
+            run = Some((run.map_or(y, |(start, _)| start), y));
+        } else if let Some((start, last)) = run.take() {
+            bands.push((start, last));
+        }
+    }
+    if let Some((start, last)) = run.take() {
+        bands.push((start, last));
+    }
+    bands
+        .into_iter()
+        .filter(|(start, last)| last - start >= 2)
+        .collect()
+}
+
+/// How many **words** run across `x` within the band `y`: runs of inked columns merged across gaps
+/// smaller than `gap`. Letters inside a word are a pixel or two apart and two controls are a padding
+/// apart, so one number separates the three tab labels without recognising a glyph — and the band keeps
+/// the count from depending on which row of a glyph the sample happens to cross.
+fn word_runs(
+    image: &Image,
+    x: (u32, u32),
+    band: (u32, u32),
+    colours: &[[u8; 3]],
+    tolerance: u8,
+    gap: u32,
+) -> usize {
+    let first_y = band.0.min(image.height);
+    let last_y = band.1.min(image.height);
+    let mut runs = 0;
+    let mut last_ink: Option<u32> = None;
+    for column in x.0..x.1.min(image.width) {
+        let inked = (first_y..last_y).any(|y| {
+            colours
+                .iter()
+                .any(|colour| near(image.at(column, y), *colour, tolerance))
+        });
+        if inked {
+            if last_ink.is_some_and(|last| column - last > gap) {
+                runs += 1;
+            }
+            last_ink = Some(column);
+        }
+    }
+    if last_ink.is_some() {
+        runs += 1;
+    }
+    runs
+}
+
 /// Check one scene's capture. Returns the lines it wants printed, or the failures.
 pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<String>> {
     let mut failures = Vec::new();
@@ -2656,6 +2751,140 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 _ => failures.push("stale: the fixture is missing a stale or a live hull".into()),
             }
         }
+        // **The newsroom** (#136): three tabs, rows of stories, a footer — and **no marker ink**: a
+        // newsroom pane has no frame, so nothing is projected into it (`INV-04` is vacuous there, and
+        // this is what says so). The pane rectangles come from `Layout::rects` against the panel this
+        // capture actually has, exactly as `objects` does, so the view and this check cannot disagree
+        // about where a pane is.
+        "newsroom" | "newsroom-scopes" | "newsroom-page-2" => {
+            let Some((ox, oy, pw, ph)) = image.find_panel_rect(ink(tokens::panel())) else {
+                failures.push(format!("{scene}: no picture panel on screen"));
+                return Err(failures);
+            };
+            let state = scene::state_for(scene);
+            let viewport = crate::map::geometry::Viewport::new(pw, ph);
+            let rects = crate::ui::view::panes_on(&state.layout, viewport, state.settings.pane_gap);
+            let ink_colours = [ink(tokens::ink()), ink(tokens::ink_dim())];
+            let mut feeds = 0;
+            for (id, rect) in &rects {
+                let Some(pane) = state.pane(*id) else {
+                    continue;
+                };
+                if pane.news.is_none() {
+                    continue;
+                }
+                feeds += 1;
+                let px = ox + f64::from(rect.x);
+                let py = oy + f64::from(rect.y);
+                // The tab strip's own band — the header row, and nothing below it: the first story's
+                // time line runs the pane's whole width and would bridge the three labels into one.
+                let strip = py + f64::from(tokens::NEWS_TOP);
+                // The strip's own band: the three labels sit on it, and the pill behind the active one
+                // is a fill rather than text, so a word count across it is three.
+                let words = word_runs(
+                    image,
+                    // The tabs are at the left of the strip; the feed's count is right-aligned and is
+                    // two words of its own, so the scan stops at the pane's middle.
+                    (
+                        (px + f64::from(tokens::NEWS_PAD)) as u32,
+                        (px + f64::from(rect.w) / 2.0) as u32,
+                    ),
+                    (strip as u32, strip as u32 + tokens::NEWS_TAB_H as u32),
+                    &ink_colours,
+                    24,
+                    tokens::GAP as u32 + 2,
+                );
+                if words != 3 {
+                    failures.push(format!(
+                        "{scene}: pane {id} has {words} words on its tab strip, not three — the scope \
+                         tabs are International, Regional and National, and a wall-wide or missing tab \
+                         is what this scene exists to catch"
+                    ));
+                }
+                // The rows: one band of primary ink per visible title, between the tabs and the footer.
+                let list_top = py + f64::from(tokens::NEWS_TOP + tokens::NEWS_TAB_H + tokens::GAP);
+                let list_bottom = py + f64::from(rect.h)
+                    - f64::from(tokens::NEWS_PAD + tokens::NEWS_FOOTER_H + tokens::GAP);
+                let rows = ink_bands(
+                    image,
+                    (
+                        px + f64::from(tokens::NEWS_PAD),
+                        list_top,
+                        f64::from(rect.w) - 2.0 * f64::from(tokens::NEWS_PAD),
+                        (list_bottom - list_top).max(0.0),
+                    ),
+                    &[ink(tokens::ink())],
+                    24,
+                );
+                if rows.len() < 3 {
+                    failures.push(format!(
+                        "{scene}: pane {id} draws {} story titles, and three fit — the rows come from \
+                         the wire, not from a list written in the view",
+                        rows.len()
+                    ));
+                } else {
+                    lines.push(format!(
+                        "{scene}: pane {id} draws {} story titles below three tabs",
+                        rows.len()
+                    ));
+                }
+                // The footer, when the server said how many pages there are.
+                let footer = ink_bands(
+                    image,
+                    (
+                        px,
+                        py + f64::from(rect.h)
+                            - f64::from(tokens::NEWS_PAD + tokens::NEWS_FOOTER_H),
+                        f64::from(rect.w),
+                        f64::from(tokens::NEWS_FOOTER_H),
+                    ),
+                    &ink_colours,
+                    24,
+                );
+                if footer.is_empty() {
+                    failures.push(format!(
+                        "{scene}: pane {id} has no footer — the page number is how a reader knows \
+                         there is more, and it is drawn whenever the server sent metadata"
+                    ));
+                } else {
+                    lines.push(format!("{scene}: pane {id} draws its page footer"));
+                }
+                // **No marker ink in a feed**: `INV-04` is vacuous in a pane with no frame, and this is
+                // the pixel fact behind it.
+                let accent = count_colour_in(
+                    image,
+                    (px, py, f64::from(rect.w), f64::from(rect.h)),
+                    ink(tokens::accent()),
+                    24,
+                );
+                if accent > 0 {
+                    failures.push(format!(
+                        "{scene}: {accent} accent pixels inside the newsroom pane {id} — a feed has no \
+                         frame, so nothing may be projected into it"
+                    ));
+                } else {
+                    lines.push(format!("{scene}: no marker ink in the newsroom pane {id}"));
+                }
+            }
+            if feeds == 0 {
+                failures.push(format!("{scene}: no newsroom pane on screen"));
+            }
+            if scene != "newsroom-scopes" {
+                // The map beside the feed still projects: the scene is the wall the operator has, not a
+                // feed alone in a frame.
+                let accent = count_colour_in(image, (ox, oy, pw, ph), ink(tokens::accent()), 24);
+                if accent == 0 {
+                    failures.push(format!(
+                        "{scene}: no marker ink anywhere — the map beside the feed has stopped drawing \
+                         its picture"
+                    ));
+                } else {
+                    lines.push(format!(
+                        "{scene}: the map beside the feed still draws its markers ({accent} accent px)"
+                    ));
+                }
+            }
+        }
         other => failures.push(format!("no assertions are written for scene {other:?}")),
     }
 
@@ -2820,6 +3049,264 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                         "{scene}: tree pane {id} draws no tree at all"
                     )),
                 }
+            }
+        }
+        // **The newsroom** (#136): a pane holds its own tab, page and rows, the rows are the wire's,
+        // and absence draws a dash rather than a code or a zero. Read from the same `State` the capture
+        // draws, because a text recogniser is not what this gate is.
+        "newsroom" | "newsroom-scopes" | "newsroom-page-2" => {
+            let rects = crate::ui::view::panes_on(
+                &state.layout,
+                state.pane_viewport(),
+                state.settings.pane_gap,
+            );
+            let feeds: Vec<(crate::ui::ViewId, &crate::ui::newsroom::View)> = rects
+                .iter()
+                .filter_map(|(id, _)| {
+                    state
+                        .pane(*id)
+                        .and_then(|pane| pane.news.as_ref())
+                        .map(|view| (*id, view))
+                })
+                .collect();
+            let maps = rects
+                .iter()
+                .filter(|(id, _)| state.pane(*id).is_some_and(|pane| pane.content.is_map()))
+                .count();
+            let wire = |name: &str| crate::scene::newsroom_page_fixture(name);
+            let international_1 = wire("newsroom-international-1.json");
+            let international_2 = wire("newsroom-international-2.json");
+            let regional_1 = wire("newsroom-regional-1.json");
+            for page in [&international_1, &international_2, &regional_1] {
+                if let Err(error) = page {
+                    failures.push(format!("{scene}: {error}"));
+                }
+            }
+
+            // No tab for the API's fourth scope: the pane's tab is always one of the three drawn.
+            for (id, view) in &feeds {
+                if !crate::ui::newsroom::SCOPES
+                    .iter()
+                    .any(|(scope, _)| *scope == view.scope)
+                {
+                    failures.push(format!(
+                        "{scene}: pane {id} is on {:?}, which has no tab — `unknown` is a real scope and \
+                         not one the panel offers, because `min_confidence=0.5` empties it",
+                        view.scope
+                    ));
+                }
+            }
+
+            match scene {
+                "newsroom" => {
+                    if feeds.len() != 1 || maps != 1 {
+                        failures.push(format!(
+                            "newsroom: {} feed pane(s) and {maps} map pane(s) — the scene is the feed \
+                             beside the map, which is the wall the operator has",
+                            feeds.len()
+                        ));
+                    }
+                    if let Some((id, view)) = feeds.first() {
+                        if view.scope != crate::data::types::NewsScope::International {
+                            failures.push(format!(
+                                "newsroom: pane {id} opens on {:?}, and the panel opens on International",
+                                view.scope
+                            ));
+                        }
+                        match &view.pagination {
+                            Some(pagination)
+                                if pagination.current_page == 1
+                                    && pagination.total_pages == 6
+                                    && pagination.total_records == 128 => lines.push(format!(
+                                    "newsroom: pane {id} on page 1 of 6, 128 stories"
+                                )),
+                            Some(pagination) => failures.push(format!(
+                                "newsroom: the footer says page {} of {} and the wire's metadata says \
+                                 1 of 6 — a page is what the server said, not what the press assumed",
+                                pagination.current_page, pagination.total_pages
+                            )),
+                            None => failures
+                                .push("newsroom: the pane has no pages: the reply never landed".into()),
+                        }
+                        if view.page != 1 {
+                            failures.push(format!(
+                                "newsroom: the pane shows page {}, and the scene asks page 1",
+                                view.page
+                            ));
+                        }
+                        match (&international_1, view.first_title()) {
+                            (Ok(page), Some(first)) if page.rows[0].title == first => lines
+                                .push(format!(
+                                    "newsroom: the first row is the wire's {:?}",
+                                    page.rows[0].title
+                                )),
+                            (Ok(page), other) => failures.push(format!(
+                                "newsroom: the first row is {other:?}, and the wire's first story is \
+                                 {:?} — the rows are the reply's, in its order",
+                                page.rows[0].title
+                            )),
+                            _ => {}
+                        }
+                        if view.stories.len() != 25 {
+                            failures.push(format!(
+                                "newsroom: {} rows drawn from a 25-row page",
+                                view.stories.len()
+                            ));
+                        }
+                        // Absence is not zero, in the words the row draws.
+                        if let Some(no_country) = view.stories.iter().find(|s| s.country.is_none())
+                        {
+                            let line = crate::ui::newsroom::when_and_where(no_country);
+                            if line.ends_with('—') {
+                                lines.push(format!(
+                                    "newsroom: a story with no country draws {line:?}"
+                                ));
+                            } else {
+                                failures.push(format!(
+                                    "newsroom: a story with no country draws {line:?} — an absent \
+                                     country is a dash, never an empty code or a place (INV-01)"
+                                ));
+                            }
+                        } else {
+                            failures.push(
+                                "newsroom: the fixture has no story without a country, so the absence \
+                                 rule is not covered by this capture"
+                                    .into(),
+                            );
+                        }
+                        if let Some(no_place) = view.stories.iter().find(|story| {
+                            story
+                                .country
+                                .as_ref()
+                                .is_some_and(|country| country.place.is_none())
+                        }) {
+                            let line = crate::ui::newsroom::when_and_where(no_place);
+                            if line.ends_with("· —") {
+                                lines.push(format!(
+                                    "newsroom: a country without a city draws {line:?}"
+                                ));
+                            } else {
+                                failures.push(format!(
+                                    "newsroom: a country without a city draws {line:?} — the place is \
+                                     a dash and the country is still shown"
+                                ));
+                            }
+                        }
+                    }
+                }
+                "newsroom-page-2" => {
+                    let Some((id, view)) = feeds.first() else {
+                        failures.push("newsroom-page-2: no feed pane".into());
+                        return Err(failures);
+                    };
+                    if view.page != 2 {
+                        failures.push(format!(
+                            "newsroom-page-2: the pane shows page {}, and the scene pressed Next once",
+                            view.page
+                        ));
+                    }
+                    if view
+                        .pagination
+                        .is_none_or(|pagination| pagination.current_page != 2)
+                    {
+                        failures.push(
+                            "newsroom-page-2: the footer does not say page 2 — it moves when the reply \
+                             lands, and the reply did"
+                                .into(),
+                        );
+                    }
+                    match (&international_2, view.first_title()) {
+                        (Ok(page), Some(first)) if page.rows[0].title == first => lines.push(format!(
+                            "newsroom-page-2: pane {id} draws page 2's first story {:?}",
+                            page.rows[0].title
+                        )),
+                        (Ok(page), other) => failures.push(format!(
+                            "newsroom-page-2: the first row is {other:?}, and page 2 of the wire starts \
+                             with {:?} — page 2 is not page 2 at the read size",
+                            page.rows[0].title
+                        )),
+                        _ => {}
+                    }
+                    if let (Ok(one), Some(first)) = (&international_1, view.first_title())
+                        && one.rows[0].title == first
+                    {
+                        failures.push(format!(
+                            "newsroom-page-2: the pane draws page 1's first story {first:?} — the Next \
+                             press reached nothing, or the reply was applied as page 1"
+                        ));
+                    }
+                }
+                "newsroom-scopes" => {
+                    if feeds.len() != 2 {
+                        failures.push(format!(
+                            "newsroom-scopes: {} feed panes — the scene is two, on two tabs",
+                            feeds.len()
+                        ));
+                    }
+                    let international = feeds.iter().find(|(_, view)| {
+                        view.scope == crate::data::types::NewsScope::International
+                    });
+                    let regional = feeds
+                        .iter()
+                        .find(|(_, view)| view.scope == crate::data::types::NewsScope::Regional);
+                    let (
+                        Some((international_id, international_view)),
+                        Some((regional_id, regional_view)),
+                    ) = (international, regional)
+                    else {
+                        failures.push(
+                            "newsroom-scopes: the two panes are not one International and one Regional \
+                             — a wall-wide scope would leave both on one tab"
+                                .into(),
+                        );
+                        return Err(failures);
+                    };
+                    if let (Ok(page), Some(first)) =
+                        (&international_1, international_view.first_title())
+                        && page.rows[0].title != first
+                    {
+                        failures.push(format!(
+                            "newsroom-scopes: the International pane draws {first:?}, and its own wire \
+                             page starts with {:?}",
+                            page.rows[0].title
+                        ));
+                    }
+                    if let (Ok(page), Some(first)) = (&regional_1, regional_view.first_title())
+                        && page.rows[0].title != first
+                    {
+                        failures.push(format!(
+                            "newsroom-scopes: the Regional pane draws {first:?}, and the regional wire \
+                             page starts with {:?}",
+                            page.rows[0].title
+                        ));
+                    }
+                    if international_view.first_title() == regional_view.first_title() {
+                        failures.push(
+                            "newsroom-scopes: both panes draw the same first row — the tab press in one \
+                             pane moved the wall (or reached neither)"
+                                .into(),
+                        );
+                    } else {
+                        lines.push(format!(
+                            "newsroom-scopes: pane {international_id} draws the International page and \
+                             pane {regional_id} the Regional one, and their first rows differ"
+                        ));
+                    }
+                    if regional_view
+                        .pagination
+                        .is_none_or(|pagination| pagination.total_pages != 3)
+                        || international_view
+                            .pagination
+                            .is_none_or(|pagination| pagination.total_pages != 6)
+                    {
+                        failures.push(
+                            "newsroom-scopes: the two panes do not hold their own pages — a shared read \
+                             would give both the same footer"
+                                .into(),
+                        );
+                    }
+                }
+                _ => {}
             }
         }
         "empty" => {
@@ -3183,6 +3670,11 @@ pub fn golden_bounds(scene: &str) -> Bounds {
         // text's own factor, and both CI runs now measure **1/255**, so the 8/255 exception this
         // scene used to need is gone.
         "pane-tree" | "pane-tree-pan" => Bounds::new(2, 200, 450),
+        // **The newsroom's rows** (#136): 12 pt text at 1:1, nine visible rows and three tabs. CI's
+        // lavapipe measured 656 px (`newsroom-scopes`), 785 (`newsroom-page-2`) and 828 (`newsroom`) as
+        // one-step rounding; the allowance is the measurement plus about half, and the change budget
+        // stays the ordinary 200, so a row that moved is still red.
+        "newsroom" | "newsroom-page-2" | "newsroom-scopes" => Bounds::new(2, 200, 1_200),
         _ => DEFAULT_BOUNDS,
     }
 }

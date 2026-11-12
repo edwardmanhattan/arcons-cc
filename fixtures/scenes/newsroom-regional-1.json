@@ -1,0 +1,360 @@
+{
+  "status_code": 200,
+  "message": "Successfull",
+  "data": [
+    {
+      "id": 1500,
+      "title": "Health ministry opens a new deep-water terminal",
+      "source_count": 5,
+      "source": "thejakartapost.com",
+      "url": "https://thejakartapost.com/2026/11/story-1500",
+      "first_seen": "2026-11-11T09:40:00Z",
+      "last_seen": "2026-11-11T09:40:00Z",
+      "country": {
+        "code": "SG",
+        "name": "Singapore",
+        "confidence": 0.76
+      }
+    },
+    {
+      "id": 1501,
+      "title": "Shipping line reports a tanker aground on the Karimata shoal",
+      "source_count": 6,
+      "source": "malaysiasun.com",
+      "url": "https://malaysiasun.com/2026/11/story-1501",
+      "first_seen": "2026-11-11T09:29:00Z",
+      "last_seen": "2026-11-11T09:29:00Z",
+      "country": {
+        "code": "ID",
+        "name": "Indonesia",
+        "confidence": 0.82
+      }
+    },
+    {
+      "id": 1502,
+      "title": "Maritime command detains a cargo ship without a manifest",
+      "source_count": 7,
+      "source": "rappler.com",
+      "url": "https://rappler.com/2026/11/story-1502",
+      "first_seen": "2026-11-11T09:18:00Z",
+      "last_seen": "2026-11-11T09:18:00Z",
+      "country": {
+        "code": "MY",
+        "name": "Malaysia",
+        "confidence": 0.88,
+        "place": "Kuala Lumpur"
+      }
+    },
+    {
+      "id": 1503,
+      "title": "Meteorology office seizes a fishing boat inside the exclusion zone",
+      "source_count": 1,
+      "source": "channelnewsasia.com",
+      "url": "https://channelnewsasia.com/2026/11/story-1503",
+      "first_seen": "2026-11-11T09:07:00Z",
+      "last_seen": "2026-11-11T09:07:00Z",
+      "country": {
+        "code": "PH",
+        "name": "Philippines",
+        "confidence": 0.52,
+        "place": "Manila"
+      }
+    },
+    {
+      "id": 1504,
+      "title": "Border patrol delivers relief after the Cianjur earthquake",
+      "source_count": 2,
+      "source": "en.antaranews.com",
+      "url": "https://en.antaranews.com/2026/11/story-1504",
+      "first_seen": "2026-11-11T08:56:00Z",
+      "last_seen": "2026-11-11T08:56:00Z",
+      "country": {
+        "code": "CN",
+        "name": "China",
+        "confidence": 0.58
+      }
+    },
+    {
+      "id": 1505,
+      "title": "Rescue service doubles its monitoring flights over the strait",
+      "source_count": 3,
+      "source": "thejakartapost.com",
+      "url": "https://thejakartapost.com/2026/11/story-1505",
+      "first_seen": "2026-11-11T08:45:00Z",
+      "last_seen": "2026-11-11T08:45:00Z",
+      "country": {
+        "code": "VN",
+        "name": "Vietnam",
+        "confidence": 0.64,
+        "place": "Hanoi"
+      }
+    },
+    {
+      "id": 1506,
+      "title": "Environment agency agrees on a joint search-and-rescue exercise",
+      "source_count": 4,
+      "source": "malaysiasun.com",
+      "url": "https://malaysiasun.com/2026/11/story-1506",
+      "first_seen": "2026-11-11T08:34:00Z",
+      "last_seen": "2026-11-11T08:34:00Z"
+    },
+    {
+      "id": 1507,
+      "title": "Transport ministry confirms talks on a maritime boundary",
+      "source_count": 5,
+      "source": "rappler.com",
+      "url": "https://rappler.com/2026/11/story-1507",
+      "first_seen": "2026-11-11T08:23:00Z",
+      "last_seen": "2026-11-11T08:23:00Z",
+      "country": {
+        "code": "ID",
+        "name": "Indonesia",
+        "confidence": 0.76,
+        "place": "Jakarta"
+      }
+    },
+    {
+      "id": 1508,
+      "title": "Central bank signs a fisheries pact with three neighbours",
+      "source_count": 6,
+      "source": "channelnewsasia.com",
+      "url": "https://channelnewsasia.com/2026/11/story-1508",
+      "first_seen": "2026-11-11T08:12:00Z",
+      "last_seen": "2026-11-11T08:12:00Z",
+      "country": {
+        "code": "MY",
+        "name": "Malaysia",
+        "confidence": 0.82,
+        "place": "Kuala Lumpur"
+      }
+    },
+    {
+      "id": 1509,
+      "title": "Navy resumes patrols in the North Natuna Sea",
+      "source_count": 7,
+      "source": "en.antaranews.com",
+      "url": "https://en.antaranews.com/2026/11/story-1509",
+      "first_seen": "2026-11-11T08:01:00Z",
+      "last_seen": "2026-11-11T08:01:00Z",
+      "country": {
+        "code": "PH",
+        "name": "Philippines",
+        "confidence": 0.88,
+        "place": "Manila"
+      }
+    },
+    {
+      "id": 1510,
+      "title": "Immigration office opens a new deep-water terminal",
+      "source_count": 1,
+      "source": "thejakartapost.com",
+      "url": "https://thejakartapost.com/2026/11/story-1510",
+      "first_seen": "2026-11-11T07:50:00Z",
+      "last_seen": "2026-11-11T07:50:00Z",
+      "country": {
+        "code": "CN",
+        "name": "China",
+        "confidence": 0.52
+      }
+    },
+    {
+      "id": 1511,
+      "title": "Forestry agency reports a tanker aground on the Karimata shoal",
+      "source_count": 2,
+      "source": "malaysiasun.com",
+      "url": "https://malaysiasun.com/2026/11/story-1511",
+      "first_seen": "2026-11-11T07:39:00Z",
+      "last_seen": "2026-11-11T07:39:00Z",
+      "country": {
+        "code": "VN",
+        "name": "Vietnam",
+        "confidence": 0.58
+      }
+    },
+    {
+      "id": 1512,
+      "title": "Telecom regulator detains a cargo ship without a manifest",
+      "source_count": 3,
+      "source": "rappler.com",
+      "url": "https://rappler.com/2026/11/story-1512",
+      "first_seen": "2026-11-11T07:28:00Z",
+      "last_seen": "2026-11-11T07:28:00Z",
+      "country": {
+        "code": "SG",
+        "name": "Singapore",
+        "confidence": 0.64
+      }
+    },
+    {
+      "id": 1513,
+      "title": "Election commission seizes a fishing boat inside the exclusion zone",
+      "source_count": 4,
+      "source": "channelnewsasia.com",
+      "url": "https://channelnewsasia.com/2026/11/story-1513",
+      "first_seen": "2026-11-11T07:17:00Z",
+      "last_seen": "2026-11-11T07:17:00Z"
+    },
+    {
+      "id": 1514,
+      "title": "Coast guard delivers relief after the Cianjur earthquake",
+      "source_count": 5,
+      "source": "en.antaranews.com",
+      "url": "https://en.antaranews.com/2026/11/story-1514",
+      "first_seen": "2026-11-11T07:06:00Z",
+      "last_seen": "2026-11-11T07:06:00Z",
+      "country": {
+        "code": "MY",
+        "name": "Malaysia",
+        "confidence": 0.76,
+        "place": "Kuala Lumpur"
+      }
+    },
+    {
+      "id": 1515,
+      "title": "Trade ministry doubles its monitoring flights over the strait",
+      "source_count": 6,
+      "source": "thejakartapost.com",
+      "url": "https://thejakartapost.com/2026/11/story-1515",
+      "first_seen": "2026-11-11T06:55:00Z",
+      "last_seen": "2026-11-11T06:55:00Z",
+      "country": {
+        "code": "PH",
+        "name": "Philippines",
+        "confidence": 0.82,
+        "place": "Manila"
+      }
+    },
+    {
+      "id": 1516,
+      "title": "Regional navies agrees on a joint search-and-rescue exercise",
+      "source_count": 7,
+      "source": "malaysiasun.com",
+      "url": "https://malaysiasun.com/2026/11/story-1516",
+      "first_seen": "2026-11-11T06:44:00Z",
+      "last_seen": "2026-11-11T06:44:00Z",
+      "country": {
+        "code": "CN",
+        "name": "China",
+        "confidence": 0.88
+      }
+    },
+    {
+      "id": 1517,
+      "title": "Fisheries agency confirms talks on a maritime boundary",
+      "source_count": 1,
+      "source": "rappler.com",
+      "url": "https://rappler.com/2026/11/story-1517",
+      "first_seen": "2026-11-11T06:33:00Z",
+      "last_seen": "2026-11-11T06:33:00Z",
+      "country": {
+        "code": "VN",
+        "name": "Vietnam",
+        "confidence": 0.52,
+        "place": "Hanoi"
+      }
+    },
+    {
+      "id": 1518,
+      "title": "Air force signs a fisheries pact with three neighbours",
+      "source_count": 2,
+      "source": "channelnewsasia.com",
+      "url": "https://channelnewsasia.com/2026/11/story-1518",
+      "first_seen": "2026-11-11T06:22:00Z",
+      "last_seen": "2026-11-11T06:22:00Z",
+      "country": {
+        "code": "SG",
+        "name": "Singapore",
+        "confidence": 0.58
+      }
+    },
+    {
+      "id": 1519,
+      "title": "Foreign ministry resumes patrols in the North Natuna Sea",
+      "source_count": 3,
+      "source": "en.antaranews.com",
+      "url": "https://en.antaranews.com/2026/11/story-1519",
+      "first_seen": "2026-11-11T06:11:00Z",
+      "last_seen": "2026-11-11T06:11:00Z",
+      "country": {
+        "code": "ID",
+        "name": "Indonesia",
+        "confidence": 0.64,
+        "place": "Jakarta"
+      }
+    },
+    {
+      "id": 1520,
+      "title": "Disaster agency opens a new deep-water terminal",
+      "source_count": 4,
+      "source": "thejakartapost.com",
+      "url": "https://thejakartapost.com/2026/11/story-1520",
+      "first_seen": "2026-11-11T06:00:00Z",
+      "last_seen": "2026-11-11T06:00:00Z"
+    },
+    {
+      "id": 1521,
+      "title": "Customs service reports a tanker aground on the Karimata shoal",
+      "source_count": 5,
+      "source": "malaysiasun.com",
+      "url": "https://malaysiasun.com/2026/11/story-1521",
+      "first_seen": "2026-11-11T05:49:00Z",
+      "last_seen": "2026-11-11T05:49:00Z",
+      "country": {
+        "code": "PH",
+        "name": "Philippines",
+        "confidence": 0.76
+      }
+    },
+    {
+      "id": 1522,
+      "title": "Port authority detains a cargo ship without a manifest",
+      "source_count": 6,
+      "source": "rappler.com",
+      "url": "https://rappler.com/2026/11/story-1522",
+      "first_seen": "2026-11-11T05:38:00Z",
+      "last_seen": "2026-11-11T05:38:00Z",
+      "country": {
+        "code": "CN",
+        "name": "China",
+        "confidence": 0.82
+      }
+    },
+    {
+      "id": 1523,
+      "title": "Police seizes a fishing boat inside the exclusion zone",
+      "source_count": 7,
+      "source": "channelnewsasia.com",
+      "url": "https://channelnewsasia.com/2026/11/story-1523",
+      "first_seen": "2026-11-11T05:27:00Z",
+      "last_seen": "2026-11-11T05:27:00Z",
+      "country": {
+        "code": "VN",
+        "name": "Vietnam",
+        "confidence": 0.88,
+        "place": "Hanoi"
+      }
+    },
+    {
+      "id": 1524,
+      "title": "Energy ministry delivers relief after the Cianjur earthquake",
+      "source_count": 1,
+      "source": "en.antaranews.com",
+      "url": "https://en.antaranews.com/2026/11/story-1524",
+      "first_seen": "2026-11-11T05:16:00Z",
+      "last_seen": "2026-11-11T05:16:00Z",
+      "country": {
+        "code": "SG",
+        "name": "Singapore",
+        "confidence": 0.52
+      }
+    }
+  ],
+  "metadata": {
+    "total_records": 61,
+    "total_pages": 3,
+    "page_size": 25,
+    "current_page": 1,
+    "has_next_page": true,
+    "has_previous_page": false
+  }
+}

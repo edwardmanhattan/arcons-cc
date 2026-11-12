@@ -22,6 +22,7 @@ pub mod filter;
 pub mod icons;
 pub mod installations;
 pub mod markers;
+pub mod newsroom;
 pub mod objects;
 pub mod symbol;
 pub mod tokens;
@@ -62,6 +63,9 @@ pub enum PaneContent {
     /// structure the wall knows**, which is the chain of command as a whole — the supreme command above
     /// each branch root, because `/tni-commander` is one post shared by every branch.
     Tree { organisation: Option<i64> },
+    /// **The newsroom** (#136): the strategic-environment feed, one page of stories at a time. No
+    /// camera, no thread, no frame — the pane holds a [`newsroom::View`] and draws rows.
+    Newsroom,
 }
 
 impl PaneContent {
@@ -106,6 +110,10 @@ pub struct Pane {
     /// hold two. It is a value on the pane rather than in the drawing, so a gesture, a fit and a capture
     /// all read the same camera.
     pub tree: Option<crate::ui::tree::TreeCamera>,
+    /// **The newsroom pane's view** (#136): the tab, the page, the rows and the query whose reply may
+    /// still land. `None` on every other kind of pane, like the tree camera above: a pane holds the state
+    /// its content has, and two newsroom panes hold two.
+    pub news: Option<newsroom::View>,
     /// **The name the operator typed** (#83, #113). `None` means "nobody named this pane": the plate then
     /// draws the pane's own number from [`Pane::title`], because a title is not a name invented — a name is
     /// something somebody typed.
@@ -138,9 +146,20 @@ impl Pane {
             frame_seen: None,
             view: PaneView::default(),
             tree: None,
+            news: None,
             name: None,
             #[cfg(feature = "map")]
             drag_origin: None,
+        }
+    }
+
+    /// A newsroom pane (#136): a list of stories instead of a picture. No camera use beyond the layout,
+    /// no map thread, no frame — nothing in it projects.
+    pub fn newsroom(id: ViewId, camera: Camera) -> Self {
+        Self {
+            content: PaneContent::Newsroom,
+            news: Some(newsroom::View::new()),
+            ..Self::new(id, camera)
         }
     }
 
@@ -873,6 +892,7 @@ impl State {
         self.panes.push(match content {
             PaneContent::Map => Pane::new(id, camera),
             PaneContent::Tree { organisation } => Pane::tree(id, camera, organisation),
+            PaneContent::Newsroom => Pane::newsroom(id, camera),
         });
         #[cfg(feature = "map")]
         if !self.headless && is_map {
@@ -1284,6 +1304,15 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .color(tokens::ink_dim())
                 .on_press(|state: &mut State| open_tree_pane(state)),
         )
+        // The newsroom control (#136), in the same row and the same shape as the tree's: a word, and a
+        // pane of its own. The operator's ask was a "newsroom" button on the topbar.
+        .child(
+            text(NEWSROOM_LABEL)
+                .key("newsroom-open")
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim())
+                .on_press(|state: &mut State| open_newsroom_pane(state)),
+        )
         .child(
             text(SETTINGS_LABEL)
                 .key("settings-open")
@@ -1335,6 +1364,9 @@ pub const SETTINGS_LABEL: &str = "settings";
 /// What the header's tree control says (#116): a word, for the same reason the control beside it is one.
 pub const TREE_LABEL: &str = "chain of command";
 
+/// What the header's newsroom control says (#136). A word, like the two beside it.
+pub const NEWSROOM_LABEL: &str = "newsroom";
+
 /// The header's tree control (#116): **the chain of command in a pane of its own**.
 ///
 /// It splits the layout the way `Focus on new pane` does — the tree takes a pane beside the one the
@@ -1349,6 +1381,40 @@ pub(crate) fn open_tree_pane(state: &mut State) {
     let content = PaneContent::Tree { organisation: None };
     if state.split_pane_as(target, camera, content).is_some() {
         ask_tree_reads(state);
+    }
+    state.layout_dirty = true;
+}
+
+/// The header's newsroom control (#136): **the feed in a pane of its own**, focused, asking page 1.
+///
+/// The same path the tree control takes — split the focused pane, give the new one its content, ask its
+/// first read — so a one-pane wall gets its first newsroom the way a split wall gets another, and a
+/// second newsroom pane sits on its own tab and its own page.
+pub(crate) fn open_newsroom_pane(state: &mut State) {
+    let target = state.layout.focused();
+    let camera = state.camera_of(target);
+    if let Some(id) = state.split_pane_as(target, camera, PaneContent::Newsroom) {
+        // The first page is asked on **this** frame, and the reply lands between frames: the pane draws
+        // "reading the feed…" until it does, never a blank and never a wait.
+        let query = state
+            .pane_mut(id)
+            .and_then(|pane| pane.news.as_mut())
+            .map(|view| view.ask());
+        match (query, &state.backend) {
+            (Some(query), Some(backend)) => {
+                backend.request(crate::data::Command::Stories(query));
+            }
+            // **A wall with no reads thread says so, in the pane.** "reading the feed…" forever is a
+            // lie about a read nobody is performing, and the fix (a credential) is not on the wall.
+            (_, None) => {
+                if let Some(view) = state.pane_mut(id).and_then(|pane| pane.news.as_mut()) {
+                    view.state = newsroom::ReadState::Failed(
+                        "this wall has no reads thread: no credential is configured".to_string(),
+                    );
+                }
+            }
+            (None, _) => {}
+        }
     }
     state.layout_dirty = true;
 }
@@ -1814,6 +1880,10 @@ fn maximised(state: &State, scale: f32, body: El) -> El {
         sheet = sheet.child(projections(state, id, &frame, scale));
     } else if let Some(tree) = tree::tree_for(state, id) {
         sheet = sheet.child(tree::content(state, id, rect, &tree));
+    } else if pane.content == PaneContent::Newsroom {
+        // A full-size newsroom pane is the same list over the window's rectangle: the rows the pane
+        // draws, not a snapshot of them.
+        sheet = sheet.child(newsroom::content(state, id));
     }
     sheet = sheet.child(name_plate(pane));
     // The same chrome row, and the maximise toggle says "back to the wall" because that is what the
@@ -2354,15 +2424,20 @@ fn name_plate(pane: &Pane) -> El {
 /// pane — a second copy of "what a pane draws" is how a tree pane would appear in one of the three and
 /// not the others.
 fn pane_content(state: &State, id: ViewId, rect: Rect, scale: f32, single: bool, body: El) -> El {
-    let is_map = state.pane(id).is_none_or(|pane| pane.content.is_map());
-    if is_map {
+    // **An explicit match over the kinds** (#136): a third kind must be a branch somebody wrote, not a
+    // fallback that happens to draw nothing. A pane with no content is a map's pane before its frame.
+    let Some(pane) = state.pane(id) else {
         return picture_content(state, id, rect, scale, single, body);
-    }
-    match tree::tree_for(state, id) {
-        Some(tree) => body.child(tree::content(state, id, rect, &tree)),
-        // A tree pane whose structure has not been read yet draws an empty pane: no placeholder words,
-        // and above all no map. The reads are asked for on the frame this pane was opened.
-        None => body,
+    };
+    match &pane.content {
+        PaneContent::Map => picture_content(state, id, rect, scale, single, body),
+        PaneContent::Tree { .. } => match tree::tree_for(state, id) {
+            Some(tree) => body.child(tree::content(state, id, rect, &tree)),
+            // A tree pane whose structure has not been read yet draws an empty pane: no placeholder
+            // words, and above all no map. The reads are asked for on the frame this pane was opened.
+            None => body,
+        },
+        PaneContent::Newsroom => body.child(newsroom::content(state, id)),
     }
 }
 
@@ -3316,6 +3391,45 @@ pub(crate) fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool
             state.tni_command = Some((**post).clone());
             changed = true;
         }
+        // **The newsroom** (#136). A page is applied only to the panes waiting for exactly that query:
+        // a reply is the answer to a question, and a question the operator has already changed is not
+        // one to answer. `panes` in the log line is how many were still waiting — zero is a late page,
+        // dropped on purpose.
+        crate::data::Reply::Stories(query, result) => {
+            let mut applied = 0;
+            for pane in &mut state.panes {
+                if let Some(view) = pane.news.as_mut()
+                    && view.apply(*query, result)
+                {
+                    applied += 1;
+                }
+            }
+            match result {
+                Ok(page) if applied > 0 => tracing::info!(
+                    scope = query.scope.as_str(),
+                    page = page.pagination.current_page,
+                    stories = page.rows.len(),
+                    total = page.pagination.total_records,
+                    panes = applied,
+                    "a newsroom page was read"
+                ),
+                Err(error) if applied > 0 => tracing::warn!(
+                    scope = query.scope.as_str(),
+                    page = query.page,
+                    error = %error,
+                    panes = applied,
+                    "the newsroom page did not read: the pane keeps the rows it has"
+                ),
+                _ => tracing::debug!(
+                    scope = query.scope.as_str(),
+                    page = query.page,
+                    "a newsroom page arrived after the question changed: discarded"
+                ),
+            }
+            if applied > 0 {
+                changed = true;
+            }
+        }
         crate::data::Reply::TniCommander(Err(error)) => {
             tracing::warn!(
                 endpoint = "GET /tni-commander",
@@ -4078,6 +4192,112 @@ mod tests {
         let mut state = state_with_two_hulls();
         state.link = Link::Live;
         assert!(frame_once(state).find("reconnect-banner").is_none());
+    }
+
+    /// **The header's newsroom control opens a feed pane that asks page 1** (#136) — the same path the
+    /// tree control takes, so a one-pane wall gets its first newsroom the way a split wall gets another.
+    /// The ask is recorded on the pane, which is what makes the reply checkable and a late page
+    /// discardable; a scene has no reads thread, so the backend being absent is the point.
+    #[test]
+    fn the_header_control_opens_a_newsroom_pane_that_asks_page_one() {
+        let mut state = State::default();
+        let first = state.layout.focused();
+        open_newsroom_pane(&mut state);
+        assert_eq!(state.panes.len(), 2, "the control splits the wall");
+        let opened = state.layout.focused();
+        assert_ne!(
+            opened, first,
+            "the pane the operator asked for has the keys"
+        );
+        let pane = state.pane(opened).expect("the new pane");
+        assert_eq!(pane.content, PaneContent::Newsroom);
+        assert!(
+            pane.frame.is_none(),
+            "a feed has no frame: nothing is projected into it"
+        );
+        let view = pane.news.as_ref().expect("a newsroom pane holds its view");
+        assert_eq!(view.scope, crate::data::types::NewsScope::International);
+        assert_eq!(view.page, 1);
+        assert_eq!(
+            view.asked,
+            Some(crate::data::types::NewsQuery {
+                scope: crate::data::types::NewsScope::International,
+                window: crate::data::types::NewsWindow::Latest,
+                page: 1,
+            }),
+            "the first page is asked on the frame the pane is opened"
+        );
+        // And a second press is a second pane, on its own tab and page.
+        open_newsroom_pane(&mut state);
+        assert_eq!(state.panes.len(), 3);
+        assert_eq!(
+            state
+                .panes
+                .iter()
+                .filter(|pane| pane.news.is_some())
+                .count(),
+            2,
+            "two feeds, two views"
+        );
+    }
+
+    /// **A pane that cannot read says so**, instead of "reading the feed…" for the life of the process: a
+    /// wall with no credential has no reads thread, and the pane is where the operator would look.
+    #[test]
+    fn a_newsroom_pane_with_no_reads_thread_says_so() {
+        let mut state = State::default();
+        assert!(
+            state.backend.is_none(),
+            "a state with no wall behind it has no reads thread"
+        );
+        open_newsroom_pane(&mut state);
+        let view = state
+            .panes
+            .iter()
+            .find_map(|pane| pane.news.as_ref())
+            .expect("the feed pane");
+        assert!(
+            matches!(&view.state, newsroom::ReadState::Failed(why) if why.contains("credential")),
+            "the pane must say why it cannot read, got {:?}",
+            view.state
+        );
+    }
+
+    /// **A reply for a question no pane is waiting for changes nothing** (#136): the routing half of the
+    /// late-page rule. The data layer carries the query back for exactly this, so a regional page cannot
+    /// draw under the national heading.
+    #[test]
+    fn a_reply_for_a_query_no_pane_asked_is_discarded() {
+        let mut state = State::default();
+        open_newsroom_pane(&mut state);
+        let stranger = crate::data::types::NewsQuery {
+            scope: crate::data::types::NewsScope::National,
+            window: crate::data::types::NewsWindow::Latest,
+            page: 3,
+        };
+        let before = state
+            .panes
+            .iter()
+            .find_map(|pane| pane.news.as_ref())
+            .map(|view| (view.scope, view.state.clone(), view.asked))
+            .expect("the feed pane");
+        let changed = apply_reply(
+            &mut state,
+            &crate::data::Reply::Stories(stranger, Err(crate::data::Error::Unauthorized)),
+        );
+        assert!(!changed, "a late page is not a redraw");
+        let view = state
+            .panes
+            .iter()
+            .find_map(|pane| pane.news.as_ref())
+            .expect("the feed pane");
+        assert!(view.stories.is_empty(), "and it draws no rows");
+        assert_eq!(
+            (view.scope, view.state.clone(), view.asked),
+            before,
+            "a stale reply leaves the pane exactly as it was: the tab, the state and the ask are the \
+             operator's"
+        );
     }
 
     #[test]
