@@ -141,7 +141,7 @@ cargo run -- --scenes            # empty · picture · stale · card-open · pho
                                  # workspaces-named · workspaces-menu · workspaces-moved
                                  # workspaces-new · workspaces-close
                                  # workspaces-new-remote
-                                 # cursor-hull · cursor-idle
+                                 # menu-ring · cursor-hull · cursor-idle
                                  # workspaces-rename-hidden
 scripts/verify.sh                # renders and asserts each one
 ```
@@ -336,6 +336,13 @@ first leaf, one fewer pane in total, and — in pixels — the focus edge on the
 and none on the left's. The two panes share their top and bottom edges with the picture panel, so the
 honest pixel is a vertical one; a ring drawn on the wrong pane, or a wall that forgot `Layout::focused()`
 and landed on the first leaf, is red.
+
+`menu-ring` is **a menu the keyboard is on** (#164): `panes-menu`'s wall and menu, with the ring put on
+`Name this pane…` by a `menu.focus` intent — so the capture is of the *keyboard's* row and not of a hover (the
+pointer is nowhere near the menu). The pair with `panes-menu` is the claim: the ring is `focus_edge`, and a
+pointer-opened menu has **none** of it on any row. `cargo test ui::tests` holds what a picture cannot: the ring wraps
+at both ends, `Enter` acts on the ringed row and never on a hovered one, `Right` opens the waterfall onto its first
+row and `Left` closes that surface and no other, and the ringed row is the menu's **active descendant**.
 
 `cursor-hull` and `cursor-idle` are **a client's cursor** (#167): a remote's point on a hull, its press, its
 release, and its point moving off the hull — every step a `cursor.move`, `cursor.press` or `cursor.release` intent

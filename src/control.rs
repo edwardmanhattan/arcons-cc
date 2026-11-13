@@ -28,7 +28,7 @@
 //! predicate the menu row is built from (#141), so the control and the action cannot disagree.
 
 use crate::map::geometry::Camera;
-use crate::ui::{self, PaneContent, RenameTarget, State, ViewId};
+use crate::ui::{self, MenuAction, PaneContent, RenameTarget, State, ViewId};
 
 // **The transport is a unix socket**, so the listener, the wire it speaks and the CLI that talks to it are
 // behind `unix` (#165). The vocabulary above is not: `Intent` and `apply` are the wall's own state machine, and
@@ -113,6 +113,15 @@ pub enum Intent {
     /// Put this pane's camera here — a **value**, so a pan is one intent when the hand stops, not sixty.
     Camera { pane: ViewId, camera: Camera },
 
+    // ---- a menu's keyboard model (#164)
+    /// Put the ring on a row of the surface that is open — the menu, or the waterfall — or take it off with `None`.
+    /// The row is clamped to the rows that exist.
+    MenuFocus { row: Option<usize> },
+    /// Open the ringed row's second surface, or close the one that is open.
+    MenuSubmenu { open: bool },
+    /// Act on the ringed row: a row that opens a surface opens it; a leaf runs its action.
+    MenuChoose,
+
     // ---- the client's cursor (#167)
     /// Put a client's cursor at a point in the **picture panel's** points, and start its fade from now.
     CursorMove { at: (f32, f32) },
@@ -150,6 +159,9 @@ impl Intent {
             Intent::FocusWorkspace(_) => "workspace.focus",
             Intent::NewWorkspace => "workspace.new",
             Intent::Camera { .. } => "map.camera",
+            Intent::MenuFocus { .. } => "menu.focus",
+            Intent::MenuSubmenu { .. } => "menu.submenu",
+            Intent::MenuChoose => "menu.choose",
             Intent::CursorMove { .. } => "cursor.move",
             Intent::CursorPress => "cursor.press",
             Intent::CursorRelease => "cursor.release",
@@ -280,6 +292,51 @@ pub fn apply(state: &mut State, intent: Intent) -> Result<Changed, Refused> {
             state.set_camera_of(pane, camera);
             true
         }
+        Intent::MenuFocus { row } => {
+            if state.menu().is_none() {
+                return Err(Refused("no menu is open"));
+            }
+            ui::menu_ring(state, row)
+        }
+        Intent::MenuSubmenu { open } => {
+            let Some(menu) = state.menu() else {
+                return Err(Refused("no menu is open"));
+            };
+            if open {
+                // **A submenu opens from the ring** (#164): the keyboard's row, never the pointer's.
+                let Some(ring) = menu.ring else {
+                    return Err(Refused("no row has the ring"));
+                };
+                let Some(row) = ui::menu_rows(state).get(ring).cloned() else {
+                    return Err(Refused("the ring is on no row"));
+                };
+                if !row.opens() {
+                    return Err(Refused("the row opens nothing"));
+                }
+                let MenuAction::Submenu(key) = row.action else {
+                    return Err(Refused("the row opens nothing"));
+                };
+                ui::open_submenu(state, key);
+                // The first row of the surface that just appeared, as a native menu does.
+                ui::menu_ring(state, Some(0));
+                true
+            } else {
+                if menu.open.is_none() {
+                    return Err(Refused("no submenu is open"));
+                }
+                ui::close_submenu(state);
+                true
+            }
+        }
+        Intent::MenuChoose => {
+            if state.menu().is_none() {
+                return Err(Refused("no menu is open"));
+            }
+            if state.menu().and_then(|menu| menu.ring).is_none() {
+                return Err(Refused("no row has the ring"));
+            }
+            ui::menu_choose(state)
+        }
         Intent::CursorMove { at } => {
             state.cursor_move(at);
             true
@@ -392,6 +449,9 @@ pub fn vocabulary() -> Vec<Intent> {
             pane: 1,
             camera: Camera::new((-6.1, 106.8), 10.0),
         },
+        Intent::MenuFocus { row: Some(1) },
+        Intent::MenuSubmenu { open: true },
+        Intent::MenuChoose,
         Intent::CursorMove { at: (100.0, 80.0) },
         Intent::CursorPress,
         Intent::CursorRelease,

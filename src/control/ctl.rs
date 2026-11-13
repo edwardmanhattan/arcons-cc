@@ -201,6 +201,24 @@ pub fn parse(words: &[String]) -> Result<Intent, Failure> {
             pane: number(0, "a pane id")?,
             camera: crate::config::parse_camera(arg(1, "LAT,LON,ZOOM")?).map_err(Failure::Usage)?,
         },
+        "menu.focus" => Intent::MenuFocus {
+            row: match rest.first().map(String::as_str) {
+                None | Some("off") => None,
+                Some(_) => Some(number(0, "a row index")? as usize),
+            },
+        },
+        "menu.submenu" => Intent::MenuSubmenu {
+            open: match rest.first().map(String::as_str) {
+                Some("open") => true,
+                Some("close") => false,
+                _ => {
+                    return Err(Failure::Usage(
+                        "menu.submenu needs `open` or `close`".to_string(),
+                    ));
+                }
+            },
+        },
+        "menu.choose" => Intent::MenuChoose,
         "cursor.move" => {
             let x = number(0, "an x in points")? as f32;
             let y = number(1, "a y in points")? as f32;
@@ -337,6 +355,10 @@ arcons-cc ctl <noun> <verb> [args]
   rename set pane <id> <name>
   rename set workspace <i> <name>
   map camera <id> L,L,Z      put a pane's camera at a latitude, longitude and zoom
+  menu focus <row>|off       put the keyboard's ring on a row of the open menu (or the
+                             waterfall), or take it off
+  menu submenu open|close    open the ringed row's second surface, or close the one open
+  menu choose                act on the ringed row — what Enter does
   cursor move <x> <y>        put a client's cursor at a point in the picture panel
   cursor press               the hull under it (its card), or the pane it is over
   cursor release             let go; the cursor fades from here
@@ -379,6 +401,9 @@ mod tests {
             "rename begin pane 2",
             "rename set workspace 0 Straits watch",
             "map camera 2 -6.1,106.8,10",
+            "menu focus 2",
+            "menu submenu open",
+            "menu choose",
             "cursor move 100 80",
             "cursor press",
             "cursor release",

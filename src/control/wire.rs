@@ -81,6 +81,13 @@ pub fn to_wire(intent: &Intent) -> Value {
                 }),
             );
         }
+        Intent::MenuFocus { row } => {
+            object.insert("row".into(), json!(row));
+        }
+        Intent::MenuSubmenu { open } => {
+            object.insert("open".into(), json!(open));
+        }
+        Intent::MenuChoose => {}
         Intent::CursorMove { at } => {
             object.insert("at".into(), json!([at.0, at.1]));
         }
@@ -177,6 +184,23 @@ pub fn from_wire(value: &Value) -> Result<Intent, Refused> {
                 camera: crate::map::geometry::Camera::new((lat, lon), zoom),
             }
         }
+        "menu.focus" => Intent::MenuFocus {
+            row: match object.get("row") {
+                None | Some(Value::Null) => None,
+                Some(row) => Some(
+                    row.as_u64()
+                        .ok_or(Refused("\"row\" is a row index or null"))?
+                        as usize,
+                ),
+            },
+        },
+        "menu.submenu" => Intent::MenuSubmenu {
+            open: object
+                .get("open")
+                .and_then(Value::as_bool)
+                .ok_or(Refused("\"open\" is true or false"))?,
+        },
+        "menu.choose" => Intent::MenuChoose,
         "cursor.move" => {
             let at = object
                 .get("at")

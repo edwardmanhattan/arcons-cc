@@ -645,6 +645,45 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 lines.extend(assert_card(image, origin, &mut failures));
             }
         }
+        // **The menu's keyboard model** (#164): the same wall as `panes-menu`, with the ring on the row Enter would
+        // act on. The ring is `focus_edge` — the colour the wall uses for "this one has the keys".
+        //
+        // The strip is the ringed row's own: a menu box also holds the focused pane's focus edge, which crosses it,
+        // so the question is asked of one row and the answer is a *count* — a border's worth of ink, or a line's.
+        "menu-ring" => {
+            let x = 1044.0;
+            let y = 188.0 + f64::from(tokens::MENU_ROW) * crate::scene::MENU_RING_ROW as f64;
+            let strip = (
+                x,
+                y,
+                f64::from(tokens::MENU_WIDTH) - 8.0,
+                f64::from(tokens::MENU_ROW),
+            );
+            let ring = count_colour_in(image, strip, ink(tokens::focus_edge()), 24);
+            // A row's ring is its whole border: two widths plus two heights, about 460 px at this size. A pane's
+            // focus edge crossing the strip is one line, about 22. Two hundred is between them and nearer the ring.
+            const RING: usize = 200;
+            if scene == "menu-ring" {
+                if ring < RING {
+                    failures.push(format!(
+                        "menu-ring: {ring} px of ring ink on row {} — the keyboard's row is not drawn, and \
+                         Enter would act on a row nobody can see",
+                        crate::scene::MENU_RING_ROW
+                    ));
+                } else {
+                    lines.push(format!(
+                        "menu-ring: {ring} px of ring on the keyboard's row"
+                    ));
+                }
+            } else if ring >= RING {
+                failures.push(format!(
+                    "panes-menu: {ring} px of ring ink on the row — a menu opened by a press has no row with \
+                     the keyboard's keys, and a ring nobody put there is a second answer to \"which row\""
+                ));
+            } else {
+                lines.push("panes-menu: no ring, as a pointer-opened menu should be".to_string());
+            }
+        }
         // **The client's cursor** (#167): the same wall twice, one line apart in the state and far apart in the
         // picture — the card its press opened in both, and the pointer in exactly one.
         //
@@ -2077,6 +2116,23 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             }
         }
         "pane-menu" | "panes-menu" => {
+            // **A menu opened by a press has no ring** (#164): the pointer is where the operator's attention is, and
+            // a ring nobody put there would be a second answer to "which row". The strip is the first row's.
+            let strip = (
+                1044.0,
+                188.0,
+                f64::from(tokens::MENU_WIDTH) - 8.0,
+                f64::from(tokens::MENU_ROW),
+            );
+            let ring = count_colour_in(image, strip, ink(tokens::focus_edge()), 24);
+            if ring >= 200 {
+                failures.push(format!(
+                    "panes-menu: {ring} px of ring ink on the first row — a menu a press opened has no row with \
+                     the keyboard's keys"
+                ));
+            } else {
+                lines.push("panes-menu: no ring, as a pointer-opened menu should be".to_string());
+            }
             // **The menu is drawn, at the click, inside its pane** (#77), and **as tall as its items**
             // (#81): a menu sized for one row clips the second, which no golden notices until someone opens
             // it on a wall. So every row is sampled for its own label ink.
@@ -3808,6 +3864,23 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     let mut failures = Vec::new();
     let mut lines = Vec::new();
     let state = crate::scene::state_for(scene);
+    // **The menu's ring is a value in the machine** (#164): the capture is of the row the keyboard is on, so the
+    // structure half asks which row that is.
+    if scene == "menu-ring" {
+        let ring = state.menu().and_then(|menu| menu.ring);
+        if ring != Some(crate::scene::MENU_RING_ROW) {
+            failures.push(format!(
+                "menu-ring: the ring is {ring:?}, and the scene put it on row {}",
+                crate::scene::MENU_RING_ROW
+            ));
+        } else {
+            lines.push(format!(
+                "menu-ring: the ring is on row {}, the row Enter acts on",
+                crate::scene::MENU_RING_ROW
+            ));
+        }
+    }
+
     // **The cursor scenes' structure** (#167): the press reached the hull, its card is up, and the cursor's
     // visibility is the one thing the two scenes disagree about.
     if matches!(scene, "cursor-hull" | "cursor-idle") {
