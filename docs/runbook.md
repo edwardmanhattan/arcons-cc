@@ -87,6 +87,7 @@ arcons-cc 0.1.0 self-check
   credentials ok  /home/wall/.config/arcons-cc/credentials.toml mode 0600 · refresh token (from file)
   settings    ok  no /home/wall/.config/arcons-cc/settings.toml, using the defaults (pane gap 0 pt)
   layout      ok  no /home/wall/.config/arcons-cc/layout.toml, opening the default wall (0 workspace(s) remembered)
+  control     ok  no wall listening at /run/user/1000/arcons-cc/control.sock (start the display)
   login       ok  refresh token accepted, access token valid for 900 s
   picture     ok  127 hulls, 126 never reported
   socket      ok  subscribed to live-feed
@@ -97,6 +98,12 @@ ok
 `settings` is the display's own file, not the configuration: the wall writes it when someone changes a
 preference on screen (`settings.toml`, mode 0600, beside `config.toml`). A wall that has never had one is
 healthy — the line says which file it looked for and what it used instead.
+
+`control` is the plane a client drives the wall through (#165): the socket's path, and one of three states —
+`listening` (the display is up and a `ctl` command can reach it), `no wall listening` (nothing is running; start
+the display), or `off (ARCONS_CONTROL=0)` (this wall has no socket on purpose). It is a fact, not a verdict, and
+it never changes the exit code: a wall nobody is driving is a wall that is working. `docs/control.md` is the
+client's reference.
 
 `layout` is the same kind of line about a bigger file (#153): the workspaces, the panes, their cameras and
 their names, written a second and a half after the operator stops arranging (`layout.toml`, mode 0600, and
@@ -251,3 +258,20 @@ seconds the soak waited, then `SIGKILL`ed). A soak that fails this is a wall sys
 | a picture that stops updating, header says `live` and the log's `socket fixes=` stops climbing | **the backend is not publishing**, not the wall: `fixes=0` after 30 s is a fact to take to whoever posts fixes. An independent client against the same socket and token sees the same silence (`#28`) |
 | every hull dim | the feed's own timestamps are older than `stale_after_s`; check `age_seconds` on the wire before blaming the wall |
 | the map is blank but markers are placed | the seed: `--self-check` proves it is present, `--probe-map` proves it draws |
+
+## A client on the wall, from a terminal
+
+The wall answers on a unix socket while it runs (`docs/control.md`). From a second session on the same machine,
+as the same user:
+
+```sh
+arcons-cc ctl pane focus 2          # exit 0: it changed
+arcons-cc ctl workspace new         # exit 0
+arcons-cc ctl pane close 7          # exit 1 if that is the wall's last pane: the rule's name on stderr
+arcons-cc ctl surface close         # exit 2 when the display is not running
+```
+
+`0` answered (changed, or already so), `1` refused, `2` no wall. There is no password and no port: the socket is
+`0600` in `$XDG_RUNTIME_DIR/arcons-cc/`, so **a client must be the user the wall runs as** — that is the whole
+credential, and it is why the plane is off in a container with no run directory unless `ARCONS_CONTROL` says
+otherwise.

@@ -239,6 +239,23 @@ fn main() -> ExitCode {
                 ExitCode::from(problem.code())
             }
         },
+        // **The second client** (#165): one intent over the control socket, and an exit code a script can
+        // branch on. It never opens a window and never reads the configuration — a client should not need the
+        // wall's credentials to press a button on the wall.
+        config::Command::Ctl(words) => match arcons_cc::control::ctl::run(&words) {
+            Ok(outcome) => {
+                if outcome == arcons_cc::control::ctl::Outcome::Unchanged {
+                    println!("unchanged");
+                }
+                ExitCode::from(outcome.code())
+            }
+            // A refused intent and a wall that is not there are both failures a caller acts on; the reason
+            // goes to stderr so `ctl … | grep` stays useful.
+            Err(failure) => {
+                eprintln!("arcons-cc ctl: {}", failure.reason());
+                ExitCode::from(failure.code())
+            }
+        },
         config::Command::Version | config::Command::Help => ExitCode::SUCCESS,
     }
 }

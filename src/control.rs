@@ -30,6 +30,12 @@
 use crate::map::geometry::Camera;
 use crate::ui::{self, PaneContent, RenameTarget, State, ViewId};
 
+pub mod ctl;
+pub mod server;
+pub mod wire;
+
+pub use server::{Job, Server};
+
 /// **The protocol's version**, on every message in both directions (`{"v": 1, …}`).
 ///
 /// A client that sends another number is refused by name rather than guessed at: an intent vocabulary is not
@@ -299,12 +305,13 @@ fn socket_path_in(run: Option<std::path::PathBuf>) -> std::path::PathBuf {
     }
 }
 
-/// **One sample of every variant**, so the verb table is exhaustive rather than representative.
+/// **One sample of every variant**, so a table over the vocabulary is exhaustive rather than representative.
 ///
-/// Adding a variant without adding it here leaves the vocabulary with a hole — which is the point: a verb table
-/// nobody enumerates is a table that stops describing the enum.
-#[cfg(test)]
-pub(crate) fn test_intents() -> Vec<Intent> {
+/// Public because the tables that must not drift are outside this module: `docs/control.md`'s verb list, the
+/// CLI's words and the wire codec are all checked against it, and a test-gated copy would be invisible to an
+/// integration test. Adding a variant without adding it here leaves the vocabulary with a hole — which is the
+/// point: a table nobody enumerates is a table that stops describing the enum (#170, #165).
+pub fn vocabulary() -> Vec<Intent> {
     vec![
         Intent::FocusPane(1),
         Intent::ToggleFullSize(1),
@@ -433,6 +440,75 @@ mod tests {
             Ok(Changed(true))
         );
         assert_eq!(state.pane_count(), 1);
+    }
+
+    /// **Opening a pane is one more pane**, on a wall that has one — the header's tree and newsroom controls
+    /// and a CLI's `pane.open` are the same request.
+    #[test]
+    fn opening_a_pane_adds_one_beside_the_focused_pane() {
+        let mut state = State::default();
+        let before = state.pane_count();
+        assert_eq!(
+            apply(&mut state, Intent::OpenPane(PaneContent::Newsroom)),
+            Ok(Changed(true))
+        );
+        assert_eq!(state.pane_count(), before + 1);
+        assert!(
+            state
+                .pane(state.focused())
+                .is_some_and(|pane| matches!(pane.content, PaneContent::Newsroom)),
+            "the pane the operator asked for is the one that opens and takes the keys"
+        );
+    }
+
+    /// **An empty workspace has nothing to split** (#141's state), so opening a pane fills it rather than
+    /// silently doing nothing — which is what the header's controls used to do there, and what a CLI found.
+    #[test]
+    fn opening_a_pane_in_an_empty_workspace_fills_it() {
+        let mut state = State::default();
+        let only = state.focused();
+        // Take the wall's only pane out of its workspace: the state #141 allows and #153 restores.
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::MovePane {
+                    pane: only,
+                    workspace: 1
+                }
+            ),
+            Ok(Changed(true))
+        );
+        assert!(
+            state.workspaces[0].layout.is_none(),
+            "the source workspace is empty (#141), and stays on the wall"
+        );
+        assert_eq!(state.active, 1, "the move switched to where the pane went");
+        // Back to the empty one, then open a pane there.
+        assert_eq!(
+            apply(&mut state, Intent::FocusWorkspace(0)),
+            Ok(Changed(true))
+        );
+        assert!(state.layout().is_none());
+        assert_eq!(
+            apply(&mut state, Intent::OpenPane(PaneContent::Newsroom)),
+            Ok(Changed(true)),
+            "opening a pane in an empty workspace is a change, not a no-op"
+        );
+        assert_eq!(
+            state.pane_count(),
+            1,
+            "the active workspace has its first pane"
+        );
+        assert_eq!(
+            state
+                .workspaces
+                .iter()
+                .map(|w| w.panes.len())
+                .sum::<usize>(),
+            2,
+            "and the moved pane is still on the wall in the other workspace"
+        );
+        assert!(state.layout().is_some());
     }
 
     /// A pane that is not on the wall is refused with its own reason, never a panic and never a default.
@@ -602,7 +678,7 @@ mod tests {
     /// Every verb is unique: two intents with one name is a document that cannot describe the wall.
     #[test]
     fn every_intent_has_its_own_verb() {
-        let verbs: Vec<&'static str> = super::test_intents().iter().map(Intent::verb).collect();
+        let verbs: Vec<&'static str> = super::vocabulary().iter().map(Intent::verb).collect();
         let mut seen = std::collections::BTreeSet::new();
         for verb in &verbs {
             assert!(

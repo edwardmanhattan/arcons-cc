@@ -378,6 +378,67 @@ fn the_interaction_table_names_every_state() {
     );
 }
 
+/// **`docs/control.md` is the vocabulary** (#165): every verb in `Intent::verb()` is documented, and the
+/// document names no verb the code does not answer to.
+///
+/// Both directions, because they fail differently: a verb in the code and not in the reference is a control a
+/// client's author cannot find, and a verb in the reference and not in the code is a script that gets
+/// `unknown verb` — the two failures a protocol document exists to prevent.
+#[test]
+fn the_control_document_names_exactly_the_vocabulary() {
+    use arcons_cc::control::Intent;
+
+    let doc = read("docs/control.md");
+    // The documented verbs are the backticked `noun.verb` names in the intents table.
+    let mut documented: Vec<String> = Vec::new();
+    for (index, line) in doc.lines().enumerate() {
+        // Only the table: prose may name a verb in passing, and a mention is not a promise.
+        if !line.starts_with("| `") {
+            continue;
+        }
+        let Some(verb) = line
+            .split('`')
+            .nth(1)
+            .filter(|verb| verb.contains('.') && !verb.contains(' '))
+        else {
+            continue;
+        };
+        let _ = index;
+        documented.push(verb.to_string());
+    }
+
+    let code: Vec<&'static str> = arcons_cc::control::vocabulary()
+        .iter()
+        .map(Intent::verb)
+        .collect();
+    for verb in &code {
+        assert!(
+            documented.iter().any(|named| named == verb),
+            "docs/control.md does not document `{verb}`, which the code answers to (#165): a control a \
+             client's author cannot find is one they will not use"
+        );
+    }
+    for verb in &documented {
+        assert!(
+            code.contains(&verb.as_str()),
+            "docs/control.md documents `{verb}`, which no intent answers: a script written from the \
+             reference gets `unknown verb` (#165)"
+        );
+    }
+    assert_eq!(
+        documented.len(),
+        code.len(),
+        "the document and the vocabulary must list the same number of verbs, in both directions: \
+         documented {documented:?}, code {code:?}"
+    );
+
+    // And the sentence the whole design rests on, said where a client's author reads first.
+    assert!(
+        doc.contains("A client sends intents; the wall renders"),
+        "docs/control.md must say what a client is (ADR-0005's decision 1)"
+    );
+}
+
 /// **ADR-0005's wire is `src/control.rs`'s wire** (#171).
 ///
 /// A control plane is a promise to a client that does not read our source: the socket's name, its mode and the
