@@ -1,0 +1,4 @@
+[
+  {"at": 0.3, "intent": {"verb": "workspace.from_pane", "pane": 1}},
+  {"at": 0.5, "intent": {"verb": "workspace.focus", "index": 3}}
+]

@@ -1294,6 +1294,110 @@ fn workspaces_close(state: &mut State) {
     state.close_pane(newsroom);
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// Intent scripts (#172): a scene that drives the wall **only** through the control plane.
+// ---------------------------------------------------------------------------------------------------------
+
+/// Where a scene's intent script lives: `fixtures/intents/<scene>.json`.
+///
+/// The file is a list of `{"at": <seconds>, "intent": {…}}`, the intent written exactly as a client sends it
+/// (`docs/control.md`), and it is read by the **scene that carries it** — so a capture of the API path is a
+/// capture of this wall, not of a script the harness ran.
+pub fn intents_path(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/intents")
+        .join(format!("{name}.json"))
+}
+
+/// Read a scene's intent script, in order, with the frame each step is due on.
+///
+/// A script that does not parse renders the wall its scene built and says so: a capture whose file is broken
+/// then differs from its golden, which is the failure a human sees, and the message names the line.
+pub fn load_intents(name: &str) -> Vec<(f64, crate::control::Intent)> {
+    let path = intents_path(name);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        eprintln!("arcons-cc: no intent script at {}", path.display());
+        return Vec::new();
+    };
+    let steps: Vec<serde_json::Value> = match serde_json::from_str(&text) {
+        Ok(steps) => steps,
+        Err(error) => {
+            eprintln!(
+                "arcons-cc: {} is not a list of steps: {error}",
+                path.display()
+            );
+            return Vec::new();
+        }
+    };
+    let mut out = Vec::new();
+    for (index, step) in steps.iter().enumerate() {
+        let at = step.get("at").and_then(serde_json::Value::as_f64);
+        let intent = step
+            .get("intent")
+            .map(crate::control::wire::from_wire)
+            .transpose();
+        match (at, intent) {
+            (Some(at), Ok(Some(intent))) => out.push((at, intent)),
+            // A step that cannot be read is named with its index, because a script is a list and "the file is
+            // wrong" does not say where.
+            (at, intent) => eprintln!(
+                "arcons-cc: {} step {index} is not {{\"at\": seconds, \"intent\": {{…}}}}: at={at:?}, \
+                 intent={:?}",
+                path.display(),
+                intent.err()
+            ),
+        }
+    }
+    out.sort_by(|left, right| left.0.total_cmp(&right.0));
+    out
+}
+
+/// **Apply the script's due steps**, in order, and say whether anything changed (#172).
+///
+/// Called from `poll` with the frame clock: a virtual clock in a capture, the real one on a wall. The steps go
+/// through `control::apply` — the same door the pointer and a socket use — so a scene driven this way is a
+/// client, not a second implementation of one.
+pub fn apply_due_intents(state: &mut State, now: f64) -> bool {
+    let mut changed = false;
+    while let Some((at, _)) = state.pending_intents.get(state.intents_applied) {
+        if *at > now {
+            break;
+        }
+        let Some((_, intent)) = state.pending_intents.get(state.intents_applied) else {
+            break;
+        };
+        let intent = intent.clone();
+        state.intents_applied += 1;
+        match crate::control::apply(state, intent) {
+            Ok(applied) => changed |= applied.0,
+            // A refused step is printed and the script goes on: a capture whose wall did not reach the state the
+            // script meant differs from its golden, and the log says which step refused and why.
+            Err(why) => eprintln!(
+                "arcons-cc: intent step {} refused: {}",
+                state.intents_applied, why.0
+            ),
+        }
+    }
+    changed
+}
+
+/// The `workspaces-new-remote` scene: **the pointer's twin, driven only by intents** (#172).
+///
+/// The same wall as `workspaces-new` — `Focus on new workspace` from the map pane — reached the way a client
+/// would reach it: the map pane is `load`'s and nothing else is, and the fourth workspace with its new pane comes
+/// from `fixtures/intents/workspaces-new-remote.json`, applied between frames.
+///
+/// **It is this pair and not `workspaces-close`'s** because a twin has to end somewhere a script could fail to
+/// reach: closing the pane a script just moved leaves the wall the scene started from, so a script that did
+/// nothing at all would match. Here the wall has three workspaces before the script and four after it.
+///
+/// Its golden is `workspaces-new`'s, byte for byte (`fixtures/golden/workspaces-new-remote.png` is the same file,
+/// and a test says so): if the two paths drew different walls, this capture is where that shows.
+fn workspaces_new_remote(state: &mut State) {
+    load(state);
+    state.pending_intents = load_intents("workspaces-new-remote");
+}
+
 /// The scene registry, handed to `AppSpec::scenes`.
 pub const SCENES: &[Scene] = &[
     ("empty", empty),
@@ -1357,6 +1461,9 @@ pub const SCENES: &[Scene] = &[
     // Closing a workspace's last pane (#141): the wall lands on the nearest previous workspace, and focus
     // goes to the pane the operator was last in there.
     ("workspaces-close", workspaces_close),
+    // The same wall, reached only through the control plane (#172): the API path draws the pointer path's
+    // picture, and the golden is the same one.
+    ("workspaces-new-remote", workspaces_new_remote),
     // A workspace that is not on screen can be named (#154): the sheet is the title's, offered on a chip.
     ("workspaces-rename-hidden", workspaces_rename_hidden),
 ];
@@ -1379,6 +1486,10 @@ pub fn state_for(name: &str) -> State {
             names().join(", ")
         ),
     }
+    // **A scene with an intent script is the state its whole script reaches** (#172): a capture at `--at 2` is
+    // after every step, so a test that asks a scene for its state asks for the end of the script — otherwise the
+    // assertions would be about a wall the capture never shows.
+    apply_due_intents(&mut state, f64::INFINITY);
     state
 }
 
@@ -1389,6 +1500,57 @@ pub fn names() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A scene driven only by intents ends where its pointer twin ends** (#172): same workspaces, same panes in
+    /// them, same focus, same name — and the same picture, which is what `fixtures/golden` compares.
+    ///
+    /// This is the state half of the claim. The pixel half is the capture, whose golden *is* the pointer's.
+    #[test]
+    fn the_intent_driven_twin_ends_where_the_pointer_twin_ends() {
+        let pointer = state_for("workspaces-new");
+        let remote = state_for("workspaces-new-remote");
+        assert_eq!(
+            remote.workspaces.len(),
+            pointer.workspaces.len(),
+            "the two paths left different numbers of workspaces on the wall"
+        );
+        assert_eq!(
+            remote.active, pointer.active,
+            "different workspace on screen"
+        );
+        assert_eq!(
+            remote.focused(),
+            pointer.focused(),
+            "different pane has the keys"
+        );
+        for (index, (remote, pointer)) in remote
+            .workspaces
+            .iter()
+            .zip(pointer.workspaces.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                remote.panes.iter().map(|pane| pane.id).collect::<Vec<_>>(),
+                pointer.panes.iter().map(|pane| pane.id).collect::<Vec<_>>(),
+                "workspace {index} holds different panes on the two paths"
+            );
+            assert_eq!(
+                remote.name, pointer.name,
+                "workspace {index} is named differently"
+            );
+            assert_eq!(
+                remote.layout.is_some(),
+                pointer.layout.is_some(),
+                "workspace {index} is empty on one path and not the other"
+            );
+        }
+        assert!(
+            remote.pending_intents.len() == remote.intents_applied,
+            "the script did not run to its end: {} of {} steps",
+            remote.intents_applied,
+            remote.pending_intents.len()
+        );
+    }
 
     #[test]
     fn the_fixture_is_the_wire_shape_and_says_what_the_scenes_need() {
@@ -1646,6 +1808,7 @@ mod tests {
                 "workspaces-moved",
                 "workspaces-new",
                 "workspaces-close",
+                "workspaces-new-remote",
                 "workspaces-rename-hidden"
             ]
         );

@@ -21,6 +21,19 @@ and the assertion's two halves both fail.
 
 Coordinates are window points at `--scale 1`, and `verify` projects against the layout the gesture must produce.
 
+## `intents/` — a capture driven by the API
+
+An array of `{"at": <seconds>, "intent": {…}}`, the intent written exactly as a client sends it
+(`docs/control.md`). A scene that carries one **builds only the wall before the actions** and lets `poll` apply the
+steps on the frame clock through `control::apply` — the same door the pointer and the socket use (#172).
+
+| file | what it does |
+| --- | --- |
+| `workspaces-new-remote.json` | `workspace.from_pane` from the map pane, then `workspace.focus` on the workspace it made. The scene's twin (`workspaces-new`) reaches the same wall by calling `new_workspace_from_pane` in code, and the two captures are **byte-identical**: `fixtures/golden/workspaces-new-remote.png` *is* `workspaces-new.png`, and a test says so |
+
+Curated, not recorded: an intent script is input (like `scripts/`), not wire data. What it must never become is a
+second description of the wall — the twin's golden is what decides whether it is right.
+
 ## `rest/` — recorded 2026-11-06
 
 From the dev Minos at the commit pinned in `docs/spec/`, with the wall's read-only account. The

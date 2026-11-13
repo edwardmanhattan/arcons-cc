@@ -140,6 +140,7 @@ cargo run -- --scenes            # empty · picture · stale · card-open · pho
                                  # workspaces · workspaces-empty · workspaces-switch
                                  # workspaces-named · workspaces-menu · workspaces-moved
                                  # workspaces-new · workspaces-close
+                                 # workspaces-new-remote
                                  # workspaces-rename-hidden
 scripts/verify.sh                # renders and asserts each one
 ```
@@ -334,6 +335,19 @@ first leaf, one fewer pane in total, and — in pixels — the focus edge on the
 and none on the left's. The two panes share their top and bottom edges with the picture panel, so the
 honest pixel is a vertical one; a ring drawn on the wrong pane, or a wall that forgot `Layout::focused()`
 and landed on the first leaf, is red.
+
+`workspaces-new-remote` is **the same wall as `workspaces-new`, reached only through the control plane** (#172):
+the scene builds `load`'s one map pane and nothing else, and `fixtures/intents/workspaces-new-remote.json` does the
+rest on the frame clock — `workspace.from_pane` from the map pane, then `workspace.focus` on the workspace it made —
+through `control::apply`, the door the pointer and the socket use. Its golden **is** `workspaces-new.png`, byte for
+byte (a test compares the two files), so a capture of the API path that draws a different wall is red here rather
+than two goldens quietly drifting apart. It is this pair and not `workspaces-close`'s because a twin has to end
+somewhere a script could fail to reach: closing the pane a script just moved leaves the wall it started from, so a
+script that did nothing at all would match.
+
+It also found a real gap on its way in: a pane that arrives **after** `setup` — a new workspace, a move, a close
+that leaves one — was never given the synthetic frame a capture's single pane gets, so the wall drew no markers.
+The rule is now one function, run in `setup` and again in `poll`.
 
 `workspaces-rename-hidden` is **naming a workspace that is not on screen** (#154), and it is driven by
 the gesture: `fixtures/scripts/workspaces-rename-hidden.json` **right-clicks chip 2**, selects the field
