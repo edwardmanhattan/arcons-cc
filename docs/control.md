@@ -58,6 +58,9 @@ field marked **required** is a refusal when it is missing.
 | `workspace.focus` | `index` | makes that workspace the wall on screen (#138). `no such workspace` |
 | `workspace.new` | — | appends an empty workspace and switches to it (#138) |
 | `map.camera` | `pane`, `camera` | puts that pane's camera at `{lat, lon, zoom}` — a **value**, so a pan is one request when the hand stops, not sixty. `no such pane` |
+| `menu.focus` | `row` | puts the **keyboard's ring** on a row of the open menu — or of the waterfall, when one is open. `row: null` takes it off; a row past the end is clamped. `no menu is open` |
+| `menu.submenu` | `open` | `true` opens the ringed row's second surface and puts the ring on its first row; `false` closes it and keeps the menu. `no menu is open`, `no row has the ring`, `the row opens nothing` |
+| `menu.choose` | — | acts on the **ringed** row: a row that opens a surface opens it, a leaf runs its action (`pane.split`, `pane.close`, …). Never the row under a pointer. `no menu is open`, `no row has the ring` |
 | `cursor.move` | `at` | puts the **client's cursor** at `[x, y]` in the picture panel's points, and starts its fade (#167) |
 | `cursor.press` | — | presses where the cursor is: the hull under it (its card, and that pane's keys), or the pane it is over (the keys and a cleared card). A press outside every pane, or before `cursor.move`, is refused |
 | `cursor.release` | — | releases; the cursor fades from here |
@@ -106,6 +109,27 @@ the picture, which is the one thing this protocol decided not to send.
 ```sh
 arcons-cc ctl wall | jq '.workspaces[] | {name, panes: [.panes[].kind]}'
 ```
+
+## A menu, without a pointer
+
+A menu is a place: which row means something is decided by the wall's own layout, so a client that has no pointer
+sends **the row it means** and lets the wall act on it (#164). Three verbs, and they are the three things a menu
+has — a ring, a second surface, and a choice:
+
+```sh
+arcons-cc ctl menu focus 2          # the ring on the third row
+arcons-cc ctl menu submenu open     # the ringed row's waterfall, ring on its first row
+arcons-cc ctl menu choose           # what Enter does: act on the row the ring is on
+arcons-cc ctl surface close         # what Escape does: the waterfall, then the menu
+```
+
+On a keyboard the same model is `Up`/`Down` (wrapping at both ends), `Right`/`Left` for a waterfall, `Enter` to act,
+and `Escape` to close one surface at a time. A ring is drawn in `focus_edge` — the wall's colour for "this one has
+the keys" — and it is always the row `menu.choose` would act on: the ring, the drawing and the assistive
+description are one value.
+
+**A menu opened by a press has no ring**, because the pointer is where the operator's attention is; a ring nobody
+put there would be a second answer to "which row". The first `Down` (or `menu.focus`) puts one there.
 
 ## The client's cursor
 

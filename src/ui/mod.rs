@@ -406,6 +406,8 @@ pub struct Menu {
     pub at: (f32, f32),
     /// The open submenu's key, when one is open (#140).
     pub open: Option<&'static str>,
+    /// The row the keyboard is on, in the surface that is open (#164).
+    pub ring: Option<usize>,
 }
 
 /// What the view loop holds. #3 fills the picture, #4 moves it, #6 draws it, #7 selects from it.
@@ -847,7 +849,17 @@ impl State {
     /// The pane a menu is open on, and where — `None` when no menu is open.
     pub fn menu(&self) -> Option<Menu> {
         match self.interaction {
-            Interaction::Menu { pane, at, open } => Some(Menu { pane, at, open }),
+            Interaction::Menu {
+                pane,
+                at,
+                open,
+                ring,
+            } => Some(Menu {
+                pane,
+                at,
+                open,
+                ring,
+            }),
             _ => None,
         }
     }
@@ -919,6 +931,9 @@ impl State {
                 pane,
                 at,
                 open: None,
+                // A menu opened by a press has no ring: the pointer is where the operator's attention is, and a
+                // ring nobody put there would be a second answer to "which row" (#164).
+                ring: None,
             },
             Begin::Filter { pane } => Interaction::Filtering { pane },
             Begin::Rename(rename) => Interaction::Renaming(rename),
@@ -1756,6 +1771,9 @@ pub enum Interaction {
         /// **Which row's second surface is open** (#140), by its key: the waterfall. `None` is the first
         /// surface only.
         open: Option<&'static str>,
+        /// **The row the keyboard is on** (#164): an index into the rows of the surface that is open — the menu,
+        /// or the waterfall when one is. `None` is no ring, which is where a pointer-opened menu starts.
+        ring: Option<usize>,
     },
     /// A pane's filter panel is open (#111). **The pointer is the panel's**, but it is not modal: the
     /// picture stays visible behind it, and a press outside dismisses it.
@@ -2325,12 +2343,14 @@ pub(crate) fn close_surfaces(state: &mut State) -> bool {
             pane,
             at,
             open: Some(_),
+            ..
         } = state.interaction
         {
             state.interaction = Interaction::Menu {
                 pane,
                 at,
                 open: None,
+                ring: None,
             };
             state.layout_dirty = true;
             return true;
@@ -3593,8 +3613,17 @@ fn menu_view(state: &State, scale: f32, body: El) -> El {
         .size(w, h)
         .radius(tokens::PANEL_RADIUS)
         .border(tokens::HAIRLINE, tokens::card_edge())
-        .fill(tokens::bg());
-    for item in &items {
+        .fill(tokens::bg())
+        // **The menu is a menu to an assistive client** (#164, #111's rule that chrome says what it is): rows are
+        // menuitems, and the one the keyboard is on is the active descendant — which is the same row the ring is
+        // drawn on, because they are the same value.
+        .role("menu")
+        .label("Pane menu");
+    let ringed = menu.ring;
+    if let Some(row) = ringed.and_then(|row| items.get(row)) {
+        surface = surface.active_descendant(row.key.clone());
+    }
+    for (index, item) in items.iter().enumerate() {
         // Each row is its own target, so a press says **which** item it hit. The key is the row's, not the
         // surface's, which is what lets a capture assert that a second row is drawn at all.
         let key = item.key.clone();
@@ -3605,12 +3634,21 @@ fn menu_view(state: &State, scale: f32, body: El) -> El {
             .items_center()
             // A label touching the menu's own border reads as clipped, whatever the box says.
             .px(tokens::GAP)
+            .role("menuitem")
+            .label(item.label.clone())
             .child(
                 text(item.label.clone())
                     .font(tokens::LABEL)
                     .color(tokens::ink())
                     .grow(1.0),
             );
+        // **The ring** (#164): the same `focus_edge` the wall uses for "this one has the keys", drawn as a border so
+        // it survives a row's fill. It is not a hover: a menu's hover opens a waterfall, and a key's ring acts.
+        if menu.open.is_none() && ringed == Some(index) {
+            row = row
+                .border(tokens::HAIRLINE * 2.0, tokens::focus_edge())
+                .radius(tokens::PANEL_RADIUS / 2.0);
+        }
         if item.opens() {
             // **A waterfall opens on hover** (#140), as `rune-kit::Menu` does: a press that had to be
             // found would make the second surface the third click of a two-click action. A press on the
@@ -3653,24 +3691,41 @@ fn menu_view(state: &State, scale: f32, body: El) -> El {
             .size(sw, sh)
             .radius(tokens::PANEL_RADIUS)
             .border(tokens::HAIRLINE, tokens::card_edge())
-            .fill(tokens::bg());
-        for child in &children {
+            .fill(tokens::bg())
+            .role("menu")
+            .label(
+                children
+                    .first()
+                    .map(|_| "Move to workspace")
+                    .unwrap_or("Menu"),
+            );
+        let sub_ring = if menu.open.is_some() { menu.ring } else { None };
+        if let Some(row) = sub_ring.and_then(|row| children.get(row)) {
+            sub = sub.active_descendant(row.key.clone());
+        }
+        for (index, child) in children.iter().enumerate() {
             let run = child.clone();
             let pane = menu.pane;
-            sub = sub.child(
-                row()
-                    .key(child.key.clone())
-                    .h(tokens::MENU_ROW)
-                    .w_full()
-                    .items_center()
-                    .px(tokens::GAP)
-                    .child(
-                        text(child.label.clone())
-                            .font(tokens::LABEL)
-                            .color(tokens::ink()),
-                    )
-                    .on_press(move |state: &mut State| run.run(state, pane)),
-            );
+            let mut row = row()
+                .key(child.key.clone())
+                .h(tokens::MENU_ROW)
+                .w_full()
+                .items_center()
+                .px(tokens::GAP)
+                .role("menuitem")
+                .label(child.label.clone())
+                .child(
+                    text(child.label.clone())
+                        .font(tokens::LABEL)
+                        .color(tokens::ink()),
+                )
+                .on_press(move |state: &mut State| run.run(state, pane));
+            if sub_ring == Some(index) {
+                row = row
+                    .border(tokens::HAIRLINE * 2.0, tokens::focus_edge())
+                    .radius(tokens::PANEL_RADIUS / 2.0);
+            }
+            sub = sub.child(row);
         }
         body = body.child(sub);
     }
@@ -3772,6 +3827,20 @@ fn resize_map(state: &mut State, pane: ViewId, points: (f32, f32), scale: f32) {
     }
     #[cfg(not(feature = "map"))]
     let _ = (state, pane, points, scale);
+}
+
+/// **The row a `Down` or `Up` moves the ring to**, wrapping at both ends (#164).
+///
+/// A menu with no ring yet starts at the first row for `Down` and the last for `Up` — the two directions mean where
+/// to begin as well as where to go, which is what a native menu does.
+fn next_row(state: &State, step: isize) -> usize {
+    let rows = menu_rows(state).len().max(1);
+    let current = state.menu().and_then(|menu| menu.ring);
+    match current {
+        None if step >= 0 => 0,
+        None => rows - 1,
+        Some(row) => ((row as isize + step).rem_euclid(rows as isize)) as usize,
+    }
 }
 
 /// Enter in the rename sheet: the name is the field's text, trimmed, and **what it renames is the
@@ -4145,9 +4214,125 @@ pub fn open_submenu(state: &mut State, key: &'static str) {
             pane,
             at,
             open: Some(key),
+            // **A second surface takes the ring with it** (#164): the rows on screen changed, so an index into the
+            // old ones is a ring on the wrong row. `menu_ring` puts it on the first row of the new surface.
+            ring: None,
         };
         state.layout_dirty = true;
     }
+}
+
+/// Close the waterfall and keep the menu (#164): `Left`, and the ring goes back to the row that opened it.
+pub fn close_submenu(state: &mut State) {
+    if let Interaction::Menu { pane, at, ring, .. } = state.interaction {
+        state.interaction = Interaction::Menu {
+            pane,
+            at,
+            open: None,
+            ring,
+        };
+        state.layout_dirty = true;
+    }
+}
+
+/// **The rows the keyboard's ring can be on** (#164): the menu's, or the open waterfall's.
+pub fn menu_rows(state: &State) -> Vec<MenuItem> {
+    let Some(menu) = state.menu() else {
+        return Vec::new();
+    };
+    let items = menu_items(state, menu.pane);
+    match menu.open {
+        Some(key) => items
+            .into_iter()
+            .find(|item| item.key == key)
+            .map(|item| item.children)
+            .unwrap_or_default(),
+        None => items,
+    }
+}
+
+/// **Put the ring on a row of the surface that is open** (#164). `None` takes it off.
+///
+/// The row is clamped rather than refused: a ring that moved past the end of a list that just got shorter is a
+/// ring nobody meant, and the menu is the wall's, so it answers with the nearest row that exists.
+pub fn menu_ring(state: &mut State, row: Option<usize>) -> bool {
+    let rows = menu_rows(state).len();
+    let Interaction::Menu {
+        pane,
+        at,
+        open,
+        ring,
+        ..
+    } = state.interaction
+    else {
+        return false;
+    };
+    let next = match row {
+        None => None,
+        Some(_) if rows == 0 => None,
+        Some(row) => Some(row.min(rows - 1)),
+    };
+    if next == ring {
+        return false;
+    }
+    state.interaction = Interaction::Menu {
+        pane,
+        at,
+        open,
+        ring: next,
+    };
+    state.layout_dirty = true;
+    true
+}
+
+/// **Move the ring by `step` rows, wrapping** (#164): `Up` and `Down` are one function, so the two ends behave the
+/// same — a ring that stopped at the last row would be a menu the keyboard cannot get out of.
+pub fn menu_ring_step(state: &mut State, step: isize) -> bool {
+    let rows = menu_rows(state).len();
+    if rows == 0 {
+        return false;
+    }
+    let current = state.menu().and_then(|menu| menu.ring);
+    let next = match current {
+        None if step >= 0 => 0,
+        None => rows - 1,
+        Some(row) => {
+            let moved = row as isize + step;
+            moved.rem_euclid(rows as isize) as usize
+        }
+    };
+    menu_ring(state, Some(next))
+}
+
+/// **Act on the ringed row** (#164): the row the keyboard is on, and never the row the pointer is over.
+///
+/// A row that opens a second surface opens it and puts the ring on its first row; a leaf runs its action, which is
+/// `MenuAction::run` — the same function a press calls, so a key and a press cannot mean two things.
+pub fn menu_choose(state: &mut State) -> bool {
+    let Some(menu) = state.menu() else {
+        return false;
+    };
+    let Some(ring) = menu.ring else {
+        return false;
+    };
+    let rows = menu_rows(state);
+    let Some(row) = rows.get(ring) else {
+        return false;
+    };
+    if row.opens() {
+        let key = match row.action {
+            MenuAction::Submenu(key) => key,
+            _ => return false,
+        };
+        open_submenu(state, key);
+        let opened = menu_rows(state).len();
+        if opened > 0 {
+            menu_ring(state, Some(0));
+        }
+        return true;
+    }
+    row.run(state, menu.pane);
+    true
 }
 
 pub(crate) fn close_from_menu(state: &mut State, id: ViewId) -> bool {
@@ -4930,6 +5115,28 @@ fn tick_card_age(state: &mut State) -> bool {
 ///    Both are the pane's state, so they go last and only in the pane that has one; a pane is a feed or a
 ///    map, so the two are never both open.
 fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool {
+    // **The menu's keyboard model** (#164): arrows walk the ring, Enter acts on it, Right and Left open and close
+    // the waterfall. Every one of them is an intent, so a remote with no keyboard sends the same words.
+    if state.menu().is_some() {
+        let intent = match event.key {
+            rune::Key::Down => Some(Intent::MenuFocus {
+                row: Some(next_row(state, 1)),
+            }),
+            rune::Key::Up => Some(Intent::MenuFocus {
+                row: Some(next_row(state, -1)),
+            }),
+            rune::Key::Right => Some(Intent::MenuSubmenu { open: true }),
+            rune::Key::Left => Some(Intent::MenuSubmenu { open: false }),
+            rune::Key::Enter => Some(Intent::MenuChoose),
+            _ => None,
+        };
+        if let Some(intent) = intent {
+            // A refusal is the model's own answer (a row that opens nothing, no ring to act on): the key is
+            // consumed either way, because a menu that let Enter through to the wall would be two gestures.
+            control::apply(state, intent).ok();
+            return true;
+        }
+    }
     if event.key != rune::Key::Escape {
         return false;
     }
@@ -7188,6 +7395,147 @@ mod tests {
 
     /// The menu opens **at the click and stays inside its pane** (#77): a right-click 20 pt from the
     /// wall's edge would otherwise draw half a menu over the bezel, on the one wall that needs it.
+    /// **The ring wraps at both ends** (#164): `Down` past the last row is the first, and `Up` from nothing is the
+    /// last — a menu the keyboard cannot leave by walking is a menu with a trap in it.
+    #[test]
+    fn the_menu_ring_wraps_at_both_ends() {
+        let mut state = crate::scene::state_for("pane-menu");
+        let pane = state.focused();
+        state.begin(Begin::Menu {
+            pane,
+            at: (20.0, 30.0),
+        });
+        let rows = menu_rows(&state).len();
+        assert!(rows >= 4, "the menu has rows to walk");
+        let mut seen = Vec::new();
+        for _ in 0..rows {
+            assert!(menu_ring_step(&mut state, 1));
+            seen.push(state.menu().and_then(|menu| menu.ring));
+        }
+        assert_eq!(
+            seen.first().copied().flatten(),
+            Some(0),
+            "the first Down from no ring lands on the first row"
+        );
+        assert_eq!(
+            seen.last().copied().flatten(),
+            Some(rows - 1),
+            "and walking the rows visits the last one without leaving the menu"
+        );
+        // One more Down is the first row again.
+        assert!(menu_ring_step(&mut state, 1));
+        assert_eq!(
+            state.menu().and_then(|menu| menu.ring),
+            Some(0),
+            "the ring wraps"
+        );
+
+        // Up from the first row is the last, and Up from no ring is the last too.
+        menu_ring(&mut state, Some(0));
+        assert!(menu_ring_step(&mut state, -1));
+        assert_eq!(state.menu().and_then(|menu| menu.ring), Some(rows - 1));
+        menu_ring(&mut state, None);
+        assert!(menu_ring_step(&mut state, -1));
+        assert_eq!(
+            state.menu().and_then(|menu| menu.ring),
+            Some(rows - 1),
+            "Up from nothing begins at the end"
+        );
+    }
+
+    /// **Enter acts on the ringed row, and never on the row the pointer is over** (#164): the keyboard's answer to
+    /// "which row" is the ring, and the ring is a value in the machine rather than the drawing's hover.
+    #[test]
+    fn enter_acts_on_the_ringed_row() {
+        // `Name this pane…` is the third row of a pane menu; the ring decides, not a hover.
+        let mut state = crate::scene::state_for("pane-menu");
+        let pane = state.focused();
+        state.begin(Begin::Menu {
+            pane,
+            at: (20.0, 30.0),
+        });
+        let rows = menu_rows(&state);
+        let rename = rows
+            .iter()
+            .position(|row| row.label == MENU_RENAME)
+            .expect("the menu offers a rename");
+        assert!(menu_ring(&mut state, Some(rename)));
+        assert!(menu_choose(&mut state));
+        assert!(
+            matches!(
+                state.rename().map(|rename| rename.target),
+                Some(RenameTarget::Pane(_))
+            ),
+            "Enter on `Name this pane` opens that sheet"
+        );
+        assert!(
+            matches!(state.interaction, Interaction::Renaming(_)),
+            "and the menu it was in is gone: a row's action closes it"
+        );
+    }
+
+    /// **Right opens the waterfall and puts the ring on its first row; Left closes it and the ring stays on the row
+    /// that opened it** (#164). One `open` value, one `ring` value, and the two surfaces never both claim it.
+    #[test]
+    fn right_opens_the_waterfall_and_left_closes_it() {
+        let mut state = crate::scene::state_for("panes-menu");
+        let pane = state.focused();
+        state.begin(Begin::Menu {
+            pane,
+            at: (20.0, 30.0),
+        });
+        let items = menu_rows(&state);
+        let move_row = items
+            .iter()
+            .position(|row| row.label == MENU_MOVE)
+            .expect("the waterfall's trigger");
+        assert!(menu_ring(&mut state, Some(move_row)));
+        assert!(menu_choose(&mut state), "Enter on the trigger opens it");
+        let menu = state.menu().expect("still open");
+        assert!(menu.open.is_some(), "the second surface is the waterfall's");
+        assert_eq!(menu.ring, Some(0), "and the ring is on its first row");
+        assert_eq!(
+            menu_rows(&state).len(),
+            items[move_row].children.len(),
+            "the rows the ring walks are the waterfall's"
+        );
+        assert!(close_submenu_through(&mut state));
+        let menu = state.menu().expect("the menu stays");
+        assert!(menu.open.is_none(), "Left closes one surface, not both");
+    }
+
+    /// The same thing the key handler does for `Left`, so the test drives the model and not a key event.
+    fn close_submenu_through(state: &mut State) -> bool {
+        crate::control::apply(state, crate::control::Intent::MenuSubmenu { open: false }).is_ok()
+    }
+
+    /// **The ring is the active descendant** (#164): the row the keyboard is on is the row an assistive client is
+    /// told about, and it is the row the ring is drawn on — one value, two readers.
+    #[test]
+    fn the_ringed_row_is_the_menus_active_descendant() {
+        let mut state = crate::scene::state_for("pane-menu");
+        let pane = state.focused();
+        state.begin(Begin::Menu {
+            pane,
+            at: (20.0, 30.0),
+        });
+        assert!(menu_ring(&mut state, Some(2)));
+        let menu = state.menu().expect("open");
+        let rows = menu_rows(&state);
+        let ringed = rows.get(2).expect("a third row").key.clone();
+        let rt = frame_once(state);
+        // The tree carries the menu, its rows, and the ringed row by the key the active descendant names.
+        assert!(
+            rt.find("pane-menu").is_some(),
+            "the menu is in the element tree"
+        );
+        assert!(
+            rt.find(&ringed).is_some(),
+            "the ringed row ({ringed}) is in the tree by its key, which is what the active descendant names"
+        );
+        assert_eq!(menu.ring, Some(2), "and the state agrees about which row");
+    }
+
     /// **A fresh cursor is in the tree** (#167): the state has one, and the view puts an element at its point.
     /// The pixel half is the capture; this is the half a rasteriser cannot answer for.
     #[test]

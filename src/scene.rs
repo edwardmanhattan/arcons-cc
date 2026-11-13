@@ -1465,6 +1465,23 @@ pub fn apply_due_intents(state: &mut State, now: f64) -> bool {
     changed
 }
 
+/// The `menu-ring` scene: **a menu the keyboard is on** (#164).
+///
+/// `panes-menu`'s wall and menu, with the ring put on `Name this pane…` by an intent at a third of a second — so the
+/// capture is of the *keyboard's* row and not of a hover (the pointer is nowhere near the menu).
+fn menu_ring(state: &mut State) {
+    panes_menu(state);
+    state.pending_intents = vec![(
+        0.3,
+        crate::control::Intent::MenuFocus {
+            row: Some(MENU_RING_ROW),
+        },
+    )];
+}
+
+/// The row the `menu-ring` capture puts the keyboard on: `Name this pane…`, the third of five (#164).
+pub const MENU_RING_ROW: usize = 2;
+
 /// The `workspaces-new-remote` scene: **the pointer's twin, driven only by intents** (#172).
 ///
 /// The same wall as `workspaces-new` — `Focus on new workspace` from the map pane — reached the way a client
@@ -1549,6 +1566,8 @@ pub const SCENES: &[Scene] = &[
     // picture, and the golden is the same one.
     ("workspaces-new-remote", workspaces_new_remote),
     // The client's cursor (#167): a remote's press on a hull, and the same wall after its cursor faded.
+    // A menu the keyboard is on (#164): the ring, drawn on the row Enter would act on.
+    ("menu-ring", menu_ring),
     ("cursor-hull", cursor_hull),
     ("cursor-idle", cursor_idle),
     // A workspace that is not on screen can be named (#154): the sheet is the title's, offered on a chip.
@@ -1948,6 +1967,7 @@ mod tests {
                 "workspaces-new",
                 "workspaces-close",
                 "workspaces-new-remote",
+                "menu-ring",
                 "cursor-hull",
                 "cursor-idle",
                 "workspaces-rename-hidden"
