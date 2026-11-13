@@ -364,6 +364,8 @@ pub fn vocabulary() -> Vec<Intent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The socket's path is a unix fact, so are the tests that read it (#165).
+    #[cfg(unix)]
     use std::path::{Path, PathBuf};
 
     /// The run directory, when it is one, is where the socket goes: per-user, per-machine, cleared at logout.
