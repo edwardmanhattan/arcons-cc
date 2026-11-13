@@ -276,8 +276,11 @@ fn load_shape(node: &SavedNode, ids: &[ViewId]) -> Option<view::Shape> {
 /// **Build the wall the file describes.** `false` when the file names nothing a wall can be built from,
 /// which the caller reports and draws as the default wall.
 ///
-/// Every pane's map thread is spawned here for a wall (`!headless`), at the camera the file gave it — a
-/// restored wall opens on the operator's sea, not on the default one and then a jump.
+/// The panes are built **whatever their kind** and no thread is started here: `poll` gives a thread to
+/// any pane that draws a picture (`State::spawn_missing_maps`, #160) — including these, on the first
+/// frame, at the camera the file gave each one — so a restored wall opens on the operator's sea, not on
+/// the default one and then a jump. Spawning here was #153's mistake: a fourth place that has to
+/// remember is a place that forgets.
 pub fn apply_saved(state: &mut State, saved: &Saved) -> bool {
     if saved.workspace.is_empty() {
         return false;
@@ -532,6 +535,108 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), count, "every pane has its own id");
         assert_eq!(ids[0], 1, "the ids are minted from one, on this wall");
+    }
+
+    /// **A restored wall claims a thread for every map pane, and for nothing else** (#160).
+    ///
+    /// #153 rebuilt the panes from the file and the only spawn left was `setup`'s, which takes the
+    /// focused pane whatever it is: a restored wall drew `AWAITING THE PICTURE` on every map, with a
+    /// MapLibre context burning behind a newsroom that would never draw one. This is the answer `poll`
+    /// asks of the wall, and it is asked here on the rung that needs no GPU.
+    #[test]
+    fn a_restored_wall_asks_for_a_thread_for_every_map_pane_and_no_other() {
+        // Every kind on one wall: the two maps of `arranged`, a tree, and the newsroom.
+        let mut state = arranged();
+        let target = state.workspaces[0].panes[0].id;
+        let tree = state
+            .split_pane_as(
+                target,
+                Camera::new((3.0, 102.0), 5.0),
+                PaneContent::Tree { organisation: None },
+            )
+            .expect("a tree pane");
+        let newsroom = state.workspaces[1].panes[0].id;
+        let saved = state.snapshot();
+        let mut restored = State::default();
+        assert!(apply_saved(&mut restored, &saved));
+
+        let missing = restored.panes_without_maps();
+        let named: Vec<ViewId> = missing.iter().map(|(id, _, _)| *id).collect();
+        let maps: Vec<ViewId> = restored
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.panes.iter())
+            .filter(|pane| pane.content.is_map())
+            .map(|pane| pane.id)
+            .collect();
+        assert_eq!(
+            named, maps,
+            "every map pane is waiting for a picture, and only a map pane is"
+        );
+        assert!(
+            !named.contains(&tree),
+            "a tree pane draws a structure: nothing to start and nothing to project"
+        );
+        assert!(
+            !named.contains(&newsroom),
+            "a newsroom is rows, not a picture — the pane that must not own a context"
+        );
+
+        // The thread is asked for at the camera the file gave the pane, and at that pane's own slot —
+        // not at the window's size, which is what a pane in the wall's corner would render blurred.
+        let slots: std::collections::HashMap<ViewId, Rect> =
+            restored.pane_rects().into_iter().collect();
+        for (id, camera, size) in missing {
+            let pane = restored.pane(id).expect("a pane the wall named");
+            assert_eq!(camera, pane.camera, "the camera the pane is holding");
+            let rect = slots.get(&id).expect("a pane on screen");
+            assert_eq!(
+                size,
+                (rect.w.max(1.0), rect.h.max(1.0)),
+                "pane {id} asked for a frame that is not its slot"
+            );
+        }
+    }
+
+    /// The engine's half of #160: the list empties, and no pane that draws something other than a
+    /// picture is left holding a context. Ignored because it opens MapLibre:
+    ///
+    /// ```sh
+    /// cargo test --features map --lib -- --ignored --nocapture restored_wall_starts
+    /// ```
+    #[cfg(feature = "map")]
+    #[test]
+    #[ignore = "map engine: needs a GPU and, when the cache is cold, a style load"]
+    fn a_restored_wall_starts_a_thread_for_every_map_pane() {
+        let saved = arranged().snapshot();
+        let mut restored = State::default();
+        assert!(apply_saved(&mut restored, &saved));
+        assert!(
+            !restored.panes_without_maps().is_empty(),
+            "the wall came back with maps to start"
+        );
+        assert!(restored.spawn_missing_maps(), "and this starts them");
+        assert!(
+            restored.panes_without_maps().is_empty(),
+            "every map pane on the restored wall has a thread"
+        );
+        assert!(
+            restored
+                .panes()
+                .iter()
+                .filter(|pane| pane.content.is_map())
+                .all(|pane| pane.map.is_some()),
+            "every map pane draws its own picture"
+        );
+        assert!(
+            restored
+                .panes()
+                .iter()
+                .filter(|pane| !pane.content.is_map())
+                .all(|pane| pane.map.is_none()),
+            "no pane that draws something else owns a map context"
+        );
+        restored.close_maps();
     }
 
     /// **The file describes panes by index, not by id**: the same file read twice builds the same wall twice,

@@ -178,6 +178,28 @@ impl Pane {
             ..Self::new(id, camera)
         }
     }
+
+    /// **Whether this pane's picture is nobody's job yet** (#160): a map that no thread is rendering.
+    ///
+    /// **The kind is the whole question.** A restored pane, a pane moved between workspaces and a pane
+    /// opened from a menu used to be three separate spawn sites, and #153's restore site forgot its half —
+    /// which is a wall of map panes with no picture. Asking the pane means there is one answer, and the
+    /// gate can hold every path that builds a pane to it.
+    ///
+    /// A build with no map engine has no thread to give a pane, so every map pane answers `true` there:
+    /// [`State::spawn_missing_maps`] is a no-op, and this is the answer the gate's restore test reads.
+    pub fn needs_map_thread(&self) -> bool {
+        // Two answers rather than one guarded by an `if`: clippy's `needless_bool` reads the guard plus
+        // the cfged `true` as `self.content.is_map()` and asks for it, and it is right.
+        #[cfg(feature = "map")]
+        {
+            self.content.is_map() && self.map.is_none()
+        }
+        #[cfg(not(feature = "map"))]
+        {
+            self.content.is_map()
+        }
+    }
 }
 
 /// One pane's own view state (#99): the part of "what is on screen" that belongs to a window rather
@@ -1173,8 +1195,9 @@ impl State {
         self.split_pane_as(target, camera, PaneContent::Map)
     }
 
-    /// Split a pane and say **what the new one is** (#116). A tree pane gets no map thread: a pane that
-    /// is not a map has nothing to render and no frame to project against.
+    /// Split a pane and say **what the new one is** (#116). No thread is started here, whatever the
+    /// kind: `poll` starts one for every map pane that has none (#160), so this function does not have
+    /// to know which kinds need one.
     pub fn split_pane_as(
         &mut self,
         target: ViewId,
@@ -1192,32 +1215,14 @@ impl State {
         let id = self.allocate_pane();
         let dir = rect.longer_edge();
         self.layout_mut()?.split_with(target, dir, id)?;
-        #[cfg(feature = "map")]
-        let is_map = content.is_map();
         self.panes_mut().push(match content {
             PaneContent::Map => Pane::new(id, camera),
             PaneContent::Tree { organisation } => Pane::tree(id, camera, organisation),
             PaneContent::Newsroom => Pane::newsroom(id, camera),
         });
-        #[cfg(feature = "map")]
-        if !self.headless && is_map {
-            // The new pane's own thread, at its share of the panel: the same path the first pane takes,
-            // so a pane is not a special case of a pane (`#68`).
-            let viewport = self.pane_viewport();
-            let half = self
-                .pane_rect(id)
-                .map(|rect| (rect.w, rect.h))
-                .unwrap_or((viewport.w as f32, viewport.h as f32));
-            if let Some(pane) = self.pane_mut(id) {
-                pane.map = Some(crate::map::thread::MapThread::spawn(
-                    camera,
-                    (
-                        half.0.round().max(1.0) as u32,
-                        half.1.round().max(1.0) as u32,
-                    ),
-                ));
-            }
-        }
+        // **The new pane needs no thread started here** (#160): `poll` gives a thread to every map
+        // pane that has none, on the next frame, at the slot this split just gave it. A second door
+        // would be a second answer — and a kind that forgot to take it is #153's bug.
         self.arranged();
         self.layout_dirty = true;
         Some(id)
@@ -1239,6 +1244,77 @@ impl State {
         #[cfg(not(feature = "map"))]
         {
             Vec::new()
+        }
+    }
+
+    /// **Which map panes have no picture** (#160): every map pane on the wall — all workspaces, not
+    /// only the one on screen — with the camera it holds and the points it should render at.
+    ///
+    /// Pure and engine-free on purpose, so the gate can ask it on a machine with no GPU: it answers from
+    /// the model, and a wall that has lost a pane's thread fails this on the rung above the one that needs
+    /// a driver. The rects come from [`view::panes_on`], the same answer the picture draws them from.
+    pub fn panes_without_maps(&self) -> Vec<(ViewId, Camera, (f32, f32))> {
+        let viewport = self.pane_viewport();
+        let gap = self.settings.pane_gap;
+        let mut missing = Vec::new();
+        for workspace in &self.workspaces {
+            let Some(layout) = workspace.layout.as_ref() else {
+                continue;
+            };
+            for (id, rect) in view::panes_on(layout, viewport, gap) {
+                let Some(pane) = workspace.panes.iter().find(|pane| pane.id == id) else {
+                    continue;
+                };
+                if pane.needs_map_thread() {
+                    missing.push((id, pane.camera, (rect.w.max(1.0), rect.h.max(1.0))));
+                }
+            }
+        }
+        missing
+    }
+
+    /// **Every map pane is rendering, always** (#160): start the thread of any map pane that has none.
+    ///
+    /// Called from `poll` on every frame rather than from the three places that create a pane, because
+    /// that is how #153 broke: `apply_saved` built a wall out of the file and the only spawn left was
+    /// `setup`'s, which takes the focused pane whatever it is. One question, asked of the wall once a
+    /// frame, is the version that cannot be forgotten by the next path that opens a pane.
+    ///
+    /// A healthy wall pays one walk of its panes per frame and no allocation. The first frame after a
+    /// restore draws on this frame's layout pass, which is the same frame `poll` precedes, so nothing
+    /// flashes; and the size handed over is corrected by `pane_laid_out` on that pass.
+    pub fn spawn_missing_maps(&mut self) -> bool {
+        if self.headless {
+            return false;
+        }
+        let missing = self.panes_without_maps();
+        if missing.is_empty() {
+            return false;
+        }
+        #[cfg(feature = "map")]
+        {
+            let mut spawned = false;
+            for (id, camera, (w, h)) in missing {
+                let size = (w.round().max(1.0) as u32, h.round().max(1.0) as u32);
+                if let Some(pane) = self.pane_mut(id) {
+                    pane.map = Some(crate::map::thread::MapThread::spawn(camera, size));
+                    spawned = true;
+                }
+            }
+            if spawned {
+                // A thread that has just started has never been told a cadence (#71). Forgetting the
+                // last one makes the next pass of `poll` apply it, so a restored wall's maps render at
+                // the wall's rate rather than at whatever the pane that started it had.
+                self.cadenced = None;
+            }
+            spawned
+        }
+        #[cfg(not(feature = "map"))]
+        {
+            // Nothing to give a pane in a build with no engine: the list is what a wall with one would
+            // spawn, and `picture_content` says so in words instead.
+            let _ = missing;
+            false
         }
     }
 
@@ -3541,9 +3617,10 @@ fn press_in(state: &mut State, id: ViewId) {
 /// **A new pane on a new workspace** (#140): the workspace's `+` and the menu's row differ in one thing —
 /// this one also puts a pane in it, of the same kind and camera as the pane the menu was asked on.
 ///
-/// A **new** pane, not a copy: a map gets its own thread at the source's camera, a tree the same
-/// structure with a fresh camera, a newsroom a fresh view at its default tab and page. The source
-/// workspace keeps its pane and its layout, exactly as `Focus on new pane` keeps the source pane.
+/// A **new** pane, not a copy: a map gets its own camera, a tree the same structure with a fresh camera,
+/// a newsroom a fresh view at its default tab and page, and the map's thread is started by `poll` like
+/// every other map pane's (#160). The source workspace keeps its pane and its layout, exactly as `Focus
+/// on new pane` keeps the source pane.
 pub fn new_workspace_from_pane(state: &mut State, pane: ViewId) -> Option<ViewId> {
     let source = state.pane(pane)?;
     let content = source.content.clone();
@@ -3559,20 +3636,8 @@ pub fn new_workspace_from_pane(state: &mut State, pane: ViewId) -> Option<ViewId
     let workspace = &mut state.workspaces[index];
     workspace.layout = Some(Layout::single_with(id));
     workspace.panes.push(created);
-    #[cfg(feature = "map")]
-    if !state.headless && content.is_map() {
-        // The new workspace's pane is the whole panel: one pane, one thread, at the source's camera.
-        let viewport = state.pane_viewport();
-        if let Some(pane) = state.workspace_pane_mut(index, id) {
-            pane.map = Some(crate::map::thread::MapThread::spawn(
-                camera,
-                (
-                    viewport.w.round().max(1.0) as u32,
-                    viewport.h.round().max(1.0) as u32,
-                ),
-            ));
-        }
-    }
+    // No thread here (#160): `poll` starts one for every map pane that has none, and this pane's slot
+    // is the whole panel from the moment the layout above exists.
     state.focus_pane(id);
     state.end();
     state.arranged();
@@ -4590,19 +4655,6 @@ fn setup(state: &mut State, waker: rune::Waker) {
     // first frame draws the seed camera whether or not it has answered — a late read is not a blank
     // wall — and the answer moves that pane and no other.
     viewpoint::ask(state);
-    #[cfg(feature = "map")]
-    {
-        // The first frame's layout corrects this size; 1280x720 is the window it opens at, so the map
-        // is already rendering the right ground while the layout is being computed. Every pane gets its
-        // own thread through the same door (`State::split_pane`).
-        let camera = state.camera();
-        if let Some(pane) = state.pane_mut(state.focused()) {
-            pane.map = Some(crate::map::thread::MapThread::spawn(
-                camera,
-                (tokens::WINDOW_SIZE.0 as u32, tokens::WINDOW_SIZE.1 as u32),
-            ));
-        }
-    }
 }
 
 /// Every frame: hand the view loop whatever the socket said, and say whether it changed anything.
@@ -4685,6 +4737,12 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     }
     changed |= drain_card_reads(state);
     changed |= tick_card_age(state);
+
+    // **A map pane always has a thread** (#160): every pane that draws a picture, in every workspace,
+    // gets one on the frame it is missing one — a wall restored from `layout.toml`, a pane moved
+    // between workspaces, and a pane opened by `split_pane` all take this door. It runs before the
+    // cadence pass so a thread that started this frame is told its rate on this frame.
+    changed |= state.spawn_missing_maps();
 
     // **The focused pane is the one that renders at the wall's cadence; the others are there, not
     // live** (#71). Told to the threads when the focus changes, so a wall at rest does not send a
@@ -6354,13 +6412,6 @@ mod tests {
             ..State::default()
         };
         let first = state.pane_ids()[0];
-        // The first pane's thread is the one `setup` starts on a wall; `split_pane` starts the others.
-        if let Some(pane) = state.pane_mut(first) {
-            pane.map = Some(crate::map::thread::MapThread::spawn(
-                Camera::START,
-                (640, 360),
-            ));
-        }
         let mut ids = vec![first];
         for index in 1..4 {
             let from = ids[index - 1];
@@ -6369,6 +6420,13 @@ mod tests {
                 .expect("a split spawns a pane");
             ids.push(id);
         }
+        // **One door for every pane** (#160): `poll` asks the wall which map panes have no thread and
+        // starts them, so this is the wall's own path rather than a fourth spawn site in a test.
+        assert!(state.spawn_missing_maps(), "four panes, four threads");
+        assert!(
+            !state.spawn_missing_maps(),
+            "a wall whose panes are all drawing has nothing left to start"
+        );
         assert_eq!(
             state
                 .panes()
@@ -6422,7 +6480,7 @@ mod tests {
     #[test]
     #[ignore = "map engine: needs a GPU; takes three seconds of real time"]
     fn the_focused_pane_keeps_its_cadence_while_three_idle() {
-        use crate::map::thread::{IDLE_INTERVAL, MapThread, UNFOCUSED_INTERVAL};
+        use crate::map::thread::{IDLE_INTERVAL, UNFOCUSED_INTERVAL};
         use std::time::Duration;
 
         let mut state = State {
@@ -6431,14 +6489,13 @@ mod tests {
             ..State::default()
         };
         let first = state.pane_ids()[0];
-        if let Some(pane) = state.pane_mut(first) {
-            pane.map = Some(MapThread::spawn(Camera::START, (640, 360)));
-        }
         let mut ids = vec![first];
         for index in 1..4 {
             let from = ids[index - 1];
             ids.push(state.split_pane(from, Camera::START).expect("a split"));
         }
+        // The wall's one door (#160): `poll` starts a thread for every map pane that has none.
+        assert!(state.spawn_missing_maps(), "four panes, four threads");
         state.focus_pane(ids[0]);
         state.apply_cadence();
         for pane in state.panes() {
