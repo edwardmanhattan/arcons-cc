@@ -219,6 +219,105 @@ The rev is taken now because the pin should hold a state we have read, not the s
 read once: two commits behind is already a diff nobody reviewed, and the two we are behind are the two
 easiest to review there will ever be.
 
+### Bumped again: `25db9cd` → `8219692` — 83 commits, and the wall does not move
+
+`25db9cd122a6972816342fdb24db3c4ad0c72e0f` → `82196923fcb43d493353455edab0113cb4493c38`, in both `rune`
+and `rune-kit`, in `THIRD-PARTY-NOTICES.md`, and in `Cargo.lock`, in one commit. This is not the two-commit
+bump of #134; it is **83 commits, 352 files, +26,638 / −1,583**, filed by the upstream tracker as #159 — the
+largest range this pin has ever taken, and the first where the honest evidence is expected to be *something*
+rather than *nothing*.
+
+**What it is made of.** Twenty commit subjects are Windows platform work (occlusion and covered draws, CPU-first
+hand-over, `ITaskbarList3`, jump lists, D3D12 idle threads, vendored winit), two are macOS (CoreText fallback
+weights, the Dock's badge), and of the rest, eight are text or fonts, six are accessibility and focus, and the
+tail is media locking, video layers, notifications, Luau, and three r281 layer-cache fixes. Sixteen of the 83
+touch the pixel surfaces this ADR watches (`text/`, `render/`, `edit.rs`, `rune-kit`'s search) — 23 files, +1,469
+— and 7,849 more lines arrive in `vendor/parley_engine`, the shaping engine the text commits are built on.
+
+**Every one of those sixteen is either a cache behind a claim of identical output, or a script this wall does
+not write.** Grouped, because that is the review:
+
+- **Shaping and glyph coverage.** `#725` gives the vendored parley engine mixed-direction text (itemisation, an
+  isolate-aware shaper, an LRU of shaped atoms); `#745` CJK forms and language; `#788` a line-break strictness
+  switch; `#789` Hiragino's weights; `#764` COLR v1 gradients; `#779` a COLR painter 15–40% faster. The wall's
+  text is left-to-right Latin in Inter and IBM Plex Mono, and four of those six draw no glyph it has. The two
+  that could move a Latin glyph claim the opposite: `#782` states *"every layout is identical (glyphs,
+  positions, clusters, line boxes)"* for a 14% faster shaping path, and `#779` states *"every byte of the images
+  identical"*.
+- **Font resolution, which is the one that could really have moved something.** `#766` replaces Linux's folder
+  walk and its `fc-list`/`fc-match` subprocesses with an in-process fontconfig match, and macOS's folder walk
+  with CoreText's own fallback. A fallback happens when a character the app's fonts lack is drawn — on this
+  wall, an arrow or a symbol inside an operator's own name, never in the fixtures. It also means a cold
+  fallback no longer forks a process, which is the kind of change a wall notices at start-up and not in a
+  picture. `objc2-core-text` entering `Cargo.lock` is this commit, and it is Apple-only.
+- **Caches that only write.** `#746` re-uploads only the atlas rows that hold glyphs when the GPU comes back
+  (*"snapshots identical"*), `#784` lets a resting window write its mask cache, and the three r281 layer
+  commits rebind parked targets once, bind them against the new outline texture, and composite a cache hit
+  with the layer's turn. The wall has no turned instances and no layer cache of its own; the modal scrim is a
+  plain draw.
+
+So the picture is the easy half. **The range's real content for us is behaviour a settled golden cannot see**,
+and that is what the ticket's integration question was for:
+
+- **Backspace deletes one code point, as Chromium does** (`#764`, `edit.rs` and `edit/input.rs`). Before, it
+  deleted a whole grapheme cluster. This is *our* field: `begin_rename` (#83, #113, #139) and the workspace
+  chip's rename (#154). A Latin name is unchanged; a name typed with a combining accent now loses the accent
+  alone. Named here because it is the one commit in the range that changes what an operator can do.
+- **Accessibility changed shape without a pixel moving** (`#726`, `#727`, `#732`, `#734`, `#763`, `#778`): a box
+  that only takes a press is no longer a button to a screen reader, tree items and grid cells with a press are
+  Tab stops under `Cx::web_focus`, every hover group lights while keyboard focus is inside it, focus falls back
+  to a surviving neighbour when its element leaves, and F6 cycles landmarks. The wall's scrims and its pane
+  press-boxes are exactly the *"surface that is not a control"* case, and `hover_group_focus` is now
+  `hover_group` — the menu's keyboard model (#164) gets its affordance without us building one.
+- **Motion has a cause** (`#750`): a commit no input in its window caused mounts and unmounts at once, with no
+  entrance transition. The wall animates nothing — `src/units/motion.rs` is motion *semantics* over fixes, not
+  a transition — so this is not ours to feel. It is recorded because the day we add a transition, the escape
+  hatch is `Tx::animated`, and the difference between a data-driven arrival and an input-driven one becomes a
+  decision rather than an accident.
+- **`rune::exit_deadline(after)`** (`#787`): a quit that runs long now ends, and says where it waited. The
+  wall's `SIGTERM` path already quits **through Rune's own quit path** so the map thread's GL context is
+  dropped in order (`src/platform.rs`), which means a map thread that will not let go can hold the process past
+  systemd's `TimeoutStopSec` and earn a `SIGKILL`. Arming a deadline after `flush_layout` (#153) is now
+  possible and is **not taken here**: a bump is a dependency change, and that is a behaviour change. It is its
+  own ticket, [#174](https://github.com/edwardmanhattan/arcons-cc/issues/174).
+
+**What the control-plane epic (#162) gets for free** — the half of the ticket the bump exists to answer:
+
+- **`El::on_background_press`** (#732): a pointer's press on a surface that is not a control, without becoming
+  a button or a Tab stop. That is precisely what a remote's cursor press on the water needs (#167), and what
+  #154's chip right-click did by hand.
+- **`El::labelled_by` / `described_by` / `busy`, `Tx::announce`, `Tx::assistive_technology`** (#732, #734, #778):
+  the menu's rows can name themselves from their own titles, a rename can announce its result, and work that
+  only an assistive client wants costs nothing without one. The menu's keyboard model (#164) is now
+  constructible rather than aspirational.
+- **F6 landmarks and focus fallback** (#727): a modal a remote opens has a focus story for the moment its
+  control disappears — which is #166, closing panes under a focus ring.
+- **`RUNE_REGION_MISS`** (#730): the tool the next budget regression needs, because it names what made a memo
+  or region build again. Our frame budget is a gate, so this is the diagnostic that comes with it.
+- **Script IME steps** (#735): `{"type": "ime", "preedit"…}` and `{"type": "ime", "commit"…}` drive an
+  input method in a headless run. Our fixtures are Latin and typed with `{"type": "type"…}`; recorded because
+  it is how a future capture proves typing without touching the machine's layout.
+- **Bidi and search folding** (`El::isolate`, `El::dir_by_paragraph`, `text::LINE_BREAK`,
+  `rune_kit::search::Fold::for_language`): the wall has no bidi text and no CJK, and its filter matches its own
+  vocabulary. Noted, unused — `icu_normalizer` in the lockfile is kit's search folding, not ours.
+
+**The evidence is zero, and this time zero is a claim worth making.** `ARCONS_GOLDENS=exact scripts/capture.sh`
+rendered all **40 scenes twice each, and every scene is identical to its golden byte for byte** — no tolerance,
+no rounding budget, no one-step pixels:
+
+```
+40 scenes, exit 0 — "identical to fixtures/golden/<scene>.png — byte for byte"
+```
+
+That is 83 commits, 16 of them in the renderer, and not one pixel of the wall. The gate is otherwise green
+(`cargo fmt`, `clippy -D warnings`, 40 scenes plus their assertions, the frame budget), and `Cargo.lock` moved
+only the six `rune*` git sources plus two transitives — `icu_normalizer` and the Apple-only
+`objc2-core-text` — neither copyleft, both recorded in `THIRD-PARTY-NOTICES.md`.
+
+If a future reader wonders why this section is longer than the bump: because 83 commits is where a renderer
+change *hides*, and the only way to say it is not there is to have looked at each of the sixteen places it
+could be and to have the goldens say the rest.
+
 
 ## Decision 2 — MapLibre Native (`maplibre_native`)
 
