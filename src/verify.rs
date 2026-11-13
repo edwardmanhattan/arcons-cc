@@ -3464,7 +3464,9 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
         // **Workspace actions** (#140): the waterfall, a pane moved between workspaces, and a new
         // workspace from a pane. The chip checks are the same as the workspaces arm's — where the raised
         // chip sits relative to the `+` says **which** workspace is active in the capture.
-        "workspaces-menu" | "workspaces-moved" | "workspaces-new" => {
+        // **The remote twin is in this arm on purpose** (#172): a scene driven only by intents must satisfy every
+        // structural claim the pointer-driven scene makes, not a weaker set of its own.
+        "workspaces-menu" | "workspaces-moved" | "workspaces-new" | "workspaces-new-remote" => {
             let state = scene::state_for(scene);
             let header = (0.0, f64::from(tokens::CHIP_H) + f64::from(tokens::PAD));
             let raised: Vec<(f64, f64)> =
@@ -3498,7 +3500,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             // a scene that ends on the newest workspace, and chip 2 for the one on workspace 2.
             let expected_chip = match scene {
                 // `Focus on new workspace` makes one and switches to it: the last chip.
-                "workspaces-new" => count,
+                "workspaces-new" | "workspaces-new-remote" => count,
                 // The move switches to the workspace it moved the pane into.
                 "workspaces-moved" => 2,
                 // The waterfall's scene stays on the wall it opened the menu on.

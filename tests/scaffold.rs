@@ -376,3 +376,29 @@ const KEYWORDS: &[&str] = &[
     "if", "for", "while", "match", "loop", "move", "let", "return", "Some", "None", "Ok", "Err",
     "vec", "format", "matches", "assert", "std", "rune",
 ];
+
+/// **The two paths are one picture** (#172, epic #162).
+///
+/// A scene driven only by intents against the same wall a pointer script drives is only worth capturing if its
+/// golden is the pointer's — so the remote golden is that file, byte for byte, and this test says so. Without
+/// it the two goldens could drift one `--update-goldens` at a time until the remote scene proved nothing.
+#[test]
+fn the_remote_twin_s_golden_is_the_pointer_twin_s() {
+    let pointer = root().join("fixtures/golden/workspaces-new.png");
+    let remote = root().join("fixtures/golden/workspaces-new-remote.png");
+    let pointer_bytes = std::fs::read(&pointer)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", pointer.display()));
+    let remote_bytes =
+        std::fs::read(&remote).unwrap_or_else(|e| panic!("cannot read {}: {e}", remote.display()));
+    assert_eq!(
+        pointer_bytes.len(),
+        remote_bytes.len(),
+        "fixtures/golden/workspaces-new-remote.png must be fixtures/golden/workspaces-new.png, and it \
+         is not: a client-driven capture whose golden drifted proves nothing (#172)"
+    );
+    assert!(
+        pointer_bytes == remote_bytes,
+        "fixtures/golden/workspaces-new-remote.png differs from workspaces-new.png by some byte: the two \
+         paths must draw one wall, and the golden is the claim (#172)"
+    );
+}

@@ -451,6 +451,13 @@ pub struct State {
     /// Whether the first map frame's camera has been reported. One log line per process, so a wall showing
     /// the wrong sea leaves a trace rather than a screenshot to argue with (`#56`).
     pub camera_reported: bool,
+    /// **An intent script waiting for its frame** (#172): a scene that drives the wall **only** through the
+    /// control plane carries its steps here, and `poll` applies the ones that are due. Empty on a wall — nothing
+    /// scripts a wall — which is why it is a field on the state and not an environment variable.
+    pub pending_intents: Vec<(f64, crate::control::Intent)>,
+    /// How many of [`State::pending_intents`] have been applied, in order: a script is a sequence, and applying
+    /// step 3 before step 2 would be a different wall.
+    pub intents_applied: usize,
     /// **The control plane's listener** (#165): the socket a client drives the wall through, and the queue of
     /// requests this thread answers between frames. `None` in a capture (a scene opens nothing, `INV-11`) and
     /// when the plane is turned off — so a wall with no socket is a wall nothing can be driven through, and
@@ -610,6 +617,8 @@ impl Default for State {
 
             #[cfg(feature = "map")]
             cadenced: None,
+            pending_intents: Vec::new(),
+            intents_applied: 0,
             #[cfg(unix)]
             control: None,
             live: None,
@@ -4770,6 +4779,34 @@ fn apply_update(state: &mut State, update: crate::live::Update) {
 }
 
 /// Start the map thread, once, before the first frame. A `fn` because `AppSpec::setup` is one.
+/// **One pane of a capture keeps the frame it has always had** (#71, #140, #172).
+///
+/// A headless wall has no map thread to hand a frame over, and markers still have to project against something
+/// real: a capture's single pane gets a **synthetic** frame the size of the window, at the pane's own camera. A
+/// scene with more panes gets each frame from that pane's own layout (`pane_laid_out`), which is where a wall gets
+/// its frames too.
+///
+/// It runs in `setup` **and** in `poll`, because a pane can arrive after the scene was built: a new workspace
+/// (#140), a move, a close that leaves one pane. Without the second call a wall whose only pane came late drew no
+/// markers at all — found by an intent-driven capture whose twin seeds its frame at start-up (#172).
+///
+/// **A feed or a tree in a one-pane scene gets no frame**: a frame is what a pane's markers project against, and a
+/// pane that draws none must not have one to project into.
+fn seed_single_pane_frame(state: &mut State) {
+    if !state.headless || !state.is_single_pane() || !state.focused_pane().content.is_map() {
+        return;
+    }
+    if state.focused_pane().frame.is_some() {
+        return;
+    }
+    let camera = state.camera();
+    state.set_frame(crate::map::geometry::Rendered {
+        camera,
+        width: tokens::WINDOW_SIZE.0 as u32,
+        height: tokens::WINDOW_SIZE.1 as u32,
+    });
+}
+
 fn setup(state: &mut State, waker: rune::Waker) {
     // A scene is offline by construction: `--snap` renders a fixture, and a capture that opened a
     // socket would be a capture that depends on a server being awake.
@@ -4780,21 +4817,7 @@ fn setup(state: &mut State, waker: rune::Waker) {
         state.headless = true;
         // A scene declares its own viewport: there is no map thread to hand one over, and markers
         // still have to project against something real. The size is the one `capture.sh` pins.
-        // **One pane keeps the frame it has always had.** A capture with one pane is the wall as it was
-        // before Multi View, and its goldens are byte-identical because of this line; a scene with more
-        // panes gets each frame from that pane's own layout (`pane_laid_out`), which is where a wall
-        // gets its frames too. `#71`'s golden pass unifies the two.
-        // **A feed or a tree in a one-pane scene gets no frame** (#140): a frame is what a pane's markers
-        // project against, and a pane that draws none must not have one to project into. `new_workspace`
-        // and a move can leave a newsroom as a workspace's only pane, which is exactly this case.
-        if state.is_single_pane() && state.focused_pane().content.is_map() {
-            let camera = state.camera();
-            state.set_frame(crate::map::geometry::Rendered {
-                camera,
-                width: tokens::WINDOW_SIZE.0 as u32,
-                height: tokens::WINDOW_SIZE.1 as u32,
-            });
-        }
+        seed_single_pane_frame(state);
         return;
     }
     // **The control plane** (#165). A capture returned above: `INV-11` forbids a scene reading or writing a
@@ -4876,6 +4899,13 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
         .map(std::time::Duration::from_secs_f64)
         .unwrap_or_default();
     state.last_poll_logical = Some(elapsed);
+    // **A scene can drive the wall through the control plane** (#172): the steps it carries are applied here, in
+    // order, when their frame comes. This is the same `apply` the pointer and the socket use — a capture is not a
+    // second kind of client, it is a client whose clock is virtual.
+    let scripted = crate::scene::apply_due_intents(state, elapsed);
+    // A pane that arrived after the scene was built has no frame from `setup`, and a one-pane wall refuses to
+    // hand one over in `pane_laid_out` (#172). Same rule, one frame later.
+    seed_single_pane_frame(state);
     // systemd stops a wall with `SIGTERM`. Quitting through the runtime's own path drops the GL
     // context in order, instead of a hard exit that leaves the driver complaining.
     if crate::platform::terminated() {
@@ -4920,6 +4950,7 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     #[cfg(not(unix))]
     let controlled = false;
     let mut changed = drain_socket(state);
+    changed |= scripted;
     changed |= controlled;
     changed |= drain_card_reads(state);
     changed |= tick_card_age(state);
