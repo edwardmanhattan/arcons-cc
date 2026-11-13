@@ -58,6 +58,9 @@ field marked **required** is a refusal when it is missing.
 | `workspace.focus` | `index` | makes that workspace the wall on screen (#138). `no such workspace` |
 | `workspace.new` | — | appends an empty workspace and switches to it (#138) |
 | `map.camera` | `pane`, `camera` | puts that pane's camera at `{lat, lon, zoom}` — a **value**, so a pan is one request when the hand stops, not sixty. `no such pane` |
+| `cursor.move` | `at` | puts the **client's cursor** at `[x, y]` in the picture panel's points, and starts its fade (#167) |
+| `cursor.press` | — | presses where the cursor is: the hull under it (its card, and that pane's keys), or the pane it is over (the keys and a cleared card). A press outside every pane, or before `cursor.move`, is refused |
+| `cursor.release` | — | releases; the cursor fades from here |
 | `surface.settings` | — | opens the settings sheet (#82) |
 | `surface.close` | — | dismisses **one** surface, in the ladder Escape walks: the waterfall, then the menu, then the interaction, then the maximised pane, then the newsroom's detail, then the selection (#140) |
 
@@ -70,7 +73,7 @@ field marked **required** is a refusal when it is missing.
 | `unit` | a hull's id, or `null` | `512345` |
 | `target` | `{"pane": 2}` or `{"workspace": 1}` | |
 | `name` | a string, or `null` to clear | `"Straits watch"` |
-| `at` | `[x, y]` in the pane's **frame** pixels, not the window's | `[420.0, 260.0]` |
+| `at` | `[x, y]`. For `pane.split_at`, the pane's **frame** pixels; for `cursor.move`, the **picture panel's** points | `[420.0, 260.0]` |
 | `camera` | `{"lat": …, "lon": …, "zoom": …}` | `{"lat": -6.108, "lon": 106.91, "zoom": 11}` |
 | `content` | `{"kind": "map"}`, `{"kind": "newsroom"}`, `{"kind": "tree", "organisation": null}` or a structure id in place of `null` | |
 
@@ -103,6 +106,27 @@ the picture, which is the one thing this protocol decided not to send.
 ```sh
 arcons-cc ctl wall | jq '.workspaces[] | {name, panes: [.panes[].kind]}'
 ```
+
+## The client's cursor
+
+A remote has no hand on the glass, so the wall keeps a pointer for it (#167): `cursor.move` puts it at a point in
+the **picture panel's points**, `cursor.press` acts where it is, `cursor.release` lets go. The wall draws it — a
+ring at the point, filled while the button is down — and **fades it after four seconds of stillness**, because a
+stray pointer on a wall at three in the morning is a bug that looks like a mouse. A button held down keeps it
+visible: a remote mid-press is a remote still using it.
+
+What a press reaches, today:
+
+| the point is over | the press does |
+| --- | --- |
+| a hull's marker, within 14 points (a phone guesses a point on a map it has only read) | selects that hull, opening its card, and gives its pane the keys |
+| a pane, but not a hull | gives that pane the keys and clears its card |
+| a gutter, or outside every pane | nothing. A resize is not a point a remote can make yet |
+| the header's chips, a menu's row | **nothing yet**: those are Rune's own layout, and a press there needs an event injection Rune does not expose. Recorded rather than faked |
+
+Two things this is not: it is not the OS pointer (a hand and a remote can point at different places, and that is
+fine), and it is not a renderer's cursor (it lives in the picture panel's space, which is where panes and markers
+are drawn, not over the header).
 
 ## The CLI
 

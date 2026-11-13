@@ -27,6 +27,11 @@ pub const MIN_WINDOW: (f32, f32) = (640.0, 360.0);
 pub const PAD: f32 = 16.0;
 pub const GAP: f32 = 8.0;
 pub const HAIRLINE: f32 = 1.0;
+/// **A client's cursor** (#167): the glyph a remote's point draws, in points.
+///
+/// Small on purpose: it is a pointer, not a marker. Big enough to see on a wall at three metres, small enough that
+/// it never hides the hull it is over.
+pub const CURSOR: f32 = 10.0;
 pub const PANEL_RADIUS: f32 = 10.0;
 
 /// A hull's symbol, in points. **Twenty-four, and measured** (`docs/research/nato-symbology.md`): the
@@ -234,6 +239,15 @@ pub fn hairline() -> Color {
 /// Primary text.
 pub fn ink() -> Color {
     oklch(0.94, 0.004, 250.0)
+}
+
+/// **A client's cursor** (#167): white, brighter than any text, because a pointer is not content.
+///
+/// Its own token for two reasons: it is a colour, so it lives here and nowhere else; and a capture can ask
+/// "is this colour in the picture?" as the question a person answers by looking — `ink()` and `focus_edge` are
+/// both drawn by other things inside the panel, and a pointer nobody can pick out is a pointer nobody can see.
+pub fn cursor_ink() -> Color {
+    oklch(1.0, 0.0, 0.0)
 }
 
 /// Secondary text: labels, units, hints.

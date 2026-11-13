@@ -212,6 +212,19 @@ refused to send.
 A request carries **an intent or a read, never both**, and the same connection answers either — a client that had
 to reconnect to look would be a client with two connections open on a one-client socket.
 
+## As built: the cursor is a value, not a stream (#167)
+
+Decision 3 said the second vocabulary carries **pointer and key events** for surfaces that are menu-like. It was
+built smaller than that, and on purpose: `cursor.move` carries a **point**, not a delta, and `cursor.press` /
+`cursor.release` are settled events. A remote's cursor is not a hand — it is a coordinate a phone computed from a
+map it has read — so the wall needs the place it means, not the path it took to get there. Where a press *means*
+something is the wall's own hit-testing (a hull within 14 points, the pane a point is in), which is why the press is
+an intent the wall resolves and not an event the client interprets.
+
+The same decision's other half is recorded where a client's author looks for it (`docs/control.md`): a press reaches
+the picture panel — a hull and the water — and not the header's chips or a menu's row, because those are Rune's
+layout and a synthetic press there needs an event injection Rune does not expose.
+
 ## Consequences for the gate
 
 - `src/control.rs` holds the wire's constants — the socket's file name and mode, the protocol version — and

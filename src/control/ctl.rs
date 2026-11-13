@@ -201,6 +201,13 @@ pub fn parse(words: &[String]) -> Result<Intent, Failure> {
             pane: number(0, "a pane id")?,
             camera: crate::config::parse_camera(arg(1, "LAT,LON,ZOOM")?).map_err(Failure::Usage)?,
         },
+        "cursor.move" => {
+            let x = number(0, "an x in points")? as f32;
+            let y = number(1, "a y in points")? as f32;
+            Intent::CursorMove { at: (x, y) }
+        }
+        "cursor.press" => Intent::CursorPress,
+        "cursor.release" => Intent::CursorRelease,
         "surface.settings" => Intent::OpenSettings,
         "surface.close" => Intent::CloseSurfaces,
         _ => {
@@ -330,6 +337,9 @@ arcons-cc ctl <noun> <verb> [args]
   rename set pane <id> <name>
   rename set workspace <i> <name>
   map camera <id> L,L,Z      put a pane's camera at a latitude, longitude and zoom
+  cursor move <x> <y>        put a client's cursor at a point in the picture panel
+  cursor press               the hull under it (its card), or the pane it is over
+  cursor release             let go; the cursor fades from here
   surface settings           open the settings sheet
   surface close              dismiss one surface (what Escape does)
 
@@ -369,6 +379,9 @@ mod tests {
             "rename begin pane 2",
             "rename set workspace 0 Straits watch",
             "map camera 2 -6.1,106.8,10",
+            "cursor move 100 80",
+            "cursor press",
+            "cursor release",
             "surface settings",
             "surface close",
         ];

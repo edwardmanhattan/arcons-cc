@@ -81,6 +81,10 @@ pub fn to_wire(intent: &Intent) -> Value {
                 }),
             );
         }
+        Intent::CursorMove { at } => {
+            object.insert("at".into(), json!([at.0, at.1]));
+        }
+        Intent::CursorPress | Intent::CursorRelease => {}
         Intent::OpenSettings | Intent::CloseSurfaces => {}
     }
     Value::Object(object)
@@ -173,6 +177,24 @@ pub fn from_wire(value: &Value) -> Result<Intent, Refused> {
                 camera: crate::map::geometry::Camera::new((lat, lon), zoom),
             }
         }
+        "cursor.move" => {
+            let at = object
+                .get("at")
+                .and_then(Value::as_array)
+                .filter(|at| at.len() == 2)
+                .ok_or(Refused("\"at\" is [x, y] in the picture panel's points"))?;
+            let x = at[0]
+                .as_f64()
+                .ok_or(Refused("\"at\" is [x, y] in the picture panel's points"))?;
+            let y = at[1]
+                .as_f64()
+                .ok_or(Refused("\"at\" is [x, y] in the picture panel's points"))?;
+            Intent::CursorMove {
+                at: (x as f32, y as f32),
+            }
+        }
+        "cursor.press" => Intent::CursorPress,
+        "cursor.release" => Intent::CursorRelease,
         "surface.settings" => Intent::OpenSettings,
         "surface.close" => Intent::CloseSurfaces,
         _ => return Err(Refused("unknown verb")),

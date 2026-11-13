@@ -645,6 +645,62 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 lines.extend(assert_card(image, origin, &mut failures));
             }
         }
+        // **The client's cursor** (#167): the same wall twice, one line apart in the state and far apart in the
+        // picture — the card its press opened in both, and the pointer in exactly one.
+        //
+        // The claim is a colour rather than a position: the cursor's ring is `focus_edge`, and nothing else draws
+        // that colour **inside the picture panel** on a one-pane wall. So the arm asks the question a reader asks —
+        // is the pointer there? — without re-deriving the renderer's coordinate space.
+        "cursor-hull" | "cursor-idle" => {
+            let Some(origin) = image.find_panel(ink(tokens::panel())) else {
+                failures.push(format!(
+                    "{scene}: no picture panel on screen — the cursor is drawn in it"
+                ));
+                return Err(failures);
+            };
+            let below = image
+                .find_panel(ink(tokens::panel()))
+                .map(|(_, y)| y + 2.0)
+                .unwrap_or(0.0) as u32;
+            let ring = image.count_colour_below(ink(tokens::cursor_ink()), 12, below);
+            let state = scene::state_for(scene);
+            let Some(cursor) = state.cursor else {
+                failures.push(format!("{scene}: the scene placed no cursor"));
+                return Err(failures);
+            };
+            let visible = cursor.visible_at(2.0);
+            if scene == "cursor-hull" {
+                if ring == 0 {
+                    failures.push(
+                        "cursor-hull: no cursor ring inside the picture — the scene's press landed \
+                         a moment before the capture, so a cursor that is not drawn is a glyph that is \
+                         not in the tree"
+                            .to_string(),
+                    );
+                } else if !visible {
+                    failures.push(
+                        "cursor-hull: the state says the cursor is faded at the capture, and the picture \
+                         draws it — the fade is not reading the frame clock"
+                            .to_string(),
+                    );
+                } else {
+                    lines.push(format!(
+                        "cursor-hull: cursor ring in the picture, {ring} px of its own ink"
+                    ));
+                }
+            } else if ring > 0 {
+                failures.push(format!(
+                    "cursor-idle: {ring} px of cursor ink in the picture — the cursor moved {:.2} s \
+                     before the capture and Cursor::FADE is {:.1} s",
+                    2.0 - cursor.moved_at,
+                    crate::ui::Cursor::FADE
+                ));
+            } else {
+                lines.push("cursor-idle: no cursor ink in the picture".to_string());
+            }
+            // The card is there in both: the point of the pair is that only the pointer goes.
+            lines.extend(assert_card(image, origin, &mut failures));
+        }
         "photo" => {
             // The picture half of #32: at this zoom the hull is drawn as its **picture**, not its symbol.
             // The fixture's ink is a colour no token uses, so finding it at the hull's position is proof
@@ -3752,6 +3808,42 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     let mut failures = Vec::new();
     let mut lines = Vec::new();
     let state = crate::scene::state_for(scene);
+    // **The cursor scenes' structure** (#167): the press reached the hull, its card is up, and the cursor's
+    // visibility is the one thing the two scenes disagree about.
+    if matches!(scene, "cursor-hull" | "cursor-idle") {
+        let focused = state.focused();
+        if state.selected_in(focused) != Some(crate::scene::CURSOR_UNIT) {
+            failures.push(format!(
+                "{scene}: the pane's selection is {:?}, and a remote's press on hull {} must select it",
+                state.selected_in(focused),
+                crate::scene::CURSOR_UNIT
+            ));
+        } else {
+            lines.push(format!(
+                "{scene}: hull {} selected by the cursor's press",
+                crate::scene::CURSOR_UNIT
+            ));
+        }
+        if state.card_in(focused).is_none() {
+            failures.push(format!("{scene}: a selected hull has no card"));
+        }
+        let Some(cursor) = state.cursor else {
+            failures.push(format!("{scene}: no cursor in the state"));
+            return Err(failures);
+        };
+        let visible = cursor.visible_at(2.0);
+        let want = scene == "cursor-hull";
+        if visible != want {
+            failures.push(format!(
+                "{scene}: the cursor is {} at 2 s, and this scene's steps are at {:.2} s — \
+                 Cursor::FADE is {:.1} s",
+                if visible { "visible" } else { "faded" },
+                cursor.moved_at,
+                crate::ui::Cursor::FADE
+            ));
+        }
+    }
+
     let frame = scene_frame();
     let markers = crate::ui::markers::place(
         &state.picture,
@@ -4556,6 +4648,11 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
         ("card-open", 1) => lines.push("card-open: exactly one card, in one pane".to_string()),
         ("card-open", other) => {
             failures.push(format!("card-open: {other} cards, and INV-10 says one per pane"))
+        }
+        // **A cursor's press opens one card too** (#167): the hull its point was on, and the capture is the
+        // proof that a remote's press is the same press a hand makes.
+        ("cursor-hull" | "cursor-idle", 1) => {
+            lines.push(format!("{scene}: one card, opened by the cursor's press"))
         }
         // Two panes, one card: the pane that was pressed on, and not its neighbour.
         ("panes-cards", 1) => lines.push("panes-cards: one card, in one pane".to_string()),

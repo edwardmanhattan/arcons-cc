@@ -113,6 +113,15 @@ pub enum Intent {
     /// Put this pane's camera here — a **value**, so a pan is one intent when the hand stops, not sixty.
     Camera { pane: ViewId, camera: Camera },
 
+    // ---- the client's cursor (#167)
+    /// Put a client's cursor at a point in the **picture panel's** points, and start its fade from now.
+    CursorMove { at: (f32, f32) },
+    /// Press where the cursor is: the hull under it (its card), or the pane it is over (the keys, and a cleared
+    /// card).
+    CursorPress,
+    /// Release. The cursor starts fading from here.
+    CursorRelease,
+
     // ---- surfaces
     /// The settings sheet (#82).
     OpenSettings,
@@ -141,6 +150,9 @@ impl Intent {
             Intent::FocusWorkspace(_) => "workspace.focus",
             Intent::NewWorkspace => "workspace.new",
             Intent::Camera { .. } => "map.camera",
+            Intent::CursorMove { .. } => "cursor.move",
+            Intent::CursorPress => "cursor.press",
+            Intent::CursorRelease => "cursor.release",
             Intent::OpenSettings => "surface.settings",
             Intent::CloseSurfaces => "surface.close",
         }
@@ -268,6 +280,29 @@ pub fn apply(state: &mut State, intent: Intent) -> Result<Changed, Refused> {
             state.set_camera_of(pane, camera);
             true
         }
+        Intent::CursorMove { at } => {
+            state.cursor_move(at);
+            true
+        }
+        Intent::CursorPress => {
+            if state.cursor.is_none() {
+                // Nothing to press with: a client must point before it can press, and guessing a point would be
+                // the wall inventing input nobody gave it.
+                return Err(Refused("the cursor has not been placed"));
+            }
+            state.cursor_press();
+            true
+        }
+        Intent::CursorRelease => {
+            let Some(cursor) = state.cursor else {
+                return Err(Refused("the cursor has not been placed"));
+            };
+            if !cursor.down {
+                return Err(Refused("the cursor is not pressed"));
+            }
+            state.cursor_release();
+            true
+        }
         Intent::OpenSettings => ui::open_settings(state),
         Intent::CloseSurfaces => ui::close_surfaces(state),
     };
@@ -357,6 +392,9 @@ pub fn vocabulary() -> Vec<Intent> {
             pane: 1,
             camera: Camera::new((-6.1, 106.8), 10.0),
         },
+        Intent::CursorMove { at: (100.0, 80.0) },
+        Intent::CursorPress,
+        Intent::CursorRelease,
         Intent::OpenSettings,
         Intent::CloseSurfaces,
     ]
