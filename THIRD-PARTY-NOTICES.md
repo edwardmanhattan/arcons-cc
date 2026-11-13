@@ -12,7 +12,7 @@ from this file, or when a copyleft crate appears in the lockfile unnamed.
 
 | component | licence | what it is |
 | --- | --- | --- |
-| **Rune** (`rune`, `rune-kit`) | MIT, © 2026 Anomaly | The UI framework. <https://github.com/anomalyco/rune>, pinned to rev `25db9cd122a6972816342fdb24db3c4ad0c72e0f`. Vendored before release; the full licence text then lives at `vendor/rune/LICENSE`. |
+| **Rune** (`rune`, `rune-kit`) | MIT, © 2026 Anomaly | The UI framework. <https://github.com/anomalyco/rune>, pinned to rev `82196923fcb43d493353455edab0113cb4493c38`. Vendored before release; the full licence text then lives at `vendor/rune/LICENSE`. |
 | **MapLibre Native** (`maplibre_native` 0.9.3, vendored) | BSD-2-Clause | The map engine, vendored for two checkout-cache fixes — see `vendor/README.md`. <https://github.com/maplibre/maplibre-native>. Behind the `map` feature, which the gate does not enable. |
 | **Inter**, **IBM Plex Mono** | SIL Open Font License 1.1 | Typefaces bundled with Rune. |
 | **milsymbol** (`spatialillusions/milsymbol`) | MIT — © 2017 Mans Beckman | NATO/APP-6 icon geometry, pinned by the sister project at `f5134380…` v3.0.5. **Not linked or vendored yet**: `docs/research/sheets/wall-symbol-icons.svg` is derived from it (#33), and lifting the module needs this row to stay and the licence text to travel with the copy. |
@@ -48,3 +48,8 @@ must then shrink in the same commit.
 
 `r-efi` is dual-licensed `MIT OR Apache-2.0 OR LGPL-2.1-or-later`; this project takes it under
 MIT/Apache-2.0 and is not subject to the LGPL.
+
+Two transitive crates arrived with the Rune rev bump of #159 and are neither copyleft nor used by this app
+directly: `icu_normalizer` (Unicode licence; `rune-kit`'s search folding) and `objc2-core-text` (MIT/Apache-2.0;
+CoreText's fallback fonts, Apple-only, so it is in the lockfile and never in a Linux build). They are named so
+that the next auditor does not have to read a lockfile diff to find them.
