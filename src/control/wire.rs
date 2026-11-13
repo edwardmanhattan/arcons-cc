@@ -19,6 +19,7 @@
 
 use serde_json::{Map, Value, json};
 
+use super::projection::Wall;
 use super::{Changed, Intent, PROTOCOL, Refused};
 use crate::ui::{PaneContent, RenameTarget};
 
@@ -273,11 +274,25 @@ fn content(object: &Map<String, Value>) -> Result<PaneContent, Refused> {
     }
 }
 
+/// **What a client asked for**: a change (an `Intent`), or a look at the wall (#181).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Request {
+    Intent(Intent),
+    Wall,
+}
+
+/// **The wall's answer**, in the shape the listener sends back (#165, #181).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Answer {
+    Changed(Result<Changed, Refused>),
+    Wall(Wall),
+}
+
 /// **One request line** — the version, and the intent inside it.
 ///
 /// The version is compared, not negotiated: a client from another protocol speaks a language the wall does not,
 /// and guessing would be a wall two clients disagree about.
-pub fn request(line: &str) -> Result<Intent, Refused> {
+pub fn request(line: &str) -> Result<Request, Refused> {
     let value: Value = serde_json::from_str(line).map_err(|_| Refused("not JSON"))?;
     let object = value
         .as_object()
@@ -287,17 +302,33 @@ pub fn request(line: &str) -> Result<Intent, Refused> {
         Some(_) => return Err(Refused("unsupported protocol version")),
         None => return Err(Refused("a request carries \"v\"")),
     }
-    let intent = object
-        .get("intent")
-        .ok_or(Refused("a request carries \"intent\""))?;
-    from_wire(intent)
+    // **One or the other, never both** (#181): a line that changes the wall and reads it at once cannot say
+    // which answer the client is waiting for.
+    match (object.get("intent"), object.get("read")) {
+        (Some(intent), None) => from_wire(intent).map(Request::Intent),
+        (None, Some(read)) => match read.as_str() {
+            Some("wall") => Ok(Request::Wall),
+            _ => Err(Refused("unknown read")),
+        },
+        (Some(_), Some(_)) => Err(Refused(
+            "a request carries \"intent\" or \"read\", not both",
+        )),
+        (None, None) => Err(Refused("a request carries \"intent\" or \"read\"")),
+    }
 }
 
 /// The reply to one request, as one line.
-pub fn reply(result: Result<Changed, Refused>) -> String {
-    match result {
-        Ok(changed) => json!({ "v": PROTOCOL, "ok": true, "changed": changed.0 }).to_string(),
-        Err(Refused(why)) => json!({ "v": PROTOCOL, "ok": false, "why": why }).to_string(),
+pub fn reply(answer: Answer) -> String {
+    match answer {
+        Answer::Changed(Ok(changed)) => {
+            json!({ "v": PROTOCOL, "ok": true, "changed": changed.0 }).to_string()
+        }
+        Answer::Changed(Err(Refused(why))) => {
+            json!({ "v": PROTOCOL, "ok": false, "why": why }).to_string()
+        }
+        // **A read is a body, and a good one**: `wall` beside `ok`, and no `changed` — a client that asked to
+        // change nothing is not told something did.
+        Answer::Wall(wall) => json!({ "v": PROTOCOL, "ok": true, "wall": wall }).to_string(),
     }
 }
 
@@ -359,11 +390,32 @@ mod tests {
         );
     }
 
+    /// **A read is a request like any other**, and a line carries one or the other — never both (#181).
+    #[test]
+    fn a_read_is_a_request_and_carries_one_or_the_other() {
+        assert_eq!(request(r#"{"v":1,"read":"wall"}"#), Ok(Request::Wall));
+        assert_eq!(
+            request(r#"{"v":1,"read":"fleet"}"#),
+            Err(Refused("unknown read")),
+            "a client cannot read what the projection does not carry"
+        );
+        assert_eq!(
+            request(r#"{"v":1,"intent":{"verb":"pane.focus","pane":1},"read":"wall"}"#),
+            Err(Refused(
+                "a request carries \"intent\" or \"read\", not both"
+            ))
+        );
+        assert_eq!(
+            request(r#"{"v":1}"#),
+            Err(Refused("a request carries \"intent\" or \"read\""))
+        );
+    }
+
     /// The request line carries the version, and the version is compared rather than negotiated.
     #[test]
     fn the_request_line_checks_the_version() {
         let good = r#"{"v":1,"intent":{"verb":"pane.focus","pane":2}}"#;
-        assert_eq!(request(good), Ok(Intent::FocusPane(2)));
+        assert_eq!(request(good), Ok(Request::Intent(Intent::FocusPane(2))));
         assert_eq!(
             request(r#"{"v":2,"intent":{"verb":"pane.focus","pane":2}}"#),
             Err(Refused("unsupported protocol version"))
@@ -379,9 +431,9 @@ mod tests {
     /// whether silence meant success.
     #[test]
     fn a_reply_says_whether_it_worked() {
-        let ok = reply(Ok(Changed(true)));
+        let ok = reply(Answer::Changed(Ok(Changed(true))));
         assert_eq!(ok, r#"{"changed":true,"ok":true,"v":1}"#);
-        let refused = reply(Err(Refused("unknown verb")));
+        let refused = reply(Answer::Changed(Err(Refused("unknown verb"))));
         assert_eq!(refused, r#"{"ok":false,"v":1,"why":"unknown verb"}"#);
     }
 }

@@ -198,6 +198,20 @@ intent, every waterfall leaf is `pane.move`, and the one row that is not an inte
 second surface of the same menu. `control::tests::every_intent_has_its_own_verb` enumerates every variant, so a
 new one that forgets its verb is a red test rather than a document that half-describes the wall.
 
+## As built: the read half (#181)
+
+Decision 7 said a client may read a **projection** of the control state and nothing else. It exists:
+`{"v": 1, "read": "wall"}` answers with the workspaces, their names, the panes in them (id, kind, title, camera,
+selection), which is on screen, which has the keys, and what is full size — built by one function from `State`
+(`src/control/projection.rs`), so it cannot describe a wall that is not there.
+
+The line decision 7 drew is a test: the projection is serialized in a test and asserted to carry no fleet, no fix,
+no card and no story vocabulary. A client that could read where the hulls are would be the renderer decision 1
+refused to send.
+
+A request carries **an intent or a read, never both**, and the same connection answers either — a client that had
+to reconnect to look would be a client with two connections open on a one-client socket.
+
 ## Consequences for the gate
 
 - `src/control.rs` holds the wire's constants — the socket's file name and mode, the protocol version — and
