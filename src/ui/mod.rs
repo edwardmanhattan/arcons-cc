@@ -4942,10 +4942,18 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
         .as_ref()
         .and_then(crate::control::Server::next_job)
     {
-        let intent = job.intent.clone();
-        let result = crate::control::apply(state, intent);
-        controlled |= result.map(|changed| changed.0).unwrap_or(false);
-        job.answer(result);
+        // **A change or a look** (#181): both are answered here, between frames, because `State` is this
+        // thread's. A read is built from the state as it is on this frame — which is what "the wall" means.
+        use crate::control::wire::{Answer, Request};
+        let answer = match &job.request {
+            Request::Intent(intent) => {
+                let result = crate::control::apply(state, intent.clone());
+                controlled |= result.map(|changed| changed.0).unwrap_or(false);
+                Answer::Changed(result)
+            }
+            Request::Wall => Answer::Wall(crate::control::projection::of(state)),
+        };
+        job.answer(answer);
     }
     #[cfg(not(unix))]
     let controlled = false;

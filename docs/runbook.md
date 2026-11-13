@@ -269,6 +269,8 @@ arcons-cc ctl pane focus 2          # exit 0: it changed
 arcons-cc ctl workspace new         # exit 0
 arcons-cc ctl pane close 7          # exit 1 if that is the wall's last pane: the rule's name on stderr
 arcons-cc ctl surface close         # exit 2 when the display is not running
+arcons-cc ctl wall | jq .focused    # the pane that has the keys, and the whole wall's shape
+arcons-cc ctl pane close            # closes that pane: no id needed since #181
 ```
 
 `0` answered (changed, or already so), `1` refused, `2` no wall. There is no password and no port: the socket is

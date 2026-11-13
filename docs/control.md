@@ -24,7 +24,13 @@ a verb.
 {"v": 1, "intent": {"verb": "pane.focus", "pane": 2}}
 {"v": 1, "ok": true, "changed": true}
 {"v": 1, "ok": false, "why": "the last pane on the wall"}
+
+{"v": 1, "read": "wall"}
+{"v": 1, "ok": true, "wall": { … }}
 ```
+
+**One or the other, never both**: a line that changed the wall and read it at once could not say which answer the
+client is waiting for. A request with neither is refused by name.
 
 A request is refused **by name** and **on the same connection**: an unknown verb, a missing field, a wrong type or
 a rule the wall will not break all come back as `{"ok": false, "why": …}`, and the next line may be a fresh
@@ -68,6 +74,36 @@ field marked **required** is a refusal when it is missing.
 | `camera` | `{"lat": …, "lon": …, "zoom": …}` | `{"lat": -6.108, "lon": 106.91, "zoom": 11}` |
 | `content` | `{"kind": "map"}`, `{"kind": "newsroom"}`, `{"kind": "tree", "organisation": null}` or a structure id in place of `null` | |
 
+## What a client can read
+
+`{"v": 1, "read": "wall"}` answers with the wall's **projection** — the control state, and nothing else (#181).
+It is the read half of the plane, and the first thing a client should ask for.
+
+| field | meaning |
+| --- | --- |
+| `active` | the workspace on screen, as an index into `workspaces` |
+| `focused` | the pane with the keys, or `null` when the workspace on screen holds none |
+| `maximised` | the pane drawn over the wall (#85), or `null` |
+| `workspaces[]` | in chip order: `name`, `focused` (the pane it would come back to), `empty`, `panes[]` |
+| `panes[].id` | the pane's id — the thing every intent about a pane names |
+| `panes[].kind` | `map`, `tree` or `newsroom` (#116, #136) |
+| `panes[].title` | what the name plate draws: the operator's name, or the pane's number |
+| `panes[].camera` | `{lat, lon, zoom}` for a map pane, **`null` for one that projects nothing** |
+| `panes[].focused` | whether this pane has the keys — the active workspace's answer, not a remembered one |
+| `panes[].selected` | the hull whose card the pane shows, or `null` (#99) |
+
+**Absence is not zero here too** (`INV-01`): a newsroom pane's camera is `null` rather than `0, 0, 0`; a workspace
+that holds no pane is `empty: true` and still in the list with its name, because closing a workspace's last pane
+leaves it on the wall (#141); a pane with no card says `selected: null`.
+
+**What it does not carry, on purpose** (`ADR-0005` decision 7): the fleet, the fixes, the ages, the cards, the
+story text, the chain of command, the frames or the pixels. A client that could read where the hulls are would have
+the picture, which is the one thing this protocol decided not to send.
+
+```sh
+arcons-cc ctl wall | jq '.workspaces[] | {name, panes: [.panes[].kind]}'
+```
+
 ## The CLI
 
 `arcons-cc ctl` is the second client: it builds one intent, sends it, prints the answer, and exits with a code a
@@ -80,6 +116,8 @@ arcons-cc ctl workspace new
 arcons-cc ctl rename set workspace 1 "Straits watch"
 arcons-cc ctl map camera 2 -6.108,106.91,11
 arcons-cc ctl surface close
+arcons-cc ctl wall                    # the projection, as JSON
+arcons-cc ctl pane close              # the pane that has the keys, read from `wall` first
 ```
 
 | exit | meaning |
@@ -93,10 +131,9 @@ of the two gains a name the other does not have.
 
 ## What a client cannot do yet
 
-- **Read.** Every request answers "did it work"; nothing answers "what is on the wall". So a client cannot name
-  the pane that has the keys, which is why `pane.close` needs an id and the CLI has no `pane close` without one.
-  The projection — workspaces, panes, kinds, cameras, the focused pane, a pane's title, and nothing about the
-  fleet or the cards — is its own ticket, and the mobile client's first blocker (#168).
+- **Read** — beyond the projection. `read: "wall"` describes the control state (#181); a client still cannot ask
+  *what is on the wall's glass* (the hulls, the cards, the counts), and by `ADR-0005` decision 7 it should not be
+  able to: that is the picture.
 - **Point.** There is no cursor on the wall and no pointer vocabulary in this file: a client with no hand gets one
   in #167, and the menu's arrow keys in #164. `pane.split_at` is the one request that takes a point, and a client
   that has not been told the frame cannot honestly send one.

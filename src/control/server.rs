@@ -19,7 +19,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use super::{Changed, Intent, Refused, SOCKET_MODE};
+use super::{Refused, SOCKET_MODE};
 
 /// How long a client waits for the wall to answer before it is told the wall did not.
 ///
@@ -30,15 +30,17 @@ const ANSWER_WITHIN: Duration = Duration::from_secs(5);
 /// **One parsed request, waiting for the UI thread.** The reply channel is how the listener says the answer
 /// back to the client without ever touching the wall itself.
 pub struct Job {
-    pub intent: Intent,
-    answer: Sender<Result<Changed, Refused>>,
+    /// What the client asked for: a change, or a look at the wall (#181).
+    pub request: super::wire::Request,
+    answer: Sender<super::wire::Answer>,
 }
 
 impl Job {
-    /// Answer the client. Called by the UI thread after `control::apply`, and once per job.
-    pub fn answer(self, result: Result<Changed, Refused>) {
+    /// Answer the client. Called by the UI thread after `control::apply` (or after reading the projection), and
+    /// once per job.
+    pub fn answer(self, answer: super::wire::Answer) {
         // A client that hung up is not an error: the reply has nowhere to go, and the wall already changed.
-        let _ = self.answer.send(result);
+        let _ = self.answer.send(answer);
     }
 }
 
@@ -200,8 +202,8 @@ fn serve_one(stream: UnixStream, tx: &Sender<Job>, stop: &AtomicBool) -> std::io
             continue;
         }
         let answer = match super::wire::request(&line) {
-            Ok(intent) => ask_the_wall(tx, intent),
-            Err(why) => Err(why),
+            Ok(request) => ask_the_wall(tx, request),
+            Err(why) => super::wire::Answer::Changed(Err(why)),
         };
         // **A refused request is a line, never a closed connection** (`INV-07`): a client that asked for
         // something impossible can ask for something else without reconnecting.
@@ -212,23 +214,28 @@ fn serve_one(stream: UnixStream, tx: &Sender<Job>, stop: &AtomicBool) -> std::io
 }
 
 /// Hand one intent to the UI thread and wait for its answer.
-fn ask_the_wall(tx: &Sender<Job>, intent: Intent) -> Result<Changed, Refused> {
+fn ask_the_wall(tx: &Sender<Job>, request: super::wire::Request) -> super::wire::Answer {
     let (answer, reply) = mpsc::channel();
-    if tx.send(Job { intent, answer }).is_err() {
+    if tx.send(Job { request, answer }).is_err() {
         // The wall has stopped: the loop is gone, and saying so is better than a client waiting for ever.
-        return Err(Refused("the wall has stopped"));
+        return super::wire::Answer::Changed(Err(Refused("the wall has stopped")));
     }
     match reply.recv_timeout(ANSWER_WITHIN) {
-        Ok(result) => result,
-        Err(RecvTimeoutError::Timeout) => Err(Refused("the wall did not answer")),
-        Err(RecvTimeoutError::Disconnected) => Err(Refused("the wall has stopped")),
+        Ok(answer) => answer,
+        Err(RecvTimeoutError::Timeout) => {
+            super::wire::Answer::Changed(Err(Refused("the wall did not answer")))
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            super::wire::Answer::Changed(Err(Refused("the wall has stopped")))
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control::{self, LAST_PANE};
+    use crate::control::wire::Answer;
+    use crate::control::{self, Changed, Intent, LAST_PANE};
     use crate::ui::State;
 
     /// A socket in this test's own directory, so two runs of the gate cannot collide and nothing is left in the
@@ -282,9 +289,12 @@ mod tests {
         // The UI answers between frames: here that is this thread, applying to a wall of its own.
         let mut state = State::default();
         let job = wait_job(&server);
-        let intent = job.intent.clone();
+        let intent = match &job.request {
+            super::super::wire::Request::Intent(intent) => intent.clone(),
+            other => panic!("a read where a change was asked for: {other:?}"),
+        };
         let result = control::apply(&mut state, intent);
-        job.answer(result);
+        job.answer(Answer::Changed(result));
 
         let mut reply = String::new();
         BufReader::new(client)
@@ -314,11 +324,17 @@ mod tests {
         let mut state = State::default();
         let only = state.focused();
         let job = wait_job(&server);
-        assert_eq!(job.intent, Intent::ClosePane(only));
-        let intent = job.intent.clone();
+        assert_eq!(
+            job.request,
+            super::super::wire::Request::Intent(Intent::ClosePane(only))
+        );
+        let intent = match &job.request {
+            super::super::wire::Request::Intent(intent) => intent.clone(),
+            other => panic!("a read where a change was asked for: {other:?}"),
+        };
         let result = control::apply(&mut state, intent);
         assert_eq!(result, Err(Refused(LAST_PANE)));
-        job.answer(result);
+        job.answer(Answer::Changed(result));
         let mut reply = String::new();
         BufReader::new(client)
             .read_line(&mut reply)
@@ -328,6 +344,41 @@ mod tests {
             format!(r#"{{"ok":false,"v":1,"why":"{LAST_PANE}"}}"#),
             "the client gets the rule's name, not a generic failure"
         );
+    }
+
+    /// **A read is answered over the same socket, from the wall's own state** (#181): the projection a client gets
+    /// is the projection `State` describes, and it is a body rather than a `changed` flag.
+    #[test]
+    fn a_read_comes_back_as_the_walls_projection() {
+        let path = test_socket("read");
+        let server = Server::spawn(path.clone()).expect("the socket binds");
+        let mut client = UnixStream::connect(&path).expect("a client connects");
+        client
+            .write_all(b"{\"v\":1,\"read\":\"wall\"}\n")
+            .expect("the request goes");
+        let state = State::default();
+        let job = wait_job(&server);
+        assert_eq!(job.request, super::super::wire::Request::Wall);
+        let answer = Answer::Wall(crate::control::projection::of(&state));
+        job.answer(answer);
+        let mut reply = String::new();
+        BufReader::new(client)
+            .read_line(&mut reply)
+            .expect("the reply comes");
+        let value: serde_json::Value = serde_json::from_str(reply.trim()).expect("JSON");
+        assert_eq!(value["ok"], serde_json::json!(true));
+        assert_eq!(
+            value["wall"]["workspaces"].as_array().map(Vec::len),
+            Some(state.workspaces.len()),
+            "every workspace is in the projection, empty ones included"
+        );
+        assert_eq!(
+            value["wall"]["focused"],
+            serde_json::json!(state.focused()),
+            "and the pane with the keys"
+        );
+        // The read changed nothing.
+        assert_eq!(state.pane_count(), 1);
     }
 
     /// **Garbage in, a named refusal out, and the connection stays open** — a client that made a typo should
@@ -347,7 +398,7 @@ mod tests {
             .write_all(b"{\"v\":1,\"intent\":{\"verb\":\"surface.close\"}}\n")
             .expect("the second request goes");
         let job = wait_job(&server);
-        job.answer(Ok(Changed(false)));
+        job.answer(Answer::Changed(Ok(Changed(false))));
         let mut second = String::new();
         reader
             .read_line(&mut second)

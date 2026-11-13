@@ -396,11 +396,11 @@ fn the_control_document_names_exactly_the_vocabulary() {
         if !line.starts_with("| `") {
             continue;
         }
-        let Some(verb) = line
-            .split('`')
-            .nth(1)
-            .filter(|verb| verb.contains('.') && !verb.contains(' '))
-        else {
+        // A verb is `noun.verb`. The projection's table (#181) also starts its rows with a backticked field, and
+        // `panes[].id` is a dotted field name, not a verb — the brackets are what tells them apart.
+        let Some(verb) = line.split('`').nth(1).filter(|verb| {
+            verb.contains('.') && !verb.contains(' ') && !verb.contains('[') && !verb.contains(']')
+        }) else {
             continue;
         };
         let _ = index;
@@ -436,6 +436,45 @@ fn the_control_document_names_exactly_the_vocabulary() {
     assert!(
         doc.contains("A client sends intents; the wall renders"),
         "docs/control.md must say what a client is (ADR-0005's decision 1)"
+    );
+}
+
+/// **The projection's keys are the document's keys** (#181).
+///
+/// A client is written from `docs/control.md`, so a field the code sends and the document does not name is a field
+/// nobody uses, and a field the document names and the code does not send is a client that reads `undefined`. Both
+/// are checked here, from one `serde` serialization of an empty-projection's shape.
+#[test]
+fn the_projection_in_the_document_is_the_projection_the_code_sends() {
+    use arcons_cc::control::projection;
+
+    let doc = read("docs/control.md");
+    let state = arcons_cc::ui::State::default();
+    let wall = serde_json::to_value(projection::of(&state)).expect("a projection serializes");
+    let keys = |value: &serde_json::Value| -> Vec<String> {
+        value
+            .as_object()
+            .map(|object| object.keys().cloned().collect())
+            .unwrap_or_default()
+    };
+    for key in keys(&wall) {
+        assert!(
+            doc.contains(&format!("`{key}`")),
+            "docs/control.md does not document the projection's `{key}` (#181)"
+        );
+    }
+    // The panes' fields too: the first pane of the first workspace is the sample.
+    let pane = &wall["workspaces"][0]["panes"][0];
+    for key in keys(pane) {
+        assert!(
+            doc.contains(&format!("`panes[].{key}`")),
+            "docs/control.md does not document `panes[].{key}`, which the projection sends (#181)"
+        );
+    }
+    // And the read itself, so a reader finds the verb and not only its fields.
+    assert!(
+        doc.contains(r#"{"v": 1, "read": "wall"}"#),
+        "docs/control.md must show the read request itself (#181)"
     );
 }
 

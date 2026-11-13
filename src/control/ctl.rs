@@ -84,11 +84,49 @@ impl Outcome {
     }
 }
 
-/// Run one `ctl` command: parse the words, send the intent, print the answer.
+/// **What a client can be asked to do**: change the wall, or look at it (#181).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Command {
+    Change(Intent),
+    /// `ctl wall`: the projection, printed.
+    Wall,
+}
+
+/// Run one `ctl` command: parse the words, send it, print the answer.
 pub fn run(words: &[String]) -> Result<Outcome, Failure> {
-    let intent = parse(words)?;
-    let path = super::socket_path();
-    send(&path, &intent)
+    // **`pane close` with no id** (#181): the one thing a client used to have to look up in the wall's log. It
+    // reads the wall, takes the pane that has the keys, and closes that — the same two calls a hand makes, and a
+    // refusal (not a guess) when the workspace is empty.
+    if words == ["pane", "close"] {
+        let wall = wall(&super::socket_path())?;
+        let Some(focused) = wall.focused else {
+            return Err(Failure::Refused(
+                "no pane has the keys: the workspace on screen is empty".to_string(),
+            ));
+        };
+        return send(&super::socket_path(), &Intent::ClosePane(focused));
+    }
+    match command(words)? {
+        Command::Change(intent) => send(&super::socket_path(), &intent),
+        Command::Wall => {
+            let wall = wall(&super::socket_path())?;
+            // The projection is JSON because it *is* one: a client's next step is `jq`, and a table here would
+            // be a second shape to keep true.
+            let text = serde_json::to_string_pretty(&wall).map_err(|error| {
+                Failure::NoWall(format!("the wall's projection is not JSON: {error}"))
+            })?;
+            println!("{text}");
+            Ok(Outcome::Unchanged)
+        }
+    }
+}
+
+/// The words as a command: `wall` is a read, everything else is a change.
+pub fn command(words: &[String]) -> Result<Command, Failure> {
+    if words == ["wall"] {
+        return Ok(Command::Wall);
+    }
+    parse(words).map(Command::Change)
 }
 
 /// **The words as an intent.** `pane focus 2` is `Intent::FocusPane(2)`; every arm reads the arguments the verb
@@ -193,17 +231,37 @@ fn target(words: &[String]) -> Result<crate::ui::RenameTarget, Failure> {
     }
 }
 
-/// Send one intent to the wall and read its one-line answer.
-pub fn send(path: &std::path::Path, intent: &Intent) -> Result<Outcome, Failure> {
+/// **Ask the wall what it looks like** (#181): one line out, one body back.
+pub fn wall(path: &std::path::Path) -> Result<super::projection::Wall, Failure> {
+    let line = request(path, &serde_json::json!({ "v": PROTOCOL, "read": "wall" }))?;
+    let reply: serde_json::Value = serde_json::from_str(&line)
+        .map_err(|_| Failure::NoWall(format!("the wall's answer is not JSON: {line:?}")))?;
+    if reply.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+        let why = reply
+            .get("why")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("refused, without a reason");
+        return Err(Failure::Refused(why.to_string()));
+    }
+    serde_json::from_value(
+        reply
+            .get("wall")
+            .cloned()
+            .ok_or_else(|| Failure::NoWall("the wall's answer has no \"wall\"".to_string()))?,
+    )
+    .map_err(|error| Failure::NoWall(format!("the wall's projection is not one: {error}")))
+}
+
+/// One line out, one line back. The one place a socket is opened, so the path and the framing are one decision.
+fn request(path: &std::path::Path, body: &serde_json::Value) -> Result<String, Failure> {
     let mut socket = UnixStream::connect(path).map_err(|error| {
         Failure::NoWall(format!(
             "no wall at {}: {error}\n  Is the display running? `--self-check` names the socket.",
             path.display()
         ))
     })?;
-    let request = serde_json::json!({ "v": PROTOCOL, "intent": wire::to_wire(intent) }).to_string();
     socket
-        .write_all(request.as_bytes())
+        .write_all(body.to_string().as_bytes())
         .and_then(|()| socket.write_all(b"\n"))
         .map_err(|error| Failure::NoWall(format!("could not ask the wall: {error}")))?;
     let mut line = String::new();
@@ -215,6 +273,15 @@ pub fn send(path: &std::path::Path, intent: &Intent) -> Result<Outcome, Failure>
             "the wall closed the connection without answering".to_string(),
         ));
     }
+    Ok(line)
+}
+
+/// Send one intent to the wall and read its one-line answer.
+pub fn send(path: &std::path::Path, intent: &Intent) -> Result<Outcome, Failure> {
+    let line = request(
+        path,
+        &serde_json::json!({ "v": PROTOCOL, "intent": wire::to_wire(intent) }),
+    )?;
     interpret(&line)
 }
 
@@ -249,8 +316,8 @@ arcons-cc ctl <noun> <verb> [args]
 
   pane focus <id>            give a pane the keys
   pane full_size <id>        draw it over the wall, or put it back
-  pane close <id>            close a pane (the wall's last one is refused; an id, because
-                             which pane has the keys is not readable yet — see #168)
+  pane close [id]            close a pane (the wall's last one is refused). With no id, the
+                             pane that has the keys — read from `wall` (#181)
   pane split <id> [kind]     a new pane beside it: map (default), tree, newsroom
   pane open <kind>           the same, beside the focused pane
   pane move <id> <index>     carry a pane into another workspace
@@ -265,6 +332,9 @@ arcons-cc ctl <noun> <verb> [args]
   map camera <id> L,L,Z      put a pane's camera at a latitude, longitude and zoom
   surface settings           open the settings sheet
   surface close              dismiss one surface (what Escape does)
+
+  wall                       print the wall's projection as JSON (workspaces, panes,
+                             cameras, focus) — what a client can *read* (#181)
 
 The socket is $XDG_RUNTIME_DIR/arcons-cc/control.sock. Exit 0 answered, 1 refused (the
 reason on stderr), 2 no wall. docs/control.md is the reference.
@@ -304,7 +374,10 @@ mod tests {
         ];
         let mut reached = Vec::new();
         for case in cases {
-            let intent = parse(&words(case)).unwrap_or_else(|error| panic!("{case}: {error}"));
+            let intent = match command(&words(case)) {
+                Ok(Command::Change(intent)) => intent,
+                other => panic!("{case}: {other:?}"),
+            };
             let known: Vec<&'static str> = crate::control::vocabulary()
                 .iter()
                 .map(Intent::verb)
@@ -345,7 +418,7 @@ mod tests {
                 serde_json::json!({ "v": PROTOCOL, "intent": wire::to_wire(&intent) }).to_string();
             assert_eq!(
                 wire::request(&line),
-                Ok(intent.clone()),
+                Ok(crate::control::wire::Request::Intent(intent.clone())),
                 "{case} did not survive the wire"
             );
         }
