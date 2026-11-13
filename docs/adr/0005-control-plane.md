@@ -167,6 +167,37 @@ The decision is revisited — deliberately, with a ticket — when **either** is
 Until one of those is true, a second process is a protocol to maintain with no customer, and this ADR says so
 rather than leaving it to be discovered.
 
+## As built: the vocabulary, and what it does not cover (#170)
+
+`src/control.rs` now holds the decision's shape: `Intent` (sixteen variants over panes, workspaces, the map and
+surfaces), `apply(state, intent) -> Result<Changed, Refused>`, and `Intent::verb()` — the wire name, in one
+place, so `docs/control.md` (#165) and the CLI cannot spell one differently. Every input the wall has goes
+through `apply`: the menu's rows, `on_key`'s Escape, the chips, the pane's name plate and full-size toggle, the
+header's tree/newsroom/settings words, the wheel, a press on the water, a press on a hull.
+
+**Three things are deliberately outside it**, and this is the part a later reader will want when they find a
+direct mutation and wonder whether the rule was broken:
+
+- **The pointer's held gestures** — a pane in the air, a border being dragged, the menu opened *at a position*,
+  the filter panel anchored to its toggle, the drag that moves a camera per event because the map thread must
+  follow the hand. They are surfaces the wall draws around a pointer; a client with no pointer gets them from the
+  cursor vocabulary (#167), not from a second spelling of them here.
+- **Data folding** — a fix from `live-feed`, a reply from the reads thread: the wall hearing from Minos, not a
+  client's ask.
+- **The sheet's own editing** — `TextEdit` in the rename field is the operator's keyboard, and `commit_rename`
+  and `Intent::Rename` share the one function that applies a name (`ui::rename_to`), so a typed name and a sent
+  name land identically.
+
+**The refusal names are the ADR's and the UI's, not a new set**: `ClosePane` on the last pane returns
+`"the last pane on the wall"` from `State::can_close`, the predicate the menu row is built from. `"no such pane"`,
+`"no such workspace"`, `"the pane is already in that workspace"`, `"the tiling refused the pane"`,
+`"the pane has no frame yet"` — each is one reason a client can act on.
+
+**The table test** is `ui::tests::every_menu_row_is_an_intent_or_a_surface`: every row a menu offers is an
+intent, every waterfall leaf is `pane.move`, and the one row that is not an intent is the trigger that opens a
+second surface of the same menu. `control::tests::every_intent_has_its_own_verb` enumerates every variant, so a
+new one that forgets its verb is a red test rather than a document that half-describes the wall.
+
 ## Consequences for the gate
 
 - `src/control.rs` holds the wire's constants — the socket's file name and mode, the protocol version — and
