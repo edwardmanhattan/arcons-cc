@@ -455,6 +455,10 @@ pub struct State {
     /// requests this thread answers between frames. `None` in a capture (a scene opens nothing, `INV-11`) and
     /// when the plane is turned off — so a wall with no socket is a wall nothing can be driven through, and
     /// `--self-check` says which it is.
+    ///
+    /// Unix only: the transport is a unix socket, and a Windows wall has no plane until someone decides on a
+    /// named pipe (`src/control.rs` says the same where the modules are gated).
+    #[cfg(unix)]
     pub control: Option<crate::control::Server>,
     /// The socket actor, when a credential was configured. `None` means the wall is read-only.
     pub live: Option<LiveThread>,
@@ -606,6 +610,7 @@ impl Default for State {
 
             #[cfg(feature = "map")]
             cadenced: None,
+            #[cfg(unix)]
             control: None,
             live: None,
             backend: None,
@@ -4759,23 +4764,32 @@ fn setup(state: &mut State, waker: rune::Waker) {
     // **The control plane** (#165). A capture returned above: `INV-11` forbids a scene reading or writing a
     // file, and a socket is both. A wall can turn the plane off (`ARCONS_CONTROL=0`) and says so in one line,
     // because "a client cannot connect" is otherwise a mystery with a log to read.
-    if std::env::var("ARCONS_CONTROL").ok().as_deref() == Some("0") {
-        tracing::info!("control plane off: ARCONS_CONTROL=0");
-    } else {
-        let path = crate::control::socket_path();
-        match crate::control::Server::spawn(path.clone()) {
-            Ok(server) => {
-                tracing::info!(
-                    "control plane listening on {} (protocol {}, mode 0600)",
-                    server.path().display(),
-                    crate::control::PROTOCOL
-                );
-                state.control = Some(server);
-            }
-            // A wall with no socket is still a wall: the picture is the job, and a client that cannot
-            // connect is told why here rather than discovering it as a timeout.
-            Err(problem) => {
-                tracing::warn!("control plane not started at {}: {problem}", path.display())
+    #[cfg(not(unix))]
+    {
+        // **A unix socket is the transport** (#165), so a Windows wall has no plane until someone decides on a
+        // named pipe. Saying it once here is better than a client discovering it as a timeout.
+        tracing::info!("control plane off: this platform has no unix socket");
+    }
+    #[cfg(unix)]
+    {
+        if std::env::var("ARCONS_CONTROL").ok().as_deref() == Some("0") {
+            tracing::info!("control plane off: ARCONS_CONTROL=0");
+        } else {
+            let path = crate::control::socket_path();
+            match crate::control::Server::spawn(path.clone()) {
+                Ok(server) => {
+                    tracing::info!(
+                        "control plane listening on {} (protocol {}, mode 0600)",
+                        server.path().display(),
+                        crate::control::PROTOCOL
+                    );
+                    state.control = Some(server);
+                }
+                // A wall with no socket is still a wall: the picture is the job, and a client that cannot
+                // connect is told why here rather than discovering it as a timeout.
+                Err(problem) => {
+                    tracing::warn!("control plane not started at {}: {problem}", path.display())
+                }
             }
         }
     }
@@ -4854,7 +4868,9 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     // would block the frame, and an `apply` on the listener's thread would be two threads changing one wall.
     // The queue is drained, not waited on: a wall that waited for a client would freeze for one that has not
     // finished typing.
+    #[cfg(unix)]
     let mut controlled = false;
+    #[cfg(unix)]
     while let Some(job) = state
         .control
         .as_ref()
@@ -4865,6 +4881,8 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
         controlled |= result.map(|changed| changed.0).unwrap_or(false);
         job.answer(result);
     }
+    #[cfg(not(unix))]
+    let controlled = false;
     let mut changed = drain_socket(state);
     changed |= controlled;
     changed |= drain_card_reads(state);

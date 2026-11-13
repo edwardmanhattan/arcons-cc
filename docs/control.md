@@ -18,6 +18,7 @@ a verb.
 | protocol | `1`, on every message. Another number is refused, never negotiated |
 | off switch | `ARCONS_CONTROL=0` turns the plane off and says so in one log line |
 | captures | a headless scene binds nothing (`INV-11`): a capture opens no socket |
+| platforms | **unix only today.** Windows compiles the vocabulary and has no plane: a named pipe is a decision nobody has taken, and `--self-check` says so rather than pretending |
 
 ```json
 {"v": 1, "intent": {"verb": "pane.focus", "pane": 2}}

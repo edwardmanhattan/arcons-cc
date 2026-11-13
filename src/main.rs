@@ -242,6 +242,14 @@ fn main() -> ExitCode {
         // **The second client** (#165): one intent over the control socket, and an exit code a script can
         // branch on. It never opens a window and never reads the configuration — a client should not need the
         // wall's credentials to press a button on the wall.
+        #[cfg(not(unix))]
+        config::Command::Ctl(_) => {
+            eprintln!(
+                "arcons-cc ctl: the control plane is a unix socket, and this platform has none"
+            );
+            ExitCode::from(2)
+        }
+        #[cfg(unix)]
         config::Command::Ctl(words) => match arcons_cc::control::ctl::run(&words) {
             Ok(outcome) => {
                 if outcome == arcons_cc::control::ctl::Outcome::Unchanged {

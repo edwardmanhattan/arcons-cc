@@ -447,7 +447,9 @@ fn the_control_document_names_exactly_the_vocabulary() {
 /// literals, compared with the **code's** constants: it fails when either moves without the other.
 #[test]
 fn the_control_plane_adr_quotes_the_wire_the_code_uses() {
-    use arcons_cc::control::{PROTOCOL, SOCKET_MODE, SOCKET_NAME};
+    #[cfg(unix)]
+    use arcons_cc::control::SOCKET_MODE;
+    use arcons_cc::control::{PROTOCOL, SOCKET_NAME};
 
     let adr = read("docs/adr/0005-control-plane.md");
     let source = read("src/control.rs");
@@ -462,6 +464,7 @@ fn the_control_plane_adr_quotes_the_wire_the_code_uses() {
         "the ADR must give the socket's full path, not just its file name (#171): a client that guesses \
          the directory drives nothing"
     );
+    #[cfg(unix)]
     assert!(
         adr.contains(&format!("{SOCKET_MODE:04o}")),
         "docs/adr/0005-control-plane.md does not state the socket's mode ({SOCKET_MODE:04o}) — and the mode \

@@ -455,6 +455,12 @@ pub fn offline(args: &Args, env: &Env, out: &mut dyn std::fmt::Write) -> Outcome
 ///
 /// Three states and no fourth: off by configuration, listening (a client can drive this wall), or no socket where
 /// one is expected (the display is not running, or it could not bind — the wall's own log says which).
+#[cfg(not(unix))]
+fn control_row() -> String {
+    "not available on this platform: the control plane is a unix socket".to_string()
+}
+
+#[cfg(unix)]
 fn control_row() -> String {
     if std::env::var("ARCONS_CONTROL").ok().as_deref() == Some("0") {
         return "off (ARCONS_CONTROL=0)".to_string();

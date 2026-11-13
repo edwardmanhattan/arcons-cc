@@ -30,10 +30,18 @@
 use crate::map::geometry::Camera;
 use crate::ui::{self, PaneContent, RenameTarget, State, ViewId};
 
-pub mod ctl;
-pub mod server;
+// **The transport is a unix socket**, so the listener, the wire it speaks and the CLI that talks to it are
+// behind `unix` (#165). The vocabulary above is not: `Intent` and `apply` are the wall's own state machine, and
+// a Windows build (which the gate's `check` job compiles) still has them — it simply has no plane to drive them
+// through until someone decides on a named pipe.
 pub mod wire;
 
+#[cfg(unix)]
+pub mod ctl;
+#[cfg(unix)]
+pub mod server;
+
+#[cfg(unix)]
 pub use server::{Job, Server};
 
 /// **The protocol's version**, on every message in both directions (`{"v": 1, …}`).
@@ -52,6 +60,7 @@ pub const SOCKET_NAME: &str = "control.sock";
 /// **This is the credential** (`INV-08`). There is no token, no handshake and no secret to log, so the file's
 /// permissions are what decide who may drive the wall — created at this mode, never chmod'ed after the fact
 /// (a window between `create` and `chmod` is a window a local process can win).
+#[cfg(unix)]
 pub const SOCKET_MODE: u32 = 0o600;
 
 /// The refusal a `ClosePane` earns on the wall's last pane (#141's predicate, named once).
@@ -289,6 +298,7 @@ fn no_such(target: RenameTarget) -> &'static str {
 /// and it is cleared at logout, so a stale socket does not survive a reboot. A container or a systemd unit
 /// without `XDG_RUNTIME_DIR` would otherwise have no wall to drive, so the fallback keeps the plane reachable
 /// there; either way the directory is created `0700` before the socket is bound (#165).
+#[cfg(unix)]
 pub fn socket_path() -> std::path::PathBuf {
     socket_path_in(std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from))
 }
@@ -298,6 +308,7 @@ pub fn socket_path() -> std::path::PathBuf {
 /// Split out so the branch is a **test** rather than a machine's luck — a test that reads the environment can
 /// only assert what this machine happens to have, and a relative `XDG_RUNTIME_DIR` must not resolve against the
 /// working directory (a wall started from `/` would bind `./arcons-cc/control.sock`).
+#[cfg(unix)]
 fn socket_path_in(run: Option<std::path::PathBuf>) -> std::path::PathBuf {
     match run.filter(|path| path.is_absolute()) {
         Some(dir) => dir.join("arcons-cc").join(SOCKET_NAME),
@@ -356,6 +367,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     /// The run directory, when it is one, is where the socket goes: per-user, per-machine, cleared at logout.
+    #[cfg(unix)]
     #[test]
     fn the_socket_lives_in_the_run_directory() {
         let path = socket_path_in(Some(PathBuf::from("/run/user/1000")));
@@ -368,6 +380,7 @@ mod tests {
 
     /// A wall in a container or a unit without a run directory still has a control plane; it just lives beside
     /// the configuration.
+    #[cfg(unix)]
     #[test]
     fn a_missing_run_directory_falls_back_to_the_config_directory() {
         let path = socket_path_in(None);
@@ -381,6 +394,7 @@ mod tests {
 
     /// A relative `XDG_RUNTIME_DIR` is not a directory the wall may create: it would resolve against whatever
     /// the working directory happened to be.
+    #[cfg(unix)]
     #[test]
     fn a_relative_run_directory_is_ignored() {
         let path = socket_path_in(Some(PathBuf::from("run/user/1000")));
@@ -396,16 +410,19 @@ mod tests {
     fn the_wire_constants_are_what_a_client_is_told() {
         assert_eq!(PROTOCOL, 1, "the protocol's version is on every message");
         assert_eq!(SOCKET_NAME, "control.sock");
-        assert_eq!(
-            SOCKET_MODE, 0o600,
-            "the socket is the credential: owner read and write, nothing else"
-        );
         // A mode that lets the group or the world write is a wall anyone on the machine can drive (`INV-08`).
-        assert_eq!(
-            SOCKET_MODE & 0o077,
-            0,
-            "no group or other bits on the control socket"
-        );
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                SOCKET_MODE, 0o600,
+                "the socket is the credential: owner read and write, nothing else"
+            );
+            assert_eq!(
+                SOCKET_MODE & 0o077,
+                0,
+                "no group or other bits on the control socket"
+            );
+        }
     }
 
     /// **The refusal the ADR quotes, from the predicate the menu row is built from** (#141, #170).
