@@ -185,6 +185,12 @@ pub fn run(args: &Args, env: &Env, world: &dyn World, out: &mut dyn std::fmt::Wr
         saved.map(|saved| saved.workspace.len()).unwrap_or(0)
     );
 
+    // **The control plane** (#165): a fact, not a verdict — a wall that is not running cannot be driven,
+    // and that is not a broken configuration. The row says the path, because the path is what a client has to
+    // find, and the three states are the three things an operator can do something about.
+    let control = control_row();
+    let _ = writeln!(out, "  {:<11} ok  {}", "control", control);
+
     match world.sign_in(&config) {
         Ok(detail) => {
             let _ = writeln!(out, "  {:<11} ok  {detail}", "login");
@@ -443,6 +449,35 @@ pub fn offline(args: &Args, env: &Env, out: &mut dyn std::fmt::Write) -> Outcome
         }
     }
     run(args, env, &Offline, out)
+}
+
+/// What the control plane's row says, in one line (#165).
+///
+/// Three states and no fourth: off by configuration, listening (a client can drive this wall), or no socket where
+/// one is expected (the display is not running, or it could not bind — the wall's own log says which).
+#[cfg(not(unix))]
+fn control_row() -> String {
+    "not available on this platform: the control plane is a unix socket".to_string()
+}
+
+#[cfg(unix)]
+fn control_row() -> String {
+    if std::env::var("ARCONS_CONTROL").ok().as_deref() == Some("0") {
+        return "off (ARCONS_CONTROL=0)".to_string();
+    }
+    let path = crate::control::socket_path();
+    if !path.exists() {
+        return format!(
+            "no wall listening at {} (start the display)",
+            path.display()
+        );
+    }
+    match std::os::unix::net::UnixStream::connect(&path) {
+        Ok(_) => format!("listening at {}", path.display()),
+        // A socket nobody answers on is a wall that was killed rather than stopped; the next launch removes it
+        // (`Server::spawn`), so this row is a hint to start the display, not a repair.
+        Err(_) => format!("stale socket at {} (no wall answers)", path.display()),
+    }
 }
 
 /// Seconds, for the token line in a runbook.

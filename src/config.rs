@@ -50,10 +50,12 @@ OPTIONS:
     --probe-at L,L,Z    the camera to probe (default the wall's start camera)
     --version           print the version
     -h, --help          this text
+
+  arcons-cc ctl <noun> <verb> [args]   drive a running wall (see docs/control.md)
 ";
 
 /// What the process was asked to do.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     /// Open the display.
     Run,
@@ -74,6 +76,10 @@ pub enum Command {
     /// Compare two captures within a stated tolerance, and exit 1 if the difference is a change rather
     /// than a rounding difference. `scripts/capture.sh` uses it against a golden.
     Compare,
+    /// **Drive a running wall** (#165): one intent over the control socket, then exit 0 (answered), 1
+    /// (refused, the rule's name on stderr) or 2 (no wall). The words after `ctl` are the noun and verb the
+    /// vocabulary names — `pane focus 2`, `workspace new`, `surface close`.
+    Ctl(Vec<String>),
 }
 
 /// How the window should open. `--fullscreen` wins over `--window-size`.
@@ -165,6 +171,14 @@ impl Args {
         let mut argv = argv.into_iter();
         while let Some(arg) = argv.next() {
             match arg.as_str() {
+                // **`ctl` is a client, not the wall** (#165): everything after it is that client's command
+                // line, so it is taken whole rather than picked apart by this parser. It has to come first —
+                // `arcons-cc ctl pane move 2 1` is four words the CLI owns, and a flag parser that swallowed
+                // one of them would send a different intent than the operator typed.
+                "ctl" => {
+                    args.command = Command::Ctl(argv.by_ref().collect());
+                    break;
+                }
                 "--version" | "-V" => args.command = Command::Version,
                 "--help" | "-h" => args.command = Command::Help,
                 "--assert" => {

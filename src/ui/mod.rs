@@ -451,6 +451,15 @@ pub struct State {
     /// Whether the first map frame's camera has been reported. One log line per process, so a wall showing
     /// the wrong sea leaves a trace rather than a screenshot to argue with (`#56`).
     pub camera_reported: bool,
+    /// **The control plane's listener** (#165): the socket a client drives the wall through, and the queue of
+    /// requests this thread answers between frames. `None` in a capture (a scene opens nothing, `INV-11`) and
+    /// when the plane is turned off — so a wall with no socket is a wall nothing can be driven through, and
+    /// `--self-check` says which it is.
+    ///
+    /// Unix only: the transport is a unix socket, and a Windows wall has no plane until someone decides on a
+    /// named pipe (`src/control.rs` says the same where the modules are gated).
+    #[cfg(unix)]
+    pub control: Option<crate::control::Server>,
     /// The socket actor, when a credential was configured. `None` means the wall is read-only.
     pub live: Option<LiveThread>,
     /// The reads thread: the card asks it for identity, commander and specification.
@@ -601,6 +610,8 @@ impl Default for State {
 
             #[cfg(feature = "map")]
             cadenced: None,
+            #[cfg(unix)]
+            control: None,
             live: None,
             backend: None,
             viewpoint_pane: None,
@@ -1959,18 +1970,37 @@ pub(crate) fn open_pane_focused(state: &mut State, content: PaneContent) -> Opti
 }
 
 /// Open a pane of this kind beside `target`, asking whatever that kind needs on the frame it is made.
+///
+/// **An empty workspace has nothing to split** (#141's state), so the pane it opens is that workspace's first
+/// rather than a silent no-op. Before #165 the header's tree and newsroom controls did nothing there — which
+/// looks exactly like a broken button — and a CLI found it in the first minute.
 pub(crate) fn open_pane_beside(
     state: &mut State,
     target: ViewId,
     content: PaneContent,
 ) -> Option<ViewId> {
     let camera = state.camera_of(target);
-    let id = state.split_pane_as(target, camera, content.clone())?;
+    let id = if state.layout().is_none() {
+        let id = state.allocate_pane();
+        let pane = match content.clone() {
+            PaneContent::Map => Pane::new(id, camera),
+            PaneContent::Tree { organisation } => Pane::tree(id, camera, organisation),
+            PaneContent::Newsroom => Pane::newsroom(id, camera),
+        };
+        let workspace = state.active_mut();
+        workspace.layout = Some(Layout::single_with(id));
+        workspace.panes.push(pane);
+        state.focus_pane(id);
+        id
+    } else {
+        state.split_pane_as(target, camera, content.clone())?
+    };
     match content {
         PaneContent::Map => {}
         PaneContent::Tree { .. } => ask_tree_reads(state),
         PaneContent::Newsroom => ask_newsroom_page_one(state, id),
     }
+    state.arranged();
     state.layout_dirty = true;
     Some(id)
 }
@@ -4731,6 +4761,38 @@ fn setup(state: &mut State, waker: rune::Waker) {
         }
         return;
     }
+    // **The control plane** (#165). A capture returned above: `INV-11` forbids a scene reading or writing a
+    // file, and a socket is both. A wall can turn the plane off (`ARCONS_CONTROL=0`) and says so in one line,
+    // because "a client cannot connect" is otherwise a mystery with a log to read.
+    #[cfg(not(unix))]
+    {
+        // **A unix socket is the transport** (#165), so a Windows wall has no plane until someone decides on a
+        // named pipe. Saying it once here is better than a client discovering it as a timeout.
+        tracing::info!("control plane off: this platform has no unix socket");
+    }
+    #[cfg(unix)]
+    {
+        if std::env::var("ARCONS_CONTROL").ok().as_deref() == Some("0") {
+            tracing::info!("control plane off: ARCONS_CONTROL=0");
+        } else {
+            let path = crate::control::socket_path();
+            match crate::control::Server::spawn(path.clone()) {
+                Ok(server) => {
+                    tracing::info!(
+                        "control plane listening on {} (protocol {}, mode 0600)",
+                        server.path().display(),
+                        crate::control::PROTOCOL
+                    );
+                    state.control = Some(server);
+                }
+                // A wall with no socket is still a wall: the picture is the job, and a client that cannot
+                // connect is told why here rather than discovering it as a timeout.
+                Err(problem) => {
+                    tracing::warn!("control plane not started at {}: {problem}", path.display())
+                }
+            }
+        }
+    }
     // A stop has to reach the loop even when nothing is drawing (`#43`): the flag alone is unread while
     // the event loop waits for an event no compositor is going to send.
     let stopping = waker.clone();
@@ -4802,7 +4864,27 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     if state.save_due() {
         state.save_layout();
     }
+    // **The control plane's requests, applied here and nowhere else** (#165): a socket read on this thread
+    // would block the frame, and an `apply` on the listener's thread would be two threads changing one wall.
+    // The queue is drained, not waited on: a wall that waited for a client would freeze for one that has not
+    // finished typing.
+    #[cfg(unix)]
+    let mut controlled = false;
+    #[cfg(unix)]
+    while let Some(job) = state
+        .control
+        .as_ref()
+        .and_then(crate::control::Server::next_job)
+    {
+        let intent = job.intent.clone();
+        let result = crate::control::apply(state, intent);
+        controlled |= result.map(|changed| changed.0).unwrap_or(false);
+        job.answer(result);
+    }
+    #[cfg(not(unix))]
+    let controlled = false;
     let mut changed = drain_socket(state);
+    changed |= controlled;
     changed |= drain_card_reads(state);
     changed |= tick_card_age(state);
     // **A newsroom pane restored from the file has asked for nothing yet** (#153): one read, on this
@@ -7145,7 +7227,7 @@ mod tests {
 
         // Every verb the menu produces is one the vocabulary's own table names, so a renamed intent cannot leave
         // a row pointing at a name nothing answers to.
-        let known: Vec<&'static str> = crate::control::test_intents()
+        let known: Vec<&'static str> = crate::control::vocabulary()
             .iter()
             .map(crate::control::Intent::verb)
             .collect();
