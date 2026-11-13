@@ -1295,6 +1295,84 @@ fn workspaces_close(state: &mut State) {
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// The client's cursor (#167)
+// ---------------------------------------------------------------------------------------------------------
+
+/// The hull a cursor scene points at: a fresh fix, so it is always drawn.
+pub const CURSOR_UNIT: i64 = LIVE_UNIT;
+
+/// Where a hull's marker sits, in the **picture panel's** points, before anything has been laid out.
+///
+/// A scene runs before `setup`, so the pane has no frame yet; this projects against the frame `setup` will make
+/// for a one-pane capture (the window's size, at the pane's camera) with the same `markers::place` the drawing
+/// uses. A scene that guessed a coordinate would be a capture of its own guess.
+fn cursor_point(state: &State, id_unit: i64) -> Option<(f32, f32)> {
+    let pane = state.pane(state.focused())?;
+    let frame = crate::map::geometry::Rendered {
+        camera: pane.camera,
+        width: crate::ui::tokens::WINDOW_SIZE.0 as u32,
+        height: crate::ui::tokens::WINDOW_SIZE.1 as u32,
+    };
+    let marker = crate::ui::markers::place(
+        &state.picture,
+        &frame,
+        &pane.view.filter,
+        state.now(),
+        state.stale_after,
+        pane.view.range,
+        &|unit| state.sizes.get(&unit).copied(),
+    )
+    .into_iter()
+    .find(|marker| marker.id_unit == id_unit)?;
+    Some((marker.x as f32, marker.y as f32))
+}
+
+/// A point to the left of and below `at`, where no marker and no card is: the markers are ~80 points apart, and
+/// the card opens to the right of the hull, so forty left and twenty down is water.
+fn beside(at: (f32, f32)) -> (f32, f32) {
+    (at.0 - 40.0, at.1 + 20.0)
+}
+
+/// The `cursor-hull` scene: **a client's cursor over a hull, and its press** (#167).
+///
+/// The steps are `cursor.move`, `cursor.press`, `cursor.release` at 1.90–1.94 seconds, so the capture at 2 s is a
+/// cursor that has just let go: drawn, with the card its press opened behind it. Everything reaching the wall goes
+/// through `control::apply`, so what the capture proves is that a *remote* press selects a hull, not that the
+/// scene can call `select_in`.
+fn cursor_hull(state: &mut State) {
+    load(state);
+    let Some(at) = cursor_point(state, CURSOR_UNIT) else {
+        return;
+    };
+    state.pending_intents = vec![
+        (1.90, crate::control::Intent::CursorMove { at }),
+        (1.92, crate::control::Intent::CursorPress),
+        (1.94, crate::control::Intent::CursorRelease),
+        // A press, a release, and the point moves off the hull: the capture shows a cursor that is not hiding the
+        // hull it just pressed, and the ring is drawn over water where an assertion can see it.
+        (1.96, crate::control::Intent::CursorMove { at: beside(at) }),
+    ];
+}
+
+/// The `cursor-idle` scene: **the same wall, a cursor that has faded** (#167).
+///
+/// The same three steps at 0.20–0.24 s: the card is still open — the press happened and nothing undid it — and the
+/// cursor is gone, because four seconds of stillness is what `Cursor::FADE` says. The pair is the fade's proof:
+/// one line apart in the state, far apart in the picture.
+fn cursor_idle(state: &mut State) {
+    load(state);
+    let Some(at) = cursor_point(state, CURSOR_UNIT) else {
+        return;
+    };
+    state.pending_intents = vec![
+        (0.20, crate::control::Intent::CursorMove { at }),
+        (0.22, crate::control::Intent::CursorPress),
+        (0.24, crate::control::Intent::CursorRelease),
+        (0.26, crate::control::Intent::CursorMove { at: beside(at) }),
+    ];
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Intent scripts (#172): a scene that drives the wall **only** through the control plane.
 // ---------------------------------------------------------------------------------------------------------
 
@@ -1368,7 +1446,13 @@ pub fn apply_due_intents(state: &mut State, now: f64) -> bool {
         };
         let intent = intent.clone();
         state.intents_applied += 1;
-        match crate::control::apply(state, intent) {
+        // **The step happens at its own frame** (#172, #167): a cursor's fade, an age or a clock read in the step
+        // must see the time the file says, not the end of the script. The clock is restored after each one.
+        let clock = state.frame_clock();
+        state.set_frame_clock(*at);
+        let result = crate::control::apply(state, intent);
+        state.set_frame_clock(clock);
+        match result {
             Ok(applied) => changed |= applied.0,
             // A refused step is printed and the script goes on: a capture whose wall did not reach the state the
             // script meant differs from its golden, and the log says which step refused and why.
@@ -1464,6 +1548,9 @@ pub const SCENES: &[Scene] = &[
     // The same wall, reached only through the control plane (#172): the API path draws the pointer path's
     // picture, and the golden is the same one.
     ("workspaces-new-remote", workspaces_new_remote),
+    // The client's cursor (#167): a remote's press on a hull, and the same wall after its cursor faded.
+    ("cursor-hull", cursor_hull),
+    ("cursor-idle", cursor_idle),
     // A workspace that is not on screen can be named (#154): the sheet is the title's, offered on a chip.
     ("workspaces-rename-hidden", workspaces_rename_hidden),
 ];
@@ -1486,6 +1573,9 @@ pub fn state_for(name: &str) -> State {
             names().join(", ")
         ),
     }
+    // **The frame a capture gives a one-pane wall** (#172): `setup` seeds it, and this is the same rule, so a
+    // test that asks a scene for its state asks for the wall the capture renders — not one without a frame.
+    crate::ui::seed_single_pane_frame(&mut state);
     // **A scene with an intent script is the state its whole script reaches** (#172): a capture at `--at 2` is
     // after every step, so a test that asks a scene for its state asks for the end of the script — otherwise the
     // assertions would be about a wall the capture never shows.
@@ -1500,6 +1590,55 @@ pub fn names() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A remote's press on a hull opens its card** (#167): the scene's three cursor intents reach the wall
+    /// through `control::apply`, the press lands on the marker the drawing would put there, and the cursor is
+    /// still visible a sixth of a second later.
+    #[test]
+    fn the_cursor_scene_presses_the_hull_it_points_at() {
+        let state = state_for("cursor-hull");
+        let focused = state.focused();
+        assert_eq!(
+            state.selected_in(focused),
+            Some(CURSOR_UNIT),
+            "the press did not select the hull under the cursor"
+        );
+        assert!(
+            state.card_in(focused).is_some(),
+            "and a selected hull has a card"
+        );
+        let cursor = state.cursor.expect("the scene placed a cursor");
+        // The capture's clock: `scripts/capture.sh` renders every scene at `--at 2`, and that is the frame the
+        // assertion is about. The scene moved the cursor at 1.94 s, so a sixth of a second before the capture.
+        const CAPTURE_AT: f64 = 2.0;
+        assert!(
+            cursor.visible_at(CAPTURE_AT),
+            "a cursor that moved {:.2} s before the capture is drawn (FADE {})",
+            CAPTURE_AT - cursor.moved_at,
+            crate::ui::Cursor::FADE
+        );
+    }
+
+    /// **The faded one is the same wall with no pointer** (#167): the card the press opened is still there, and
+    /// the cursor is not drawn.
+    #[test]
+    fn the_idle_cursor_scene_is_the_same_wall_after_the_fade() {
+        let state = state_for("cursor-idle");
+        let focused = state.focused();
+        assert_eq!(
+            state.selected_in(focused),
+            Some(CURSOR_UNIT),
+            "the press happened and nothing undid it"
+        );
+        let cursor = state.cursor.expect("the scene placed a cursor");
+        const CAPTURE_AT: f64 = 2.0;
+        assert!(
+            !cursor.visible_at(CAPTURE_AT),
+            "the cursor moved at {:.2} s and the capture is at {CAPTURE_AT} s: {:.2} s is the fade",
+            cursor.moved_at,
+            CAPTURE_AT - cursor.moved_at
+        );
+    }
 
     /// **A scene driven only by intents ends where its pointer twin ends** (#172): same workspaces, same panes in
     /// them, same focus, same name — and the same picture, which is what `fixtures/golden` compares.
@@ -1809,6 +1948,8 @@ mod tests {
                 "workspaces-new",
                 "workspaces-close",
                 "workspaces-new-remote",
+                "cursor-hull",
+                "cursor-idle",
                 "workspaces-rename-hidden"
             ]
         );

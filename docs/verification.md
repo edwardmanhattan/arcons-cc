@@ -141,6 +141,7 @@ cargo run -- --scenes            # empty · picture · stale · card-open · pho
                                  # workspaces-named · workspaces-menu · workspaces-moved
                                  # workspaces-new · workspaces-close
                                  # workspaces-new-remote
+                                 # cursor-hull · cursor-idle
                                  # workspaces-rename-hidden
 scripts/verify.sh                # renders and asserts each one
 ```
@@ -335,6 +336,19 @@ first leaf, one fewer pane in total, and — in pixels — the focus edge on the
 and none on the left's. The two panes share their top and bottom edges with the picture panel, so the
 honest pixel is a vertical one; a ring drawn on the wrong pane, or a wall that forgot `Layout::focused()`
 and landed on the first leaf, is red.
+
+`cursor-hull` and `cursor-idle` are **a client's cursor** (#167): a remote's point on a hull, its press, its
+release, and its point moving off the hull — every step a `cursor.move`, `cursor.press` or `cursor.release` intent
+applied on the frame clock. The pixel claim is a colour the wall uses for nothing else: the ring is
+`tokens::cursor_ink()`, so `cursor-hull` must have that ink inside the picture and `cursor-idle` must have none,
+while the card its press opened is in both. The two scenes differ in *when* the steps happen — 1.90 s versus
+0.20 s — so the pair is the fade's proof, and `cargo test ui::tests` holds the half a rasteriser cannot answer for:
+a visible cursor is an element, a faded one is not.
+
+**They found a real bug on the way in.** A capture is a wall that draws only when something changes, and a cursor
+fading changes nothing else — so the ring stayed on screen at the last place it was drawn, for ever. `poll` now
+dirty the layout on the frame where visibility flips, which is the one frame the fade needs. On a wall, that bug is
+a pointer frozen over a hull until something else moves.
 
 `workspaces-new-remote` is **the same wall as `workspaces-new`, reached only through the control plane** (#172):
 the scene builds `load`'s one map pane and nothing else, and `fixtures/intents/workspaces-new-remote.json` does the

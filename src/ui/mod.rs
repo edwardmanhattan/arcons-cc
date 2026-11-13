@@ -451,6 +451,9 @@ pub struct State {
     /// Whether the first map frame's camera has been reported. One log line per process, so a wall showing
     /// the wrong sea leaves a trace rather than a screenshot to argue with (`#56`).
     pub camera_reported: bool,
+    /// **The client's cursor** (#167): where a remote is pointing, when it last moved, and whether it is pressing.
+    /// `None` until a client points — a wall nobody is driving has no cursor to draw.
+    pub cursor: Option<Cursor>,
     /// **An intent script waiting for its frame** (#172): a scene that drives the wall **only** through the
     /// control plane carries its steps here, and `poll` applies the ones that are due. Empty on a wall — nothing
     /// scripts a wall — which is why it is a field on the state and not an environment variable.
@@ -586,6 +589,56 @@ pub struct State {
     asked_tni: bool,
 }
 
+/// **A cursor the wall owns** (#167): where a client is pointing, in the picture panel's points.
+///
+/// The wall's own pointer is the OS's — it belongs to whichever hand is on the glass. A client that has no hand (a
+/// remote, a CLI, a test) needs a pointer the *wall* keeps, so that "press here" means the same thing whatever
+/// produced it. This is that value: a point, whether its button is down, and when it last moved.
+///
+/// **It fades.** A cursor nobody has moved for [`CURSOR_FADE`] is not drawn: a stray pointer on a wall at 3 a.m.
+/// is a bug that looks like a mouse. The fade is on the frame clock, like every other age.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Cursor {
+    /// The point, in the **picture panel's** points — the space the panes tile in, and the space markers are
+    /// drawn in. Not the window's: the header's chips are the OS pointer's, and a client's cursor lives on the
+    /// picture (see `docs/control.md`).
+    pub at: (f32, f32),
+    /// Whether the button is down — a press that has not been released.
+    pub down: bool,
+    /// The frame clock when it last moved, so the fade is a function of the frame and not of a wall clock.
+    pub moved_at: f64,
+}
+
+impl Cursor {
+    /// How long a cursor that has not moved is still drawn for: **a beat and a half**.
+    ///
+    /// Long enough that a person reading a card still sees where their remote is pointing; short enough that a
+    /// wall nobody is touching has no pointer on it. A cursor re-appears on the next `cursor.move`, and a press
+    /// keeps it up whatever the clock says.
+    pub const FADE: f64 = 1.5;
+
+    /// Whether a client's cursor is drawn at `now`: it exists, and it has moved recently.
+    ///
+    /// A button that is **down** keeps it visible whatever the clock says: a remote holding a press is a remote
+    /// still using the pointer, and a cursor that vanished mid-gesture is a bug that looks like a lost connection.
+    pub fn visible_at(&self, now: f64) -> bool {
+        self.down || (now - self.moved_at) < Self::FADE
+    }
+
+    /// How far from `point` this cursor is, in points — the radius a press hits within.
+    ///
+    /// A remote's press is a coordinate, not a pixel the person aimed at: a client on a phone guesses a point on a
+    /// map it has only read, so a press within [`Cursor::HIT`] of a hull's marker is that hull's press.
+    pub fn distance_to(&self, point: (f64, f64)) -> f64 {
+        let dx = f64::from(self.at.0) - point.0;
+        let dy = f64::from(self.at.1) - point.1;
+        (dx * dx + dy * dy).sqrt()
+    }
+
+    /// How close a press has to be to a marker to be that marker's, in points.
+    pub const HIT: f64 = 14.0;
+}
+
 impl Default for State {
     /// The configuration the process installed, or the defaults when there is none — which is what a
     /// test has, and what `cargo run` has before `config::set_current`.
@@ -617,6 +670,7 @@ impl Default for State {
 
             #[cfg(feature = "map")]
             cadenced: None,
+            cursor: None,
             pending_intents: Vec::new(),
             intents_applied: 0,
             #[cfg(unix)]
@@ -1468,6 +1522,155 @@ impl State {
         if !self.marker_press {
             control::apply(self, Intent::Select { pane, unit: None }).ok();
         }
+    }
+
+    /// **The frame clock**: the wall's own time, which is virtual in a capture and real on a wall.
+    ///
+    /// Public because a cursor's fade, a scene's assertion and a test all ask "when is it for the wall?" — and the
+    /// answer must be the frame's clock, never `Instant::now()` (`INV-11`).
+    pub fn frame_clock(&self) -> f64 {
+        self.logical
+    }
+
+    /// **Set the frame clock for one scripted step** (#172): a scene's intent file says *when* each step happens,
+    /// and a step that changes a cursor's fade must land at its own time rather than at the end of the script.
+    ///
+    /// `poll` owns this clock; the only other writer is the script runner, and it restores it after each step.
+    pub fn set_frame_clock(&mut self, at: f64) {
+        self.logical = at;
+    }
+
+    /// **Move a client's cursor** (#167), in the picture panel's points.
+    ///
+    /// A cursor appears with its first move; a wall no client has pointed at has none, and `--self-check` does not
+    /// claim one. The frame clock is passed in so this stays a function of the frame like every other age.
+    pub fn cursor_move(&mut self, at: (f32, f32)) {
+        // The frame clock, which is the only clock a frame may read: a cursor's fade is an age like any other.
+        let now = self.logical;
+        let at = (
+            at.0.clamp(0.0, self.pane_viewport().w as f32),
+            at.1.clamp(0.0, self.pane_viewport().h as f32),
+        );
+        self.cursor = Some(match self.cursor {
+            Some(cursor) => Cursor {
+                at,
+                down: cursor.down,
+                moved_at: now,
+            },
+            None => Cursor {
+                at,
+                down: false,
+                moved_at: now,
+            },
+        });
+        self.layout_dirty = true;
+    }
+
+    /// **A client's press** (#167): the hull under its cursor, or the pane it is over, or nothing.
+    ///
+    /// The button goes down here and the *effect* goes through the control plane like every other input, so a
+    /// remote's press and a hand's press are one code path. What a press can reach is the picture panel — a hull
+    /// (its card) and the water (a clear, and the pane's focus) — because that is the space this cursor lives in;
+    /// the header's chips and a menu's rows are Rune's own layout, and reaching them needs an event injection Rune
+    /// does not expose (recorded in `docs/control.md`).
+    pub fn cursor_press(&mut self) {
+        let now = self.logical;
+        let Some(cursor) = self.cursor else {
+            return;
+        };
+        self.cursor = Some(Cursor {
+            down: true,
+            moved_at: now,
+            ..cursor
+        });
+        let at = (f64::from(cursor.at.0), f64::from(cursor.at.1));
+        // The pane under the point, in the panel's own space.
+        let Some((id, rect)) = self.pane_rects().into_iter().find(|(_, rect)| {
+            at.0 >= f64::from(rect.x)
+                && at.0 < f64::from(rect.x + rect.w)
+                && at.1 >= f64::from(rect.y)
+                && at.1 < f64::from(rect.y + rect.h)
+        }) else {
+            // A press outside every pane is a press on the panel's gutter, and a gutter is a resize: not a thing
+            // a remote can do yet, and not a thing to pretend to do.
+            self.layout_dirty = true;
+            return;
+        };
+        let local = (at.0 - f64::from(rect.x), at.1 - f64::from(rect.y));
+        let hull = self.hull_at(id, local);
+        control::apply(self, Intent::FocusPane(id)).ok();
+        match hull {
+            Some(unit) => {
+                control::apply(
+                    self,
+                    Intent::Select {
+                        pane: id,
+                        unit: Some(unit),
+                    },
+                )
+                .ok();
+            }
+            // The water: clear this pane's card, as a press on the map does (#99).
+            None => {
+                control::apply(
+                    self,
+                    Intent::Select {
+                        pane: id,
+                        unit: None,
+                    },
+                )
+                .ok();
+            }
+        }
+        self.layout_dirty = true;
+    }
+
+    /// **A client's release** (#167): the button comes up, and the cursor starts its fade from here.
+    pub fn cursor_release(&mut self) {
+        let now = self.logical;
+        if let Some(cursor) = self.cursor {
+            self.cursor = Some(Cursor {
+                down: false,
+                moved_at: now,
+                ..cursor
+            });
+            self.layout_dirty = true;
+        }
+    }
+
+    /// The hull whose marker is within [`Cursor::HIT`] of `local` (a point in `pane`'s own points), if one is.
+    ///
+    /// It projects the pane's markers exactly as the drawing does — the same `markers::place`, the same filter, the
+    /// same clock — so a press lands on the hull that is drawn there rather than on a second opinion about it.
+    /// **Absence is not a miss**: a hull with no fix is not in the list, so it cannot be pressed.
+    fn hull_at(&self, pane: ViewId, local: (f64, f64)) -> Option<i64> {
+        let held = self.pane(pane)?;
+        let frame = held.frame?;
+        let radius = 1.0
+            / if self.scale > 0.0 {
+                f64::from(self.scale)
+            } else {
+                1.0
+            };
+        crate::ui::markers::place(
+            &self.picture,
+            &frame,
+            &held.view.filter,
+            self.now(),
+            self.stale_after,
+            held.view.range,
+            &|unit| self.sizes.get(&unit).copied(),
+        )
+        .into_iter()
+        .map(|marker| (marker.id_unit, marker.x * radius, marker.y * radius))
+        .map(|(unit, x, y)| {
+            let dx = x - local.0;
+            let dy = y - local.1;
+            (unit, (dx * dx + dy * dy).sqrt())
+        })
+        .filter(|(_, distance)| *distance <= Cursor::HIT)
+        .min_by(|left, right| left.1.total_cmp(&right.1))
+        .map(|(unit, _)| unit)
     }
 
     /// Clear one pane's selection. A pane has one card, so clearing it is clearing the only one there is.
@@ -2614,6 +2817,40 @@ fn close_plate() -> El {
         })
 }
 
+/// **The client's cursor, drawn** (#167): a ring at the point, filled while the button is down.
+///
+/// It lives in the picture panel's space, so its point is the point a press means — and it draws **over** the
+/// panes, the gutters and a held surface, because a pointer is above the wall it is pointing at.
+///
+/// A cursor that has not moved for [`Cursor::FADE`] is not drawn: `visible_at` is the whole rule, on the frame
+/// clock.
+fn cursor_glyph(state: &State) -> Option<El> {
+    let cursor = state.cursor?;
+    if !cursor.visible_at(state.logical) {
+        return None;
+    }
+    let half = tokens::CURSOR / 2.0;
+    // **A colour of its own** (#167): a pointer is not content, and white is nothing else on this wall — so a
+    // capture can ask "is the cursor in the picture?" without guessing where it should be.
+    let ink = tokens::cursor_ink();
+    Some(
+        el()
+            // **Keyed by its point** (#167): a keyed element keeps its layout across frames, so a cursor that
+            // moved under one key would be drawn where it used to be. One key per point means the ring follows
+            // the point, and a still cursor still reuses one element.
+            .key(format!(
+                "client-cursor-{}-{}",
+                cursor.at.0.round() as i32,
+                cursor.at.1.round() as i32
+            ))
+            .absolute(cursor.at.0 - half, cursor.at.1 - half)
+            .size(tokens::CURSOR, tokens::CURSOR)
+            .radius(tokens::CURSOR / 2.0)
+            .fill(if cursor.down { ink } else { tokens::clear() })
+            .border(tokens::HAIRLINE * 2.0, ink),
+    )
+}
+
 fn picture(state: &State, scale: f32) -> El {
     // **With a gap the picture area becomes the background**, and each pane a panel on it (#82): a gutter
     // of two panels meeting is a line, not a gutter. At gap 0 nothing changes — the same single panel, the
@@ -2667,6 +2904,11 @@ fn picture(state: &State, scale: f32) -> El {
     body = ghost(state, scale, body);
     body = maximised(state, scale, body);
     body = menu_view(state, scale, body);
+    // **The client's cursor last, over everything** (#167): a pointer is above the wall it points at, and a remote
+    // that is pressing a menu row or a hull should see where its point is.
+    if let Some(cursor) = cursor_glyph(state) {
+        body = body.child(cursor);
+    }
     body
 }
 
@@ -4792,8 +5034,8 @@ fn apply_update(state: &mut State, update: crate::live::Update) {
 ///
 /// **A feed or a tree in a one-pane scene gets no frame**: a frame is what a pane's markers project against, and a
 /// pane that draws none must not have one to project into.
-fn seed_single_pane_frame(state: &mut State) {
-    if !state.headless || !state.is_single_pane() || !state.focused_pane().content.is_map() {
+pub(crate) fn seed_single_pane_frame(state: &mut State) {
+    if !state.is_single_pane() || !state.focused_pane().content.is_map() {
         return;
     }
     if state.focused_pane().frame.is_some() {
@@ -4899,13 +5141,26 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
         .map(std::time::Duration::from_secs_f64)
         .unwrap_or_default();
     state.last_poll_logical = Some(elapsed);
+    // **A cursor that has just reached its fade must be drawn once more** (#167): nothing else on the wall
+    // changed, so nothing would ask for a frame — and the ring would stay on screen at the last place it was
+    // drawn. The frame where visibility flips is the one the fade needs.
+    if let Some(cursor) = state.cursor {
+        let now = cursor.visible_at(elapsed);
+        let before = cursor.visible_at(elapsed - state.poll_gap.as_secs_f64());
+        if now != before {
+            state.layout_dirty = true;
+        }
+    }
     // **A scene can drive the wall through the control plane** (#172): the steps it carries are applied here, in
     // order, when their frame comes. This is the same `apply` the pointer and the socket use — a capture is not a
     // second kind of client, it is a client whose clock is virtual.
     let scripted = crate::scene::apply_due_intents(state, elapsed);
     // A pane that arrived after the scene was built has no frame from `setup`, and a one-pane wall refuses to
-    // hand one over in `pane_laid_out` (#172). Same rule, one frame later.
-    seed_single_pane_frame(state);
+    // hand one over in `pane_laid_out` (#172). Same rule, one frame later — and a capture's, so a wall is left
+    // alone.
+    if state.headless {
+        seed_single_pane_frame(state);
+    }
     // systemd stops a wall with `SIGTERM`. Quitting through the runtime's own path drops the GL
     // context in order, instead of a hard exit that leaves the driver complaining.
     if crate::platform::terminated() {
@@ -6933,6 +7188,28 @@ mod tests {
 
     /// The menu opens **at the click and stays inside its pane** (#77): a right-click 20 pt from the
     /// wall's edge would otherwise draw half a menu over the bezel, on the one wall that needs it.
+    /// **A fresh cursor is in the tree** (#167): the state has one, and the view puts an element at its point.
+    /// The pixel half is the capture; this is the half a rasteriser cannot answer for.
+    #[test]
+    fn a_fresh_client_cursor_is_drawn_at_its_point() {
+        let state = crate::scene::state_for("cursor-hull");
+        let cursor = state.cursor.expect("the scene placed a cursor");
+        assert!(cursor.visible_at(2.0), "the capture is at 2 s");
+        assert!(
+            cursor_glyph(&state).is_some(),
+            "a visible cursor must be an element: a state value nothing draws is a pointer nobody sees"
+        );
+        // The capture's clock: `scripts/capture.sh` renders at `--at 2`, and the fade is read off that clock.
+        let mut idle = crate::scene::state_for("cursor-idle");
+        idle.set_frame_clock(2.0);
+        assert!(
+            cursor_glyph(&idle).is_none(),
+            "and a faded one must not be: the scene moved it {:.2} s before the capture, and the fade is {:.1} s",
+            2.0 - idle.cursor.expect("the scene placed a cursor").moved_at,
+            Cursor::FADE
+        );
+    }
+
     #[test]
     fn the_menu_opens_at_the_click_and_never_leaves_its_pane() {
         let pane = Rect {
@@ -7121,7 +7398,14 @@ mod tests {
         // A lone pane draws `pane-01` too: a control that appears only once the wall is split appears
         // from nowhere. The frame is deliberately absent here: a pane whose map has not drawn yet still
         // has its title, because the plate is chrome rather than part of the picture.
-        let single = crate::scene::state_for("picture");
+        let mut single = crate::scene::state_for("picture");
+        // A scene's state carries the frame a capture draws (it is the wall the capture renders), so the
+        // before-first-frame case is made here rather than borrowed from a scene (#172).
+        let focused = single.focused();
+        single
+            .pane_mut(focused)
+            .expect("the scene has a focused pane")
+            .frame = None;
         assert!(
             single.frame().is_none(),
             "this is the before-first-frame case"
