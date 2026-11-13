@@ -1,6 +1,6 @@
 //! **Doc drift** — claims that can be checked are checked, so they do not age silently.
 //!
-//! Three claims, each of which has been true-by-prose in other projects and false-by-code within a
+//! Four claims, each of which has been true-by-prose in other projects and false-by-code within a
 //! month:
 //!
 //! 1. **Rune is pinned to a rev, and ADR-0001 quotes the same one.** A bump is a deliberate commit,
@@ -9,6 +9,9 @@
 //!    new code upstream is a red build here, before it can become a silent default (`INV-07`).
 //! 3. **The map seed path ADR-0001 names exists on disk.** A path in a document that nothing
 //!    creates is a capture that fails in six weeks for no obvious reason.
+//! 4. **ADR-0005's socket is `src/control.rs`'s socket** (#171): the name, the mode and the protocol
+//!    version a client is told are the ones the code defines. This is the one wire a document is
+//!    most tempted to invent in a different shape from the code's.
 //!
 //! Plus the gate's own claim: CI runs `scripts/verify.sh` and never its individual parts.
 
@@ -372,5 +375,46 @@ fn the_interaction_table_names_every_state() {
     assert!(
         source.contains("docs/adr/0004-interaction-state.md"),
         "`Begin::allowed_from` must name the ADR that is its prose (#101)"
+    );
+}
+
+/// **ADR-0005's wire is `src/control.rs`'s wire** (#171).
+///
+/// A control plane is a promise to a client that does not read our source: the socket's name, its mode and the
+/// protocol version travel in a document (and, later, in `docs/control.md`), so they are the three values most
+/// likely to be right in one place and stale in the other. The check is deliberately on the **document's**
+/// literals, compared with the **code's** constants: it fails when either moves without the other.
+#[test]
+fn the_control_plane_adr_quotes_the_wire_the_code_uses() {
+    use arcons_cc::control::{PROTOCOL, SOCKET_MODE, SOCKET_NAME};
+
+    let adr = read("docs/adr/0005-control-plane.md");
+    let source = read("src/control.rs");
+
+    assert!(
+        adr.contains(SOCKET_NAME),
+        "docs/adr/0005-control-plane.md does not name the control socket ({SOCKET_NAME}) that \
+         src/control.rs defines (#171)"
+    );
+    assert!(
+        adr.contains(&format!("$XDG_RUNTIME_DIR/arcons-cc/{SOCKET_NAME}")),
+        "the ADR must give the socket's full path, not just its file name (#171): a client that guesses \
+         the directory drives nothing"
+    );
+    assert!(
+        adr.contains(&format!("{SOCKET_MODE:04o}")),
+        "docs/adr/0005-control-plane.md does not state the socket's mode ({SOCKET_MODE:04o}) — and the mode \
+         is the credential (`INV-08`, #171)"
+    );
+    assert!(
+        adr.contains(&format!("\"v\": {PROTOCOL}")),
+        "the ADR's example message must carry the protocol version the code uses (\"v\": {PROTOCOL}, #171)"
+    );
+
+    // The reverse pointer: a reader of the constants finds the decision, and a rename of the document is a red
+    // test rather than a comment pointing at nothing.
+    assert!(
+        source.contains("docs/adr/0005-control-plane.md"),
+        "src/control.rs must name the ADR that is its prose (#171)"
     );
 }
