@@ -93,6 +93,7 @@ src/config/      file.rs (config.toml) · credential.rs (mode 0600) · settings.
 src/ui/          the view, view.rs (the pane tree), tree.rs (the chain of command), markers.rs, objects.rs (the operational layer), installations.rs (the places), filter.rs (per-pane visibility and the panel's vocabulary), unitcard.rs, tokens.rs (the only file that names a colour or a size)
 src/units/       the vocabulary and the view model: Unit, UnitView, Glyph, Picture, motion, card
 src/data.rs      the Minos REST client            (#3)
+src/control.rs   the control plane's wire: the socket, its mode, the protocol   (#162)
 src/live.rs      the Centrifugo socket actor      (#4)
 src/map/         geometry (no engine, in the gate) + the MapLibre thread (#5)
 vendor/          dependencies patched for reasons recorded in vendor/README.md

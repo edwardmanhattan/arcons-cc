@@ -12,6 +12,7 @@
 //!   `docs/invariants.md`; every ticket carries the command that decides it.
 
 pub mod config;
+pub mod control;
 pub mod data;
 pub mod live;
 pub mod map;
