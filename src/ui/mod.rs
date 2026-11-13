@@ -2374,9 +2374,10 @@ fn filter_panel(state: &State, body: El) -> El {
         // filter claims.
         el().key("filter-catcher")
             .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            // **Dismissing one surface is an intent** (#173): the panel's catcher walks the same ladder Escape
+            // does, so a client's `surface.close` and a press on the wall's glass cannot disagree.
             .on_press(|state: &mut State| {
-                state.end();
-                state.layout_dirty = true;
+                control::apply(state, Intent::CloseSurfaces).ok();
             })
             .child(panel),
     )
@@ -3998,24 +3999,35 @@ fn drag_map(state: &mut State, id: ViewId, drag: &mut rune::Drag) {
             }
         }
         rune::Phase::Move => {
-            let origin = state
-                .pane(id)
-                .and_then(|pane| pane.drag_origin)
-                .unwrap_or(camera);
-            let moved = crate::map::geometry::pan(
-                origin,
-                frame.viewport(),
-                f64::from(drag.dx),
-                f64::from(drag.dy),
-            );
-            state.set_camera_of(id, moved);
+            // **The picture follows the hand; the state waits for it to stop** (#173). A pan is a continuous
+            // gesture, and the pane's camera is a *settled* value: writing it per event would be sixty state
+            // changes a second, sixty `arranged()` calls (the save debounce never fires, #153) and a camera
+            // that a client would have to reproduce event by event. The map thread is told every move because
+            // the picture has to follow; `State` is told once, on release.
             if let Some(map) = state.pane(id).and_then(|pane| pane.map.as_ref()) {
-                map.set_camera(moved);
+                map.set_camera(dragged(state, id, frame, drag));
             }
         }
         rune::Phase::Up => {
+            // The settled camera, through the control plane: **the value a client would send is the value the
+            // viewer used**, and it is applied once — which is also when the arrangement first becomes worth
+            // saving.
+            let settled = dragged(state, id, frame, drag);
+            let current = state.camera_of(id);
             if let Some(pane) = state.pane_mut(id) {
                 pane.drag_origin = None;
+            }
+            // A press that did not move is not a change: applying the camera it started on would schedule a
+            // write of an arrangement that is already on disk (`arranged()`), and say "changed" for a click.
+            if settled != current {
+                control::apply(
+                    state,
+                    Intent::Camera {
+                        pane: id,
+                        camera: settled,
+                    },
+                )
+                .ok();
             }
             // One render now rather than at the next idle tick: the gesture just ended, and the
             // operator is looking at where it ended.
@@ -4024,6 +4036,30 @@ fn drag_map(state: &mut State, id: ViewId, drag: &mut rune::Drag) {
             }
         }
     }
+}
+
+/// Where a pan has got to: the camera the hand has dragged to, from the one it started on.
+///
+/// Absolute rather than incremental: [`rune::Drag`] reports travel since the press, so summing per-event deltas
+/// would compound and the map would run away from the pointer. Called on every move (for the picture) and once on
+/// release (for the state, #173).
+#[cfg(feature = "map")]
+fn dragged(
+    state: &State,
+    id: ViewId,
+    frame: crate::map::geometry::Rendered,
+    drag: &rune::Drag,
+) -> Camera {
+    let origin = state
+        .pane(id)
+        .and_then(|pane| pane.drag_origin)
+        .unwrap_or_else(|| state.camera_of(id));
+    crate::map::geometry::pan(
+        origin,
+        frame.viewport(),
+        f64::from(drag.dx),
+        f64::from(drag.dy),
+    )
 }
 
 /// A drag on a tiled pane: a border grip resizes the split, anywhere else pans that pane's map (#69).
