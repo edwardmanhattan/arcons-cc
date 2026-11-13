@@ -40,6 +40,7 @@ use std::process::ExitCode;
 use rune::{AppSpec, Cx, El, col, el, row, spacer, text};
 
 use crate::config;
+use crate::control::{self, Intent};
 use crate::live::LiveThread;
 use crate::map::geometry::Camera;
 use crate::units::Picture;
@@ -1431,19 +1432,21 @@ impl State {
     /// One click, one meaning — which is why the marker's press and the map's "press the background to
     /// clear" handler do not both decide: pressing a marker records that this press was a marker's, and
     /// the map's handler stands down for it.
+    /// A press on a hull: select it, or clear the pane if it is already the one selected (#99).
+    ///
+    /// **The toggle is the gesture's rule, the selection is the intent's value** (#170): the press decides
+    /// *whether* this is a selection or a clearing and says the result to the control plane, which is what a
+    /// client without a pointer sends directly.
     pub fn press_marker(&mut self, pane: ViewId, id_unit: i64) {
         self.marker_press = true;
-        if self.selected_in(pane) == Some(id_unit) {
-            self.clear_selection(pane);
-        } else {
-            self.select_in(pane, id_unit);
-        }
+        let unit = (self.selected_in(pane) != Some(id_unit)).then_some(id_unit);
+        control::apply(self, Intent::Select { pane, unit }).ok();
     }
 
     /// A press on the map itself: clear that pane, unless the press was a marker's.
     pub fn press_background(&mut self, pane: ViewId) {
         if !self.marker_press {
-            self.clear_selection(pane);
+            control::apply(self, Intent::Select { pane, unit: None }).ok();
         }
     }
 
@@ -1744,7 +1747,10 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .font(tokens::WORDMARK)
                 .color(tokens::accent())
                 .help("Name this workspace")
-                .on_press(|state: &mut State| begin_workspace_rename(state, state.active)),
+                .on_press(|state: &mut State| {
+                    let index = state.active;
+                    control::apply(state, Intent::BeginRename(RenameTarget::Workspace(index))).ok();
+                }),
         )
         .child(workspace_chips(state))
         .child(spacer())
@@ -1765,7 +1771,13 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .key("tree-open")
                 .font(tokens::LABEL)
                 .color(tokens::ink_dim())
-                .on_press(|state: &mut State| open_tree_pane(state)),
+                .on_press(|state: &mut State| {
+                    control::apply(
+                        state,
+                        Intent::OpenPane(PaneContent::Tree { organisation: None }),
+                    )
+                    .ok();
+                }),
         )
         // The newsroom control (#136), in the same row and the same shape as the tree's: a word, and a
         // pane of its own. The operator's ask was a "newsroom" button on the topbar.
@@ -1774,7 +1786,9 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .key("newsroom-open")
                 .font(tokens::LABEL)
                 .color(tokens::ink_dim())
-                .on_press(|state: &mut State| open_newsroom_pane(state)),
+                .on_press(|state: &mut State| {
+                    control::apply(state, Intent::OpenPane(PaneContent::Newsroom)).ok();
+                }),
         )
         .child(
             text(SETTINGS_LABEL)
@@ -1782,8 +1796,7 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .font(tokens::LABEL)
                 .color(tokens::ink_dim())
                 .on_press(|state: &mut State| {
-                    state.begin(Begin::Settings);
-                    state.layout_dirty = true;
+                    control::apply(state, Intent::OpenSettings).ok();
                 }),
         );
 
@@ -1892,9 +1905,7 @@ fn workspace_chips(state: &State) -> El {
                 .checked(active)
                 .label(state.workspaces[index].name.clone())
                 .on_press(move |state: &mut State| {
-                    if state.switch_to(index) {
-                        state.layout_dirty = true;
-                    }
+                    control::apply(state, Intent::FocusWorkspace(index)).ok();
                 })
                 // **Name a workspace that is not on screen** (#154): a right-click on a chip opens the
                 // rename sheet for **that** chip, without switching to it. The gesture is the pane menu's
@@ -1904,7 +1915,7 @@ fn workspace_chips(state: &State) -> El {
                 // No menu in between: a one-row surface over a chip would be a second thing to learn for
                 // a thing the title already teaches, and `Interaction::Menu` is anchored to a pane.
                 .on_secondary_press(move |state: &mut State, _at, _tx: &mut rune::Tx| {
-                    begin_workspace_rename(state, index);
+                    control::apply(state, Intent::BeginRename(RenameTarget::Workspace(index))).ok();
                 })
                 .help("Rename this workspace")
                 .child(
@@ -1926,28 +1937,9 @@ fn workspace_chips(state: &State) -> El {
             .color(tokens::ink_dim())
             .help("New workspace")
             .on_press(|state: &mut State| {
-                state.add_workspace();
-                state.layout_dirty = true;
+                control::apply(state, Intent::NewWorkspace).ok();
             }),
     )
-}
-
-/// The header's tree control (#116): **the chain of command in a pane of its own**.
-///
-/// It splits the layout the way `Focus on new pane` does — the tree takes a pane beside the one the
-/// operator was working in — and the new pane is focused, because the operator just asked for it.
-///
-/// The pane's subject is `None`: **every structure the wall knows**, which is the chain of command as a
-/// whole. `/tni-commander` is one post shared by every branch, so the supreme command is the single root
-/// and TNI AL, TNI AD and TNI AU are siblings under it, never children of one another.
-pub(crate) fn open_tree_pane(state: &mut State) {
-    let target = state.focused();
-    let camera = state.camera_of(target);
-    let content = PaneContent::Tree { organisation: None };
-    if state.split_pane_as(target, camera, content).is_some() {
-        ask_tree_reads(state);
-    }
-    state.layout_dirty = true;
 }
 
 /// The header's newsroom control (#136): **the feed in a pane of its own**, focused, asking page 1.
@@ -1956,32 +1948,55 @@ pub(crate) fn open_tree_pane(state: &mut State) {
 /// first read — so a one-pane wall gets its first newsroom the way a split wall gets another, and a
 /// second newsroom pane sits on its own tab and its own page.
 pub(crate) fn open_newsroom_pane(state: &mut State) {
+    open_pane_focused(state, PaneContent::Newsroom);
+}
+
+/// Open a pane of this kind beside the focused one (#170): the header's two controls and a CLI's
+/// `pane.open` are one function, so a pane opened from a socket asks its reads the way a pressed button does.
+pub(crate) fn open_pane_focused(state: &mut State, content: PaneContent) -> Option<ViewId> {
     let target = state.focused();
+    open_pane_beside(state, target, content)
+}
+
+/// Open a pane of this kind beside `target`, asking whatever that kind needs on the frame it is made.
+pub(crate) fn open_pane_beside(
+    state: &mut State,
+    target: ViewId,
+    content: PaneContent,
+) -> Option<ViewId> {
     let camera = state.camera_of(target);
-    if let Some(id) = state.split_pane_as(target, camera, PaneContent::Newsroom) {
-        // The first page is asked on **this** frame, and the reply lands between frames: the pane draws
-        // "reading the feed…" until it does, never a blank and never a wait.
-        let query = state
-            .pane_mut(id)
-            .and_then(|pane| pane.news.as_mut())
-            .map(|view| view.ask());
-        match (query, &state.backend) {
-            (Some(query), Some(backend)) => {
-                backend.request(crate::data::Command::Stories(query));
-            }
-            // **A wall with no reads thread says so, in the pane.** "reading the feed…" forever is a
-            // lie about a read nobody is performing, and the fix (a credential) is not on the wall.
-            (_, None) => {
-                if let Some(view) = state.pane_mut(id).and_then(|pane| pane.news.as_mut()) {
-                    view.state = newsroom::ReadState::Failed(
-                        "this wall has no reads thread: no credential is configured".to_string(),
-                    );
-                }
-            }
-            (None, _) => {}
-        }
+    let id = state.split_pane_as(target, camera, content.clone())?;
+    match content {
+        PaneContent::Map => {}
+        PaneContent::Tree { .. } => ask_tree_reads(state),
+        PaneContent::Newsroom => ask_newsroom_page_one(state, id),
     }
     state.layout_dirty = true;
+    Some(id)
+}
+
+/// The newsroom's first page, asked on the frame the pane opens: the reply lands between frames, so the pane
+/// draws "reading the feed…" until it does — never a blank and never a wait.
+fn ask_newsroom_page_one(state: &mut State, id: ViewId) {
+    let query = state
+        .pane_mut(id)
+        .and_then(|pane| pane.news.as_mut())
+        .map(|view| view.ask());
+    match (query, &state.backend) {
+        (Some(query), Some(backend)) => {
+            backend.request(crate::data::Command::Stories(query));
+        }
+        // **A wall with no reads thread says so, in the pane.** "reading the feed…" forever is a
+        // lie about a read nobody is performing, and the fix (a credential) is not on the wall.
+        (_, None) => {
+            if let Some(view) = state.pane_mut(id).and_then(|pane| pane.news.as_mut()) {
+                view.state = newsroom::ReadState::Failed(
+                    "this wall has no reads thread: no credential is configured".to_string(),
+                );
+            }
+        }
+        (None, _) => {}
+    }
 }
 
 /// Ask for the reads a tree pane needs — the list of structures, each structure's forest, and the
@@ -2040,6 +2055,67 @@ fn close_settings(state: &mut State) {
     if state.settings_open() {
         state.end();
     }
+}
+
+/// Open the settings sheet (#82) as the control plane's `surface.settings` (#170): the header's word and a
+/// client's intent must open the same sheet, through the same machine (#101) — a sheet opened by assignment is a
+/// sheet the machine does not know is there.
+pub(crate) fn open_settings(state: &mut State) -> bool {
+    let opened = state.begin(Begin::Settings);
+    if opened {
+        state.layout_dirty = true;
+    }
+    opened
+}
+
+/// **Dismiss one surface**, the ladder `Escape` walks (#140, #170).
+///
+/// One surface at a time, and in order: the waterfall before the menu, the menu before the interaction, the
+/// maximised pane before the newsroom's detail, and the selection last. The order is the point — a key that
+/// closed the most »outer« thing available would need a rule per surface, and this ladder is that rule.
+///
+/// Returns whether anything was dismissed, so a key handler knows whether it consumed the press.
+pub(crate) fn close_surfaces(state: &mut State) -> bool {
+    if !matches!(state.interaction, Interaction::Idle) {
+        // **A waterfall closes one surface at a time** (#140): Escape takes the submenu first and the menu
+        // on the next press, which is the same "one thing at a time" rule the rest of the ladder keeps.
+        if let Interaction::Menu {
+            pane,
+            at,
+            open: Some(_),
+        } = state.interaction
+        {
+            state.interaction = Interaction::Menu {
+                pane,
+                at,
+                open: None,
+            };
+            state.layout_dirty = true;
+            return true;
+        }
+        state.end();
+        return true;
+    }
+    if state.maximised().is_some() {
+        restore_full_size(state);
+        return true;
+    }
+    let focused = state.focused();
+    // The newsroom's detail first: it is a mode of the pane, and `back` is the same function the word
+    // calls, so Escape and the button cannot disagree about what closing a story does.
+    if state
+        .pane_mut(focused)
+        .and_then(|pane| pane.news.as_mut())
+        .is_some_and(|view| view.back())
+    {
+        state.layout_dirty = true;
+        return true;
+    }
+    if state.selected_in(focused).is_none() && state.installation_in(focused).is_none() {
+        return false;
+    }
+    state.clear_selection(focused);
+    true
 }
 
 /// The settings sheet (#82): the wall's own preferences, as a modal over the picture.
@@ -2491,7 +2567,11 @@ fn close_plate() -> El {
         .radius(tokens::NAME_H / 2.0)
         .fill(tokens::name_plate())
         .border(tokens::HAIRLINE, tokens::focus_edge())
-        .on_press(|state: &mut State| restore_full_size(state))
+        .on_press(|state: &mut State| {
+            if let Some(pane) = state.maximised() {
+                control::apply(state, Intent::ToggleFullSize(pane)).ok();
+            }
+        })
 }
 
 fn picture(state: &State, scale: f32) -> El {
@@ -2717,7 +2797,9 @@ fn pane_chrome(state: &State, pane: ViewId, rect: Rect) -> El {
         .key(format!("maximise-{pane}"))
         .color(tokens::ink())
         .help(help)
-        .on_press(move |state: &mut State| toggle_full_size(state, pane));
+        .on_press(move |state: &mut State| {
+            control::apply(state, Intent::ToggleFullSize(pane)).ok();
+        });
     row()
         .key(format!("pane-chrome-{pane}"))
         // Pane-local: `chrome_buttons` answers in the pane's own rectangle, and the row is drawn inside
@@ -2730,11 +2812,14 @@ fn pane_chrome(state: &State, pane: ViewId, rect: Rect) -> El {
 
 /// The maximise toggle's press: one press, the same two functions the menu row used to call. Whichever
 /// way the pane is, the button does the thing its icon shows.
-fn toggle_full_size(state: &mut State, pane: ViewId) {
+pub(crate) fn toggle_full_size(state: &mut State, pane: ViewId) -> bool {
     if state.maximised() == Some(pane) {
         restore_full_size(state);
+        // Restoring is always a change: the pane was over the wall and now it is in its slot.
+        true
     } else {
         full_size_from_menu(state, pane);
+        state.maximised() == Some(pane)
     }
 }
 
@@ -2992,7 +3077,9 @@ fn name_plate(pane: &Pane) -> El {
         .radius(tokens::NAME_H / 2.0)
         .fill(tokens::name_plate())
         .border(tokens::HAIRLINE, tokens::hairline())
-        .on_press(move |state: &mut State| begin_rename(state, id))
+        .on_press(move |state: &mut State| {
+            control::apply(state, Intent::BeginRename(RenameTarget::Pane(id))).ok();
+        })
         .child(
             text(shown)
                 .key(format!("pane-title-{id}"))
@@ -3317,6 +3404,16 @@ fn begin_rename(state: &mut State, pane: ViewId) {
     )));
 }
 
+/// The same sheet, on whichever thing a target names (#170). One function, because `Intent::BeginRename` is the
+/// control plane's spelling of the two gestures above and they must not diverge. A workspace that is not on
+/// screen opens its sheet without switching to it (#154).
+pub(crate) fn begin_rename_target(state: &mut State, target: RenameTarget) {
+    match target {
+        RenameTarget::Pane(pane) => begin_rename(state, pane),
+        RenameTarget::Workspace(index) => begin_workspace_rename(state, index),
+    }
+}
+
 /// **Name this workspace** (#139): the header's title is the door, as the pane's plate is the pane's.
 ///
 /// The field starts with the name the header shows — the typed name, or the default — so the operator
@@ -3339,7 +3436,7 @@ pub(crate) fn begin_workspace_rename(state: &mut State, index: usize) {
 /// "make this the only pane", which is what a tiled wall's operator actually wants when the traffic gets
 /// dense. The name says "from menu" because that is where #85 put it; since #111 the chrome's maximise
 /// toggle calls the same function, in one press.
-fn full_size_from_menu(state: &mut State, pane: ViewId) {
+pub(crate) fn full_size_from_menu(state: &mut State, pane: ViewId) {
     state.end();
     if !state.maximise(pane) {
         return;
@@ -3358,7 +3455,7 @@ pub fn full_size_for_scene(state: &mut State, pane: ViewId) {
     full_size_from_menu(state, pane);
 }
 
-fn restore_full_size(state: &mut State) {
+pub(crate) fn restore_full_size(state: &mut State) {
     let Some(pane) = state.maximised() else {
         return;
     };
@@ -3414,25 +3511,34 @@ pub(crate) fn commit_rename(state: &mut State) {
         return;
     };
     state.end();
-    let trimmed = text.trim();
+    rename_to(state, target, Some(&text));
+}
+
+/// **Apply a name to the thing it names** (#170): the sheet's Enter and the control plane's `rename.set` are one
+/// function, so a name typed and a name sent cannot land differently — including what an empty one means.
+pub(crate) fn rename_to(state: &mut State, target: RenameTarget, name: Option<&str>) -> bool {
+    let trimmed = name.unwrap_or_default().trim();
     match target {
         RenameTarget::Pane(pane) => {
-            if let Some(pane) = state.pane_mut(pane) {
-                pane.name = shown_name(trimmed);
-            }
+            let Some(pane) = state.pane_mut(pane) else {
+                return false;
+            };
+            pane.name = shown_name(trimmed);
         }
         RenameTarget::Workspace(index) => {
-            if let Some(workspace) = state.workspaces.get_mut(index) {
-                workspace.name = if trimmed.is_empty() {
-                    default_workspace_name(index)
-                } else {
-                    trimmed.to_string()
-                };
-            }
+            let Some(workspace) = state.workspaces.get_mut(index) else {
+                return false;
+            };
+            workspace.name = if trimmed.is_empty() {
+                default_workspace_name(index)
+            } else {
+                trimmed.to_string()
+            };
         }
     }
     state.arranged();
     state.layout_dirty = true;
+    true
 }
 
 /// One row of the pane menu: what it says, what a capture calls it, what a press does — and **the second
@@ -3473,21 +3579,48 @@ impl MenuItem {
         !self.children.is_empty()
     }
 
-    /// Run the row's action on the pane the menu was asked on. The menu closes in the action, not here:
-    /// what a row does is the row's, and one of them has to close the menu *before* it changes the layout.
+    /// **What this row means as an intent** (#170) — the row's own description of itself, so a test can say
+    /// that every row a menu offers is expressible in the control plane's vocabulary.
+    ///
+    /// `None` is the one row that is *not* a change: a submenu's trigger opens a second surface of the menu it
+    /// is already in, which is a place rather than a value.
+    fn intent(&self, state: &State, pane: ViewId) -> Option<Intent> {
+        Some(match self.action {
+            // The point the menu was opened at, in the pane's own frame pixels — the row shows the water that
+            // was clicked rather than the water the source pane was looking at (#77).
+            MenuAction::Split => Intent::SplitAt {
+                pane,
+                at: state
+                    .menu()
+                    .map(|menu| (f64::from(menu.at.0), f64::from(menu.at.1)))?,
+            },
+            MenuAction::NewWorkspace => Intent::SplitToWorkspace(pane),
+            MenuAction::Rename => Intent::BeginRename(RenameTarget::Pane(pane)),
+            MenuAction::Close => Intent::ClosePane(pane),
+            MenuAction::MoveTo(target) => Intent::MovePane {
+                pane,
+                workspace: target,
+            },
+            MenuAction::Submenu(_) => return None,
+        })
+    }
+
+    /// Run the row's action on the pane the menu was asked on, **through the control plane** (#170). The menu
+    /// closes in the action, not here: what a row does is the row's, and one of them has to close the menu
+    /// *before* it changes the layout.
     fn run(&self, state: &mut State, pane: ViewId) {
-        match self.action {
-            MenuAction::Split => split_from_menu(state, pane),
-            MenuAction::NewWorkspace => {
-                new_workspace_from_pane(state, pane);
-            }
-            MenuAction::Rename => begin_rename(state, pane),
-            MenuAction::Close => close_from_menu(state, pane),
-            MenuAction::MoveTo(target) => {
-                move_pane_to(state, pane, target);
+        match self.intent(state, pane) {
+            Some(intent) => {
+                // A refusal is the row's own rule answering: `Close` on the wall's last pane is not offered
+                // (that row is not built), so a refusal here is a race the redraw settles.
+                control::apply(state, intent).ok();
             }
             // A trigger's press opens the surface its hover would: the wall has a mouse and a hand.
-            MenuAction::Submenu(key) => open_submenu(state, key),
+            None => {
+                if let MenuAction::Submenu(key) = self.action {
+                    open_submenu(state, key);
+                }
+            }
         }
     }
 }
@@ -3589,7 +3722,7 @@ pub const ELLIPSIS: char = '…';
 #[cfg(feature = "map")]
 fn open_menu(state: &mut State, id: ViewId, event: &rune::PointerEvent, scale: f32) {
     let scale = if scale > 0.0 { scale } else { 1.0 };
-    state.focus_pane(id);
+    control::apply(state, Intent::FocusPane(id)).ok();
     // Through the machine, so a right-click during a lift is refused rather than opening a surface the
     // operator's held pointer cannot reach (#101).
     state.begin(Begin::Menu {
@@ -3601,14 +3734,20 @@ fn open_menu(state: &mut State, id: ViewId, event: &rune::PointerEvent, scale: f
 /// A primary press in a pane: close the menu (the click was not for it) and focus the pane.
 #[cfg(feature = "map")]
 fn press_in(state: &mut State, id: ViewId) {
-    state.focus_pane(id);
-    // **A press on a pane's water clears that pane** (#99): the map underneath is that pane's, and the
-    // press must not walk over to the pane that happens to have the keys.
-    state.press_background(id);
-    // The press was not for the menu (the menu's own rows take their presses), so the menu goes.
-    if state.menu().is_some() {
-        state.end();
-    }
+    // Three intents, because a press on the water means three settled things (#170): the pane has the keys,
+    // **that pane's** selection is cleared (#99 — the map underneath is that pane's, and the press must not
+    // walk over to the pane that happens to have the keys), and the press was not for the menu, so the menu
+    // goes.
+    control::apply(state, Intent::FocusPane(id)).ok();
+    control::apply(
+        state,
+        Intent::Select {
+            pane: id,
+            unit: None,
+        },
+    )
+    .ok();
+    control::apply(state, Intent::CloseSurfaces).ok();
 }
 
 /// #81 `Close pane`: the pane goes, its slot collapses into its sibling, and its map thread is joined
@@ -3729,46 +3868,42 @@ pub fn open_submenu(state: &mut State, key: &'static str) {
     }
 }
 
-fn close_from_menu(state: &mut State, id: ViewId) {
+pub(crate) fn close_from_menu(state: &mut State, id: ViewId) -> bool {
     state.end();
     // `close_pane` drops the pane — which stops its map thread and joins it (the rule `close_maps` relies
     // on) — collapses its slot or empties its workspace, and lands the wall on the nearest previous
     // workspace when it was that workspace's last pane (#141).
-    if !state.close_pane(id) {
+    let closed = state.close_pane(id);
+    if !closed {
         // The last pane on the wall: nothing happened, and the menu said so by not offering it. A redraw
         // keeps the menu from being left open on a pane that is still there.
         state.layout_dirty = true;
     }
+    closed
 }
 
 /// `Focus on new pane`: the clicked ground becomes a pane of its own, same zoom.
 ///
 /// The geographic point is the pane's **own** camera and frame, unprojected at the click — the inverse
 /// of the projection every marker is drawn with, which is why it lives in `map::geometry` beside it.
-fn split_from_menu(state: &mut State, id: ViewId) {
-    let Some(menu) = state.menu() else {
-        return;
-    };
-    state.end();
-    let Some(pane) = state.pane(id) else { return };
+/// **Split a pane at a point in its own frame** (#77): the new pane shows the water at that point, at the old
+/// pane's zoom.
+///
+/// The point is a value — the menu's own anchor today, a cursor's press from #167 tomorrow — which is why the
+/// geometry is here and the request is `Intent::SplitAt`.
+pub(crate) fn split_at(state: &mut State, id: ViewId, at: (f64, f64)) -> Option<ViewId> {
+    let pane = state.pane(id)?;
     let Some(frame) = pane.frame else {
         // No frame yet means no camera to unproject against: a pane opened at a guessed point would
         // be a pane showing the wrong water, which is the failure `INV-04` exists to prevent.
         state.layout_dirty = true;
-        return;
+        return None;
     };
-    // `menu.at` is already in the frame's own pixels: element points × the display scale, taken when
-    // the menu opened.
-    let camera = crate::map::geometry::Camera::new(
-        crate::map::geometry::unproject(
-            frame.camera,
-            frame.viewport(),
-            f64::from(menu.at.0),
-            f64::from(menu.at.1),
-        ),
+    let camera = Camera::new(
+        crate::map::geometry::unproject(frame.camera, frame.viewport(), at.0, at.1),
         frame.camera.zoom,
     );
-    state.split_pane(id, camera);
+    state.split_pane(id, camera)
 }
 
 /// A wheel step: zoom about the pointer, so the ground under the cursor stays under it.
@@ -3796,7 +3931,16 @@ fn wheel(state: &mut State, id: ViewId, event: &rune::WheelEvent) -> bool {
         (f64::from(event.x), f64::from(event.y)),
         delta,
     );
-    state.set_camera_of(id, moved);
+    // **The gesture computes, the intent applies** (#170): the zoom maths is the viewer's, and the camera it
+    // settles on is a value the control plane can also be sent.
+    control::apply(
+        state,
+        Intent::Camera {
+            pane: id,
+            camera: moved,
+        },
+    )
+    .ok();
     if let Some(map) = state.pane(id).and_then(|pane| pane.map.as_ref()) {
         map.set_camera(moved);
     }
@@ -4472,48 +4616,11 @@ fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool
     if event.key != rune::Key::Escape {
         return false;
     }
-    if !matches!(state.interaction, Interaction::Idle) {
-        // **A waterfall closes one surface at a time** (#140): Escape takes the submenu first and the menu
-        // on the next press, which is the same "one thing at a time" rule the rest of the ladder keeps.
-        if let Interaction::Menu {
-            pane,
-            at,
-            open: Some(_),
-        } = state.interaction
-        {
-            state.interaction = Interaction::Menu {
-                pane,
-                at,
-                open: None,
-            };
-            state.layout_dirty = true;
-            return true;
-        }
-        state.end();
-        return true;
-    }
-    if state.maximised().is_some() {
-        restore_full_size(state);
-        return true;
-    }
-    let focused = state.focused();
-    // The newsroom's detail first: it is a mode of the pane, and `back` is the same function the word
-    // calls, so Escape and the button cannot disagree about what closing a story does.
-    if state
-        .pane_mut(focused)
-        .and_then(|pane| pane.news.as_mut())
-        .is_some_and(|view| view.back())
-    {
-        state.layout_dirty = true;
-        return true;
-    }
-    if state.selected_in(focused).is_none() && state.installation_in(focused).is_none() {
-        return false;
-    }
-    state.clear_selection(focused);
-    true
+    // **Escape is an intent like any other** (#170): the ladder that decides which surface goes is
+    // `ui::close_surfaces`, and a socket's `surface.close` walks the same one — there is no second answer to
+    // "what does dismissing mean" for a client that has no key.
+    control::apply(state, Intent::CloseSurfaces).is_ok_and(|changed| changed.0)
 }
-
 /// Start the socket actor, once, before the first frame.
 ///
 /// Nothing here blocks: the actor owns its thread and its runtime, and `wake` is how it says "draw
@@ -6987,6 +7094,69 @@ mod tests {
     }
 
     /// #81/#111: a wall with one pane offers the growth rows and no `Close pane`, a tiled wall adds it,
+    /// **Every row a menu offers is a change the control plane can express** (#170).
+    ///
+    /// The table test the epic asked for: a row with no intent is a control a socket cannot reach, and an intent
+    /// whose verb is missing is one the document cannot name. The waterfall's trigger is the single exception and
+    /// it says why — it opens a second *surface* of the menu it is already in, which is a place, not a value.
+    #[test]
+    fn every_menu_row_is_an_intent_or_a_surface() {
+        let state = crate::scene::state_for("panes-menu");
+        let pane = state.focused();
+        let mut seen: Vec<&'static str> = Vec::new();
+        let mut submenus = 0;
+        for item in crate::ui::menu_items(&state, pane) {
+            match item.intent(&state, pane) {
+                Some(intent) => seen.push(intent.verb()),
+                None => {
+                    assert!(
+                        matches!(item.action, MenuAction::Submenu(_)),
+                        "the row {:?} neither changes the wall nor opens a surface: a control a socket \
+                         cannot reach (#170)",
+                        item.label
+                    );
+                    assert!(
+                        item.opens(),
+                        "a submenu's trigger must have rows to show, or it is a press that does nothing"
+                    );
+                    submenus += 1;
+                }
+            }
+            // A waterfall's leaves are rows too: each says something settled about *which* workspace.
+            for child in &item.children {
+                let intent = child.intent(&state, pane).unwrap_or_else(|| {
+                    panic!(
+                        "the waterfall's row {:?} is not an intent, and a leaf is never a surface (#170)",
+                        child.label
+                    )
+                });
+                assert_eq!(
+                    intent.verb(),
+                    "pane.move",
+                    "a waterfall leaf is `pane.move` and nothing else"
+                );
+                assert!(
+                    !seen.contains(&intent.verb()),
+                    "the leaves and the rows must not share a verb: the verbs are the vocabulary, not the menu"
+                );
+            }
+        }
+        assert_eq!(submenus, 1, "exactly one row opens a second surface");
+
+        // Every verb the menu produces is one the vocabulary's own table names, so a renamed intent cannot leave
+        // a row pointing at a name nothing answers to.
+        let known: Vec<&'static str> = crate::control::test_intents()
+            .iter()
+            .map(crate::control::Intent::verb)
+            .collect();
+        for verb in seen {
+            assert!(
+                known.contains(&verb),
+                "the menu produces {verb}, which no intent in the vocabulary declares (#170)"
+            );
+        }
+    }
+
     /// and the menu is as tall as the items it has — the surface used to be `size()`d for one row, which
     /// clips the second. `Full size` left the menu for the pane chrome, so the row count is one lower than
     /// it was. #140 adds `Focus on new workspace` and the waterfall, in that order: growth at the top,
