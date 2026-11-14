@@ -1,6 +1,8 @@
 # The control plane — `docs/control.md`
 
-**A client sends intents; the wall renders.** This is the reference for the socket that lets something other than
+**A client sends intents; the wall renders.** A phone is the second client this document is written for — the
+transport it needs, the pairing, and the rules it must follow are in [`mobile-remote.md`](mobile-remote.md), and it is
+the same vocabulary on both. This is the reference for the socket that lets something other than
 a hand drive the wall: the `arcons-cc ctl` CLI today, a phone later. The decision behind it is
 [`docs/adr/0005-control-plane.md`](adr/0005-control-plane.md); the vocabulary is
 [`src/control.rs`](../src/control.rs), and `tests/doc_claims.rs` fails when this file and that code disagree about
