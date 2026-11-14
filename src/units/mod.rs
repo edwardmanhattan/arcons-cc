@@ -245,6 +245,88 @@ impl Picture {
             .collect();
     }
 
+    /// **The water, as the authority ships it** (#203): every hull, every fix, and the age **measured here**.
+    ///
+    /// `now` is this process's monotonic clock; the age written into each hull is what `age_seconds` computes against
+    /// it, so a viewer that adds its own elapsed time arrives at the same number rather than a second opinion.
+    pub fn water(&self, now: Instant) -> crate::control::snapshot::Water {
+        use crate::control::snapshot::{Hull, Pos, Water};
+        Water {
+            units: self
+                .units
+                .iter()
+                .map(|unit| Hull {
+                    id_unit: unit.unit.id_unit,
+                    name: unit.unit.name.clone(),
+                    hull_number: unit.unit.hull_number.clone(),
+                    position: unit.position.map(|pos| Pos {
+                        lat: pos.lat,
+                        lon: pos.lon,
+                    }),
+                    previous: unit.previous.map(|pos| Pos {
+                        lat: pos.lat,
+                        lon: pos.lon,
+                    }),
+                    // **Absence is not zero** (`INV-01`): a hull with no fix has no age, and saying `0.0` would draw
+                    // it as the freshest thing on the wall.
+                    age_seconds: unit.age_seconds(now).unwrap_or(-1.0),
+                    backfilled: unit.backfilled,
+                    course_deg: unit.course_deg,
+                    accuracy_m: unit.accuracy_m,
+                    speed_kn: unit.speed_kn,
+                    received_at: unit.received_at.to_rfc3339(),
+                })
+                .collect(),
+        }
+    }
+
+    /// **Take the water as it arrived** (#203): the fleet, and an age measured somewhere else.
+    ///
+    /// The age becomes the hull's age *at receipt* and this process's clock does the rest, which is what makes five
+    /// screens agree: none of them reads a fix's timestamp against a wall clock (`INV-06`). Interpolation starts
+    /// fresh — a viewer's marker appears at its fix rather than gliding from a position this process never drew
+    /// (`INV-05`: interpolation is display only, and skipping it is not a lie).
+    pub fn adopt(&mut self, water: &crate::control::snapshot::Water, now: Instant) {
+        use crate::units::{Pos, Unit, UnitView};
+        self.units = water
+            .units
+            .iter()
+            .map(|hull| {
+                let unit = Unit {
+                    id_unit: hull.id_unit,
+                    name: hull.name.clone(),
+                    hull_number: hull.hull_number.clone(),
+                };
+                let Some(position) = hull.position else {
+                    return UnitView::silent(unit);
+                };
+                UnitView {
+                    unit,
+                    position: Some(Pos {
+                        lat: position.lat,
+                        lon: position.lon,
+                    }),
+                    previous: hull.previous.map(|pos| Pos {
+                        lat: pos.lat,
+                        lon: pos.lon,
+                    }),
+                    travel: None,
+                    // An age the authority did not measure is not an age: `-1` is "no fix", and a hull with no fix
+                    // has already returned above.
+                    age_at_receipt: hull.age_seconds.max(0.0),
+                    receipt: now,
+                    backfilled: hull.backfilled,
+                    course_deg: hull.course_deg,
+                    accuracy_m: hull.accuracy_m,
+                    speed_kn: hull.speed_kn,
+                    received_at: chrono::DateTime::parse_from_rfc3339(&hull.received_at)
+                        .map(|at| at.with_timezone(&chrono::Utc))
+                        .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
+                }
+            })
+            .collect();
+    }
+
     /// Whether any marker is still travelling to its fix, so the caller knows to redraw now rather
     /// than at the next fix.
     pub fn travelling(&self, now: Instant) -> bool {
@@ -514,5 +596,65 @@ mod tests {
             "INV-01: and an absent course draws no arrow"
         );
         let _ = absent;
+    }
+    /// **The water carries an age, and taking it back gives the same age** (#203): a viewer adds only the time since
+    /// it received the stamp, so five screens agree and none of them reads a fix against a wall clock (`INV-06`).
+    #[test]
+    fn the_water_carries_the_age_it_was_measured_at() {
+        let mut picture = Picture::default();
+        picture.replace_from_feed_at(
+            &[
+                crate::data::types::FeedPosition {
+                    id_unit: 1,
+                    name: "MV Straits".to_string(),
+                    hull_number: Some("IMO 1".to_string()),
+                    position: Some(crate::data::types::FeedFix {
+                        latitude: -6.1,
+                        longitude: 106.8,
+                        speed_kn: Some(4.0),
+                        speed_ms: None,
+                        course_deg: Some(90.0),
+                        accuracy_m: Some(8.0),
+                        age_seconds: 12.5,
+                        backfilled: false,
+                        recorded_at: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
+                        received_at: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
+                    }),
+                },
+                // A hull in the picture that has never reported: absence, not a fix at zero (`INV-01`).
+                crate::data::types::FeedPosition {
+                    id_unit: 2,
+                    name: "MV Silent".to_string(),
+                    hull_number: None,
+                    position: None,
+                },
+            ],
+            std::time::Instant::now(),
+        );
+
+        let now = picture.units()[0].receipt;
+        let water = picture.water(now);
+        assert_eq!(
+            water.units[0].age_seconds, 12.5,
+            "the age in the water is the age at the instant it was taken"
+        );
+        assert_eq!(
+            water.units[1].position, None,
+            "a hull with no fix carries no position, not a position at zero"
+        );
+
+        let mut viewer = Picture::default();
+        viewer.adopt(&water, now);
+        assert_eq!(viewer.len(), 2, "both hulls travel, silent one included");
+        assert_eq!(
+            viewer.units()[0].age_seconds(now),
+            Some(12.5),
+            "taking the water back gives the age the authority measured, not one computed from a clock"
+        );
+        assert_eq!(
+            viewer.units()[1].age_seconds(now),
+            None,
+            "and a hull with no fix has no age at all (`INV-01`)"
+        );
     }
 }

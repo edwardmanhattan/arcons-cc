@@ -570,6 +570,7 @@ fn the_control_document_names_the_scene_the_code_sends() {
         maximised: None,
         surface: Default::default(),
         cursors: Vec::new(),
+        water: None,
         workspace: vec![arcons_cc::control::snapshot::Workspace {
             name: "one".to_string(),
             focused: None,

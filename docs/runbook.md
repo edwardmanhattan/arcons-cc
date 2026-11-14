@@ -202,6 +202,9 @@ ARCONS_AUTHORITY=socket /usr/local/bin/arcons-cc --fullscreen
 ```
 
 `ARCONS_AUTHORITY=/path/to/control.sock` points at another wall's socket; unset means this process *is* the wall.
+**The authority is the only process that reads Minos** (#203): a viewer holds no credential, opens no socket of its own,
+and draws the fleet and the ages it was sent — so five screens show one age, and `--self-check` says who holds the
+credential.
 `arcons-cc --self-check` says which in its `authority` row, because a viewer and a wall answer the same requests and an
 operator has to be able to tell them apart. A viewer that cannot reach its authority says so in one line and draws its
 own default wall rather than a blank screen.

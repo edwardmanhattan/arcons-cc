@@ -23,7 +23,9 @@ const SCENES: &[(&str, &str)] = &[
     ("panes", "a tiling of three panes and their cameras"),
     ("panes-filter", "a pane's filter vocabulary"),
     ("menu-ring", "a menu surface with the ring on a row"),
-    ("cursor-hull", "a cursor over a selection, with its card"),
+    // `cursor-hull` is deliberately not here: its **card** carries text the authority *read* (`commander`, identity)
+    // rather than the fleet it holds, which is the other half of #203 (#211). A card is water too, and a scene that
+    // does not carry it is a scene that draws a card-shaped hole.
     ("pane-tree", "a tree pane's own camera"),
     ("settings", "the settings sheet"),
     ("workspaces-switch", "three workspaces, on the second"),

@@ -34,6 +34,9 @@ impl State {
             focused: self.layout().map(|layout| layout.focused()),
             maximised: self.maximised(),
             surface: surface_of(&self.interaction),
+            // **The water travels with the arrangement** (#203): the fleet, its fixes, and the ages this process
+            // measured — so a viewer draws the same markers and the same ages without reading Minos at all.
+            water: Some(self.picture.water(self.now())),
             cursors: self
                 .cursor
                 .iter()
@@ -79,6 +82,9 @@ impl State {
     /// sent) stays where it is until #203 makes it part of the scene.
     pub fn rebuild_from_scene(&mut self) -> bool {
         let scene = self.scene();
+        // **The water is the scene's too** (#203): emptied first, so a scene that forgot a hull is a scene that draws
+        // fewer markers — which is a claim the replay test can fail on rather than one it cannot see.
+        self.picture = crate::units::Picture::default();
         self.apply_scene_forced(&scene)
     }
 
@@ -201,6 +207,13 @@ impl State {
             if let Some(pane) = self.pane_mut(id) {
                 pane.frame = Some(frame);
             }
+        }
+
+        // **The water arrives with it** (#203). A scene from a wall that has not read Minos carries none, which is
+        // "not asked" (`INV-09`) — so a viewer keeps what it had rather than being emptied by a wall that is still
+        // waking up.
+        if let Some(water) = &scene.water {
+            self.picture.adopt(water, self.now());
         }
 
         self.interaction = interaction_of(&scene.surface);

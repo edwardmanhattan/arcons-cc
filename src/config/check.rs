@@ -200,6 +200,23 @@ pub fn run(args: &Args, env: &Env, world: &dyn World, out: &mut dyn std::fmt::Wr
         crate::control::authority::Role::from_env().label()
     );
 
+    // **Who read the fleet** (#203): one credential and one age, or a screen that was told both. An operator asking
+    // "why is this screen not updating" needs to know which machine did the reading.
+    let viewer = matches!(
+        crate::control::authority::Role::from_env(),
+        crate::control::authority::Role::Remote(_)
+    );
+    let _ = writeln!(
+        out,
+        "  {:<11} ok  {}",
+        "credential",
+        if viewer {
+            "held by the authority (a viewer holds none)".to_string()
+        } else {
+            "this wall's own (credentials.toml)".to_string()
+        }
+    );
+
     match world.sign_in(&config) {
         Ok(detail) => {
             let _ = writeln!(out, "  {:<11} ok  {detail}", "login");

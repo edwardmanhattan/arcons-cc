@@ -49,8 +49,54 @@ pub struct Scene {
     pub surface: Surface,
     /// Every cursor the wall draws (#167, #205), in no meaningful order.
     pub cursors: Vec<CursorAt>,
+    /// **The water** (#203): the fleet as the authority holds it. `None` for a scene from a wall that has not read
+    /// Minos yet, which is `INV-09`'s "not asked" and not "no hulls".
+    #[serde(default)]
+    pub water: Option<Water>,
     /// The workspaces, in chip order.
     pub workspace: Vec<Workspace>,
+}
+
+/// **The water** (#203): the fleet, with the ages **the authority measured**.
+///
+/// A viewer computes nothing it was not told. `age_seconds` is the age at the instant this scene was made, and the
+/// viewer adds only the time since it *received* it, on its own monotonic clock — so five screens show one age, and a
+/// kiosk whose wall clock is wrong cannot show a different one (`INV-02`, `INV-06`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Water {
+    /// Every hull the authority knows, in the order it lists them — including hulls that have never reported, which
+    /// is `INV-02`'s "in the picture and not on the map".
+    #[serde(default)]
+    pub units: Vec<Hull>,
+}
+
+/// One hull, as the water carries it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Hull {
+    pub id_unit: i64,
+    pub name: String,
+    /// `null` for a hull the source lists without one — an absent hull number is not an empty string.
+    pub hull_number: Option<String>,
+    /// The newest fix, or `null` for a hull in the picture that has never reported.
+    pub position: Option<Pos>,
+    /// The fix before it: display interpolation only, never a second truth (`INV-05`).
+    pub previous: Option<Pos>,
+    /// **The authority's age, in seconds**, at the moment this scene was cast.
+    pub age_seconds: f64,
+    /// `true` for a fix reconstructed from an offline backlog: history, whatever its age (`INV-03`).
+    pub backfilled: bool,
+    pub course_deg: Option<f64>,
+    pub accuracy_m: Option<f64>,
+    pub speed_kn: Option<f64>,
+    /// When the server accepted the fix, as the authority read it. Displayed; never arithmetic against a local clock.
+    pub received_at: String,
+}
+
+/// A point on the water, in degrees.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Pos {
+    pub lat: f64,
+    pub lon: f64,
 }
 
 /// One workspace: its name, its tiling, and its panes.
@@ -217,6 +263,24 @@ mod tests {
                 down: false,
                 moved_at: 0.5,
             }],
+            water: Some(Water {
+                units: vec![Hull {
+                    id_unit: 1,
+                    name: "MV Straits".to_string(),
+                    hull_number: Some("IMO 1".to_string()),
+                    position: Some(Pos {
+                        lat: -6.1,
+                        lon: 106.8,
+                    }),
+                    previous: None,
+                    age_seconds: 12.5,
+                    backfilled: false,
+                    course_deg: Some(90.0),
+                    accuracy_m: Some(8.0),
+                    speed_kn: Some(4.0),
+                    received_at: "2026-11-14T08:00:00Z".to_string(),
+                }],
+            }),
             workspace: vec![Workspace {
                 name: "Straits watch".to_string(),
                 focused: Some(0),

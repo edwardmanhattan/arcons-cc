@@ -180,6 +180,7 @@ same loop; it does not add a second way to change the wall.
 | `maximised` | the pane drawn over the wall, or `null` |
 | `surface` | the one surface a hand can leave open: a menu (with its row and ring), a filter panel, a rename sheet, settings — never a *held* gesture |
 | `cursors` | every cursor the wall draws, by point and age |
+| `water` | **the fleet** (#203): one entry per hull — `id_unit`, `name`, `hull_number`, `position`, `previous`, `age_seconds` (measured by the authority), `backfilled`, `course_deg`, `accuracy_m`, `speed_kn`, `received_at`. `null` for a wall that has not read Minos yet, which is "not asked" and not "no hulls" |
 | `workspace` | the workspaces, in chip order: `name`, `focused` (an index into `pane`), `tiling` (the same shape `layout.toml` writes), `pane` |
 
 And a pane: `id`, `content` (`map`, `tree` with its `organisation`, `newsroom`), `lat`/`lon`/`zoom`, `name`, `follow`,

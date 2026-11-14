@@ -786,6 +786,19 @@ impl State {
         self.assets_pending.insert(asset_key.to_string());
     }
 
+    /// **Whether this process draws somebody else's wall** (#203): a viewer reads nothing from Minos, holds no
+    /// credential, and is told the arrangement and the water by its authority.
+    pub fn is_viewer(&self) -> bool {
+        #[cfg(unix)]
+        {
+            self.session.is_some()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
+
     pub fn now(&self) -> std::time::Instant {
         self.origin + std::time::Duration::from_secs_f64(self.logical)
     }
@@ -2071,6 +2084,9 @@ pub enum Link {
     Unproven,
     /// A refusal a human has to fix, or a failure to start.
     Failed(String),
+    /// **This screen is a viewer** (#203): it holds no socket of its own, because the authority read the fleet, and the
+    /// header must not claim a link it does not hold. Not a failure — a different kind of screen.
+    NotThisScreen,
 }
 
 /// **A named, independent tiling of panes** (#138). One is active at a time.
@@ -2168,6 +2184,9 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
         Link::Unproven => (format!("reconnecting · {units}"), tokens::ink_dim()),
         Link::Absent => (units, tokens::ink_dim()),
         Link::Failed(error) => (format!("socket down: {error}"), tokens::ink_dim()),
+        // **A viewer's header claims nothing about a link** (#203): the fleet arrives with the scene, and a screen with
+        // no socket of its own that said "live" would be claiming a connection it does not hold.
+        Link::NotThisScreen => (format!("shared wall · {units}"), tokens::ink_dim()),
     };
 
     // A banner that does not cover the map: it is a row above the map, so the picture is never
@@ -2183,6 +2202,8 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
             Some("connecting: no new fixes yet, the picture is what was last read")
         }
         (Link::Failed(error), _) => Some(error.as_str()),
+        // A viewer is not degraded: it is a different kind of screen, and a permanent banner would be furniture.
+        (Link::NotThisScreen, _) => None,
     };
 
     let header = row()
@@ -5615,8 +5636,17 @@ fn setup(state: &mut State, waker: rune::Waker) {
     // window is otherwise a wall that has stopped thinking (`#43`).
     let ticking = waker.clone();
     crate::platform::keep_alive(move || ticking());
+    // **A viewer holds no credential and opens no Minos read** (#203): the authority did both, and this process draws
+    // what it was sent. Two readers of one fleet would be two ages on one wall, and two tokens where `INV-08` wants
+    // one. The header says so too — a viewer has no link to have an opinion about.
+    if state.is_viewer() {
+        state.link = Link::NotThisScreen;
+        return;
+    }
     start_socket(state, waker.clone());
-    if let Some(config) = config::current() {
+    if let Some(config) = config::current()
+        && !state.is_viewer()
+    {
         // The card's three reads run here, on the reads thread, never on the UI thread.
         state.backend = crate::data::Backend::spawn(config.minos.clone()).ok();
     }
