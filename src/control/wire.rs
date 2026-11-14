@@ -63,6 +63,11 @@ pub fn to_wire(intent: &Intent) -> Value {
         Intent::OpenPane(content) => {
             object.insert("content".into(), content_json(content));
         }
+        Intent::Follow { pane, unit, zoom } => {
+            object.insert("pane".into(), json!(pane));
+            object.insert("unit".into(), json!(unit));
+            object.insert("zoom".into(), json!(zoom));
+        }
         Intent::Select { pane, unit } => {
             object.insert("pane".into(), json!(pane));
             object.insert("unit".into(), json!(unit));
@@ -153,6 +158,23 @@ pub fn from_wire(value: &Value) -> Result<Intent, Refused> {
         "pane.close_others" => Intent::CloseOtherPanes,
         "workspace.close_others" => Intent::CloseOtherWorkspaces,
         "pane.open" => Intent::OpenPane(content(object)?),
+        "object.follow" => Intent::Follow {
+            pane: pane(object)?,
+            unit: match object.get("unit") {
+                None | Some(Value::Null) => None,
+                Some(unit) => Some(
+                    unit.as_i64()
+                        .ok_or(Refused("\"unit\" is a hull id or null"))?,
+                ),
+            },
+            zoom: match object.get("zoom") {
+                None | Some(Value::Null) => None,
+                Some(zoom) => Some(
+                    zoom.as_f64()
+                        .ok_or(Refused("\"zoom\" is a number or null"))?,
+                ),
+            },
+        },
         "pane.select" => Intent::Select {
             pane: pane(object)?,
             unit: match object.get("unit") {

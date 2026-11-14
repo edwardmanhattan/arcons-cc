@@ -172,6 +172,25 @@ pub fn parse(words: &[String]) -> Result<Intent, Failure> {
             pane: number(0, "a pane id")?,
             workspace: number(1, "a workspace index")? as usize,
         },
+        "object.follow" => {
+            let unit = match rest.get(1).map(String::as_str) {
+                None | Some("off") => None,
+                Some(id) => Some(id.parse::<i64>().map_err(|_| {
+                    Failure::Usage("object.follow: a hull id is a number, or `off`".to_string())
+                })?),
+            };
+            let zoom = match rest.get(2) {
+                Some(zoom) => Some(zoom.parse::<f64>().map_err(|_| {
+                    Failure::Usage("object.follow: a zoom is a number".to_string())
+                })?),
+                None => None,
+            };
+            Intent::Follow {
+                pane: number(0, "a pane id")?,
+                unit,
+                zoom,
+            }
+        }
         "pane.select" => {
             let unit = match rest.get(1).map(String::as_str) {
                 None | Some("clear") => None,
@@ -351,6 +370,8 @@ arcons-cc ctl <noun> <verb> [args]
   workspace close_others     close every workspace but the one on screen
   pane move <id> <index>     carry a pane into another workspace
   pane select <id> [hull]    put a pane's card on a hull, or `clear`
+  object follow <id> <hull>|off [zoom]
+                             lock a pane's camera onto a hull every frame, or let go
   workspace focus <index>    make a workspace the wall on screen
   workspace new              append an empty workspace
   workspace from_pane <id>   a workspace of that pane's own
@@ -401,6 +422,8 @@ mod tests {
             "workspace close_others",
             "pane move 2 1",
             "pane select 2 512345",
+            "object follow 2 512345",
+            "object follow 2 off",
             "workspace focus 1",
             "workspace new",
             "workspace from_pane 2",

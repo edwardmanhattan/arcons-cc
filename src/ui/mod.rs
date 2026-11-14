@@ -128,6 +128,12 @@ pub struct Pane {
     /// saved layout (which panes, at which cameras, in what tiling) is its own ticket, and a name that
     /// outlived the pane it named would be a label on a wall that no longer exists.
     pub name: Option<String>,
+    /// **The hull this pane's camera is locked onto** (#169), or `None`.
+    ///
+    /// A follow is a **live mode**, not a place: `layout.toml` remembers where a pane is looking (#153), and a hull
+    /// that has stopped reporting is not a place to come back to — so this is deliberately not saved, and the pane
+    /// comes back where it was.
+    pub follow: Option<i64>,
 }
 
 impl Pane {
@@ -154,6 +160,7 @@ impl Pane {
             tree: None,
             news: None,
             name: None,
+            follow: None,
             #[cfg(feature = "map")]
             drag_origin: None,
         }
@@ -1216,6 +1223,9 @@ impl State {
     pub fn set_camera_of(&mut self, id: ViewId, camera: Camera) {
         if let Some(pane) = self.pane_mut(id) {
             pane.camera = camera;
+            // **Any camera intent ends a follow** (#169): otherwise the operator pans and the next frame pulls the
+            // camera back to the hull, which is a wall fighting the hand that is driving it.
+            pane.follow = None;
             self.arranged();
         }
     }
@@ -1510,6 +1520,107 @@ impl State {
     /// Selecting the same hull twice in the same pane does not re-ask: a card that re-fetches on every press
     /// is a card that flickers between answers. Two panes selecting the same hull ask twice, which is correct
     /// and cheap — they are two questions, and the reads thread is one thread with a queue.
+    /// **Follow a hull** (#169): the pane's camera centres that hull's fix every frame, at `zoom` if one is given.
+    ///
+    /// The fix comes from the picture the wall has, so a hull that has not reported **cannot be followed** — absence
+    /// is not zero (`INV-01`) — and the caller says so by name rather than following a guess.
+    pub fn follow(&mut self, pane: ViewId, id_unit: i64, zoom: Option<f64>) -> bool {
+        let Some(pos) = self
+            .picture
+            .units()
+            .iter()
+            .find(|unit| unit.unit.id_unit == id_unit)
+            .and_then(|unit| unit.drawn(self.now()))
+        else {
+            return false;
+        };
+        let Some(held) = self.pane_mut(pane) else {
+            return false;
+        };
+        if !held.content.is_map() {
+            return false;
+        }
+        held.follow = Some(id_unit);
+        // The camera is set now rather than on the next frame, so a capture and a client see the move at once — and
+        // the frame with it, because markers project against a frame (`INV-04`) and a follow moves a camera with no
+        // gesture to make a new one.
+        held.camera = Camera::new(
+            (pos.lat, pos.lon),
+            zoom.unwrap_or(held.camera.zoom).clamp(
+                crate::map::geometry::MIN_ZOOM,
+                crate::map::geometry::MAX_ZOOM,
+            ),
+        );
+        if let Some(frame) = held.frame {
+            held.frame = Some(crate::map::geometry::Rendered {
+                camera: held.camera,
+                ..frame
+            });
+        }
+        self.layout_dirty = true;
+        true
+    }
+
+    /// **One frame of every follow** (#169): the camera of each pane that is locked onto a hull, moved to that
+    /// hull's current fix.
+    ///
+    /// It does **not** go through `set_camera_of` — that would cancel the follow it is serving — and it does not
+    /// call `arranged()`, because a follow is not an arrangement: the file keeps the camera the operator left
+    /// (#153). Returns whether anything moved, so the loop redraws once.
+    pub fn tick_follows(&mut self) -> bool {
+        let now = self.now();
+        let mut moved = false;
+        let follows: Vec<(ViewId, i64, Camera)> = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.panes.iter())
+            .filter_map(|pane| {
+                let unit = pane.follow?;
+                Some((pane.id, unit, pane.camera))
+            })
+            .collect();
+        for (pane, unit, camera) in follows {
+            let Some(pos) = self
+                .picture
+                .units()
+                .iter()
+                .find(|held| held.unit.id_unit == unit)
+                .and_then(|held| held.drawn(now))
+            else {
+                // **A hull that stopped reporting ends the follow** (#169): a camera with nowhere to be is a pane
+                // that would otherwise sit still and claim to be tracking.
+                if let Some(pane) = self.pane_mut(pane) {
+                    pane.follow = None;
+                }
+                moved = true;
+                continue;
+            };
+            let next = Camera::new((pos.lat, pos.lon), camera.zoom);
+            if let Some(held) = self.pane_mut(pane) {
+                // **The frame is what the picture is drawn from** (`INV-04`), so it is the thing that must be
+                // current: a wall's map thread hands over a frame at this camera, and a capture has no thread, so the
+                // frame is re-made here. Comparing the frame as well as the camera is what makes the first `follow`
+                // move the hulls and not only the number.
+                let stale =
+                    held.camera != next || held.frame.is_some_and(|frame| frame.camera != next);
+                if stale {
+                    held.camera = next;
+                    if let Some(frame) = held.frame {
+                        held.frame = Some(crate::map::geometry::Rendered {
+                            camera: next,
+                            ..frame
+                        });
+                    }
+                    moved = true;
+                }
+            }
+        }
+        if moved {
+            self.layout_dirty = true;
+        }
+        moved
+    }
+
     pub fn select_in(&mut self, pane: ViewId, id_unit: i64) {
         if self.selected_in(pane) == Some(id_unit) {
             return;
@@ -5442,6 +5553,9 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     // order, when their frame comes. This is the same `apply` the pointer and the socket use — a capture is not a
     // second kind of client, it is a client whose clock is virtual.
     let scripted = crate::scene::apply_due_intents(state, elapsed);
+    // **Every follow, one frame of it** (#169): a pane locked onto a hull follows that hull's fix, and the wall
+    // redraws only when the camera actually moved.
+    let followed = state.tick_follows();
     // A pane that arrived after the scene was built has no frame from `setup`, and a one-pane wall refuses to
     // hand one over in `pane_laid_out` (#172). Same rule, one frame later — and a capture's, so a wall is left
     // alone.
@@ -5501,6 +5615,7 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     let controlled = false;
     let mut changed = drain_socket(state);
     changed |= scripted;
+    changed |= followed;
     changed |= controlled;
     changed |= drain_card_reads(state);
     changed |= tick_card_age(state);
