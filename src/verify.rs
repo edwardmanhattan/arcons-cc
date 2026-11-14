@@ -729,7 +729,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
         // The claim is a colour rather than a position: the cursor's ring is `focus_edge`, and nothing else draws
         // that colour **inside the picture panel** on a one-pane wall. So the arm asks the question a reader asks —
         // is the pointer there? — without re-deriving the renderer's coordinate space.
-        "cursor-hull" | "cursor-idle" => {
+        "cursor-hull" | "cursor-idle" | "cursor-two" => {
             let Some(origin) = image.find_panel(ink(tokens::panel())) else {
                 failures.push(format!(
                     "{scene}: no picture panel on screen — the cursor is drawn in it"
@@ -742,12 +742,33 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 .unwrap_or(0.0) as u32;
             let ring = image.count_colour_below(ink(tokens::cursor_ink()), 12, below);
             let state = scene::state_for(scene);
-            let Some(cursor) = state.cursor else {
+            let Some(cursor) = state.cursors.values().next() else {
                 failures.push(format!("{scene}: the scene placed no cursor"));
                 return Err(failures);
             };
             let visible = cursor.visible_at(2.0);
-            if scene == "cursor-hull" {
+            // **Two clients, two pointers** (#205): the pair is the same wall with two cursors far apart, so the ink
+            // is roughly twice one ring's and it is in two places. A single ring, or one place, is one hand.
+            if scene == "cursor-two" {
+                let state = scene::state_for(scene);
+                if state.cursors.len() != 2 {
+                    failures.push(format!(
+                        "cursor-two: the state holds {} cursor(s), and the scene names two origins (#205)",
+                        state.cursors.len()
+                    ));
+                }
+                // Two rings: one is 36 px of this colour (measured on `cursor-hull`), so two is over 60 and one is not.
+                if ring < 60 {
+                    failures.push(format!(
+                        "cursor-two: {ring} px of cursor ink, which is one ring — a second client's pointer is \
+                         drawn where it lands or it is a hand nobody can see (#205)"
+                    ));
+                } else {
+                    lines.push(format!(
+                        "cursor-two: two cursors in the picture, {ring} px of ink"
+                    ));
+                }
+            } else if scene == "cursor-hull" {
                 if ring == 0 {
                     failures.push(
                         "cursor-hull: no cursor ring inside the picture — the scene's press landed \
@@ -776,7 +797,8 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             } else {
                 lines.push("cursor-idle: no cursor ink in the picture".to_string());
             }
-            // The card is there in both: the point of the pair is that only the pointer goes.
+            // The card is there in every one of these: the point of the pairs is that only the pointer goes, and a
+            // remote's press selects a hull whatever the origin.
             lines.extend(assert_card(image, origin, &mut failures));
         }
         "photo" => {
@@ -3977,7 +3999,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
         if state.card_in(focused).is_none() {
             failures.push(format!("{scene}: a selected hull has no card"));
         }
-        let Some(cursor) = state.cursor else {
+        let Some(cursor) = state.cursors.values().next() else {
             failures.push(format!("{scene}: no cursor in the state"));
             return Err(failures);
         };
@@ -4801,7 +4823,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
         }
         // **A cursor's press opens one card too** (#167): the hull its point was on, and the capture is the
         // proof that a remote's press is the same press a hand makes.
-        ("cursor-hull" | "cursor-idle", 1) => {
+        ("cursor-hull" | "cursor-idle" | "cursor-two", 1) => {
             lines.push(format!("{scene}: one card, opened by the cursor's press"))
         }
         // Two panes, one card: the pane that was pressed on, and not its neighbour.

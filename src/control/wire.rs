@@ -95,10 +95,17 @@ pub fn to_wire(intent: &Intent) -> Value {
             object.insert("open".into(), json!(open));
         }
         Intent::MenuChoose => {}
-        Intent::CursorMove { at } => {
+        Intent::CursorMove { at, origin } => {
             object.insert("at".into(), json!([at.0, at.1]));
+            if let Some(origin) = origin {
+                object.insert("origin".into(), json!(origin.as_str()));
+            }
         }
-        Intent::CursorPress | Intent::CursorRelease => {}
+        Intent::CursorPress { origin } | Intent::CursorRelease { origin } => {
+            if let Some(origin) = origin {
+                object.insert("origin".into(), json!(origin.as_str()));
+            }
+        }
         Intent::OpenSettings | Intent::CloseSurfaces => {}
     }
     Value::Object(object)
@@ -241,15 +248,32 @@ pub fn from_wire(value: &Value) -> Result<Intent, Refused> {
                 .ok_or(Refused("\"at\" is [x, y] in the picture panel's points"))?;
             Intent::CursorMove {
                 at: (x as f32, y as f32),
+                origin: origin_of(object)?,
             }
         }
-        "cursor.press" => Intent::CursorPress,
-        "cursor.release" => Intent::CursorRelease,
+        "cursor.press" => Intent::CursorPress {
+            origin: origin_of(object)?,
+        },
+        "cursor.release" => Intent::CursorRelease {
+            origin: origin_of(object)?,
+        },
         "surface.settings" => Intent::OpenSettings,
         "surface.close" => Intent::CloseSurfaces,
         _ => return Err(Refused("unknown verb")),
     };
     Ok(intent)
+}
+
+/// **Whose pointer** (#205), when a client says. Absent is the local client's — a `ctl` over the socket — and a phone
+/// will name itself once pairing gives it a name (#194). A name is trimmed and otherwise the client's own.
+fn origin_of(object: &Map<String, Value>) -> Result<Option<crate::ui::Origin>, Refused> {
+    match object.get("origin") {
+        None => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(|name| Some(crate::ui::Origin::named(name)))
+            .ok_or(Refused("\"origin\" is a client name")),
+    }
 }
 
 fn pane(object: &Map<String, Value>) -> Result<crate::ui::ViewId, Refused> {

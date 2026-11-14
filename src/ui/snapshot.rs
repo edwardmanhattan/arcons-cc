@@ -38,9 +38,10 @@ impl State {
             // measured — so a viewer draws the same markers and the same ages without reading Minos at all.
             water: Some(self.picture.water(self.now())),
             cursors: self
-                .cursor
+                .cursors
                 .iter()
-                .map(|cursor| CursorAt {
+                .map(|(origin, cursor)| CursorAt {
+                    origin: origin.as_str().to_string(),
                     at: cursor.at,
                     down: cursor.down,
                     moved_at: cursor.moved_at,
@@ -133,7 +134,7 @@ impl State {
         self.workspaces.clear();
         self.interaction = Interaction::Idle;
         self.active = 0;
-        self.cursor = None;
+        self.cursors.clear();
 
         let mut built = Vec::with_capacity(scene.workspace.len());
         for (index, saved) in scene.workspace.iter().enumerate() {
@@ -217,11 +218,20 @@ impl State {
         }
 
         self.interaction = interaction_of(&scene.surface);
-        self.cursor = scene.cursors.first().map(|cursor| crate::ui::Cursor {
-            at: cursor.at,
-            down: cursor.down,
-            moved_at: cursor.moved_at,
-        });
+        self.cursors = scene
+            .cursors
+            .iter()
+            .map(|cursor| {
+                (
+                    crate::ui::Origin::named(&cursor.origin),
+                    crate::ui::Cursor {
+                        at: cursor.at,
+                        down: cursor.down,
+                        moved_at: cursor.moved_at,
+                    },
+                )
+            })
+            .collect();
         self.scene_seq = scene.seq;
         self.layout_dirty = true;
         #[cfg(feature = "map")]
