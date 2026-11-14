@@ -891,6 +891,31 @@ mod tests {
         );
     }
 
+    /// **A camera write moves the frame with it** (#187): markers project against a *frame* (`INV-04`), so a camera
+    /// that changed with no gesture to make a new frame would leave the picture drawing the old place. The state was
+    /// right and the picture was stale — worse than a refusal, because nothing said so.
+    #[test]
+    fn a_camera_write_moves_the_frame_with_it() {
+        let mut state = State::default();
+        crate::ui::seed_single_pane_frame(&mut state);
+        let pane = state.focused();
+        assert!(state.pane(pane).and_then(|pane| pane.frame).is_some());
+        let camera = crate::map::geometry::Camera::new((-5.5, 105.25), 9.5);
+        assert_eq!(
+            apply(&mut state, Intent::Camera { pane, camera }),
+            Ok(Changed(true))
+        );
+        assert_eq!(state.camera_of(pane), camera);
+        assert_eq!(
+            state
+                .pane(pane)
+                .and_then(|pane| pane.frame)
+                .map(|frame| frame.camera),
+            Some(camera),
+            "the frame a marker projects against must be at the camera the pane holds (#187)"
+        );
+    }
+
     /// A pane that is not on the wall is refused with its own reason, never a panic and never a default.
     #[test]
     fn an_unknown_pane_is_refused() {
