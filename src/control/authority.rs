@@ -131,11 +131,12 @@ impl Session {
                                     break;
                                 }
                             }
-                            // A wall that answers something this viewer cannot read is a session that **ends**, not
-                            // one that guesses at a line it does not understand (`INV-07` at the far end).
+                            // **A refusal is an answer, not a broken line** (`INV-07`): the wall said no by name, the
+                            // session says so and carries on. A viewer whose session ended on the first refused press
+                            // would be a screen that stops working the first time somebody asks for something
+                            // impossible. (Showing it is #198's `kind` and the next ticket; today it is a log line.)
                             Err(why) => {
-                                tracing::warn!("authority: the answer could not be read ({why})");
-                                break;
+                                tracing::warn!("authority: {why}");
                             }
                         },
                         // End of file, or a broken carrier: the viewer is on its own until something reconnects.
@@ -152,6 +153,15 @@ impl Session {
             in_flight,
             thread: Some(thread),
         })
+    }
+
+    /// **Ask, always** (#204): a viewer's own change is queued even while a scene is out, so a press cannot be lost to
+    /// a poll in flight. The queue is ordered, and the loop answers strictly in turn.
+    ///
+    /// Returns whether the session is still alive; a viewer that cannot ask is a viewer whose next `next()` is `None`.
+    pub fn ask(&self, request: Request) -> bool {
+        self.in_flight.store(true, Ordering::SeqCst);
+        self.to.send(request).is_ok()
     }
 
     /// Ask for something, unless a request is already out. `false` is "not sent", never "failed".
@@ -326,6 +336,137 @@ mod tests {
 
         drop(session);
         serving.thread().unpark();
+        let _ = serving.join();
+    }
+    /// **A viewer's press is a request, not a change** (#204): on a screen that draws somebody else's wall, an intent
+    /// goes to the authority and **nothing moves here** — `changed: false` is the truth, because no pixel did. The
+    /// change arrives with the next `Scene`, which is the only thing that may move a viewer's picture.
+    ///
+    /// The falsification this is written against: applying locally "because the wire was busy" would move a pane the
+    /// authority had not agreed to, and then move it back when the scene landed — a wall that visibly argues with
+    /// itself.
+    #[test]
+    fn a_viewer_s_press_asks_and_does_not_change_the_wall() {
+        let (wall_end, peer) = Loopback::pair();
+        let mut wall_state = State::default();
+        let start = wall_state.workspaces.len();
+
+        let serving = std::thread::spawn(move || {
+            let mut carrier = wall_end;
+            while let Ok(Some(line)) = carrier.read_line() {
+                let Ok(request) = crate::control::wire::request(&line) else {
+                    break;
+                };
+                let (answer, _) = answer(&mut wall_state, &request);
+                if carrier
+                    .write_line(&crate::control::wire::reply(answer))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        // A viewer: a state with a session and nothing of its own.
+        let mut viewer = State::default();
+        viewer.session = Some(Session::new(Box::new(peer)).expect("a session"));
+        assert!(viewer.is_viewer());
+
+        // The press. The same door every handler uses.
+        let outcome = crate::control::apply(&mut viewer, crate::control::Intent::NewWorkspace);
+        assert_eq!(
+            outcome,
+            Ok(Changed(false)),
+            "a viewer's intent is a request: nothing changed on this screen"
+        );
+        assert_eq!(
+            viewer.workspaces.len(),
+            start,
+            "and the picture did not move before the authority agreed"
+        );
+
+        // The press's answer: the authority **agreed**, and said so. Then, as `poll` does every frame, the viewer asks
+        // for the arrangement — the scene is the only thing that moves its picture.
+        let mut agreed = None;
+        let mut seen = None;
+        for _ in 0..400 {
+            while let Some(answer) = viewer.session.as_ref().and_then(Session::next) {
+                match answer {
+                    Answer::Changed(Ok(Changed(changed))) if agreed.is_none() => {
+                        agreed = Some(changed)
+                    }
+                    Answer::Scene(scene) => seen = Some(scene),
+                    _ => {}
+                }
+            }
+            if let (Some(_), None, Some(session)) =
+                (agreed.as_ref(), seen.as_ref(), viewer.session.as_ref())
+            {
+                let _ = session.ask(Request::Scene);
+            }
+            if seen.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(agreed, Some(true), "the authority agreed to the press");
+        let scene = seen.expect("the authority answered a scene");
+        assert!(viewer.apply_scene(&scene), "the scene is what moves it");
+        assert_eq!(
+            viewer.workspaces.len(),
+            start + 1,
+            "and the change is the authority's, applied exactly once"
+        );
+
+        if let Some(session) = viewer.session.take() {
+            drop(session);
+        }
+        let _ = serving.join();
+    }
+
+    /// **A refusal does not end a viewer's session** (#204): the wall says no by name, the session says so and stays
+    /// open, and the next request is answered. A screen that stopped working the first time somebody asked for
+    /// something impossible would be a wall that had to be restarted to be driven.
+    ///
+    /// *Showing* the refusal on the glass waits for #198 (`kind`), which is where a refusal grows a category a client
+    /// can act on; today the far end logs it.
+    #[test]
+    fn a_refusal_does_not_end_a_viewer_s_session() {
+        let (wall_end, peer) = Loopback::pair();
+        let serving = std::thread::spawn(move || {
+            let mut carrier = wall_end;
+            while let Ok(Some(line)) = carrier.read_line() {
+                let Ok(request) = crate::control::wire::request(&line) else {
+                    break;
+                };
+                // A wall that says no: the last pane on the wall (#141).
+                let answer = Answer::Changed(Err(Refused(crate::control::LAST_PANE)));
+                let _ = &request;
+                if carrier
+                    .write_line(&crate::control::wire::reply(answer))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        let mut viewer = State::default();
+        viewer.session = Some(Session::new(Box::new(peer)).expect("a session"));
+        let asked = crate::control::apply(&mut viewer, crate::control::Intent::ClosePane(1));
+        eprintln!("DEBUG asked={asked:?} session={}", viewer.session.is_some());
+
+        // The refused press: the session logs it and stays open.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        // And the next request is answered — the authority's word for it, not permission to act.
+        let asked = viewer
+            .session
+            .as_ref()
+            .is_some_and(|session| session.ask(Request::Scene));
+        assert!(asked, "the session is still open after a refusal");
+        if let Some(session) = viewer.session.take() {
+            drop(session);
+        }
         let _ = serving.join();
     }
 }
