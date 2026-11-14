@@ -53,6 +53,8 @@ field marked **required** is a refusal when it is missing.
 | `pane.split_at` | `pane`, `at` | the same, at a point in **that pane's frame** pixels — what the pane menu's `Focus on new pane` does, so the new pane shows the water that was clicked (#77). `the pane has no frame yet` (a map that has not drawn once) |
 | `workspace.from_pane` | `pane` | a workspace of its own holding a new pane of that kind and camera (#140). `no such pane` |
 | `pane.move` | `pane`, `workspace` | carries the pane — camera, thread, view, name, filter, frame — into that workspace (#140). `no such pane`, `no such workspace`, `the pane is already in that workspace`, `the tiling refused the pane` |
+| `pane.close_others` | — | closes every pane in the **workspace on screen** but the one with the keys (#166), one at a time through the close a menu row uses. Never a workspace the client cannot see. `no pane has the keys` (an empty workspace) |
+| `workspace.close_others` | — | closes every workspace but the one on screen (#166): the chips go, their panes go with them and join their map threads, and **the active workspace is never closed and never emptied** |
 | `pane.open` | `content` | a pane of that kind beside the focused one — the header's tree and newsroom controls (#116, #136), asking their first reads |
 | `pane.select` | `pane`, `unit` | puts that pane's card on a hull; `unit: null` clears it (#99). `no such pane` |
 | `workspace.focus` | `index` | makes that workspace the wall on screen (#138). `no such workspace` |

@@ -98,6 +98,12 @@ pub enum Intent {
     SplitToWorkspace(ViewId),
     /// Carry this pane into another workspace, threads and all (#140).
     MovePane { pane: ViewId, workspace: usize },
+    /// **Close every pane in the active workspace but the focused one** (#166). Never a workspace the client
+    /// cannot see: a wall-wide reset is a weapon.
+    CloseOtherPanes,
+    /// **Close every workspace but the one on screen** (#166). The active workspace is never closed and never
+    /// emptied, and every dropped pane joins its map thread.
+    CloseOtherWorkspaces,
     /// Open a pane of this kind beside the focused one (the header's controls, a CLI's `pane open`).
     OpenPane(PaneContent),
     /// Put this pane's selection on one hull, or clear it with `None` (#99).
@@ -154,6 +160,8 @@ impl Intent {
             Intent::SplitAt { .. } => "pane.split_at",
             Intent::SplitToWorkspace(_) => "workspace.from_pane",
             Intent::MovePane { .. } => "pane.move",
+            Intent::CloseOtherPanes => "pane.close_others",
+            Intent::CloseOtherWorkspaces => "workspace.close_others",
             Intent::OpenPane(_) => "pane.open",
             Intent::Select { .. } => "pane.select",
             Intent::FocusWorkspace(_) => "workspace.focus",
@@ -262,6 +270,15 @@ pub fn apply(state: &mut State, intent: Intent) -> Result<Changed, Refused> {
             }
             true
         }
+        Intent::CloseOtherPanes => {
+            // **An empty workspace has no focused pane to keep** (#141's state): the intent says so by name rather
+            // than closing nothing and calling it a success.
+            let Some(closed) = state.close_panes_but_focused() else {
+                return Err(Refused("no pane has the keys"));
+            };
+            closed > 0
+        }
+        Intent::CloseOtherWorkspaces => state.close_workspaces_but_active() > 0,
         Intent::OpenPane(content) => ui::open_pane_focused(state, content).is_some(),
         Intent::Select { pane, unit } => {
             if state.pane(pane).is_none() {
@@ -438,6 +455,8 @@ pub fn vocabulary() -> Vec<Intent> {
             pane: 1,
             workspace: 2,
         },
+        Intent::CloseOtherPanes,
+        Intent::CloseOtherWorkspaces,
         Intent::OpenPane(PaneContent::Newsroom),
         Intent::Select {
             pane: 1,
@@ -627,6 +646,116 @@ mod tests {
             "and the moved pane is still on the wall in the other workspace"
         );
         assert!(state.layout().is_some());
+    }
+
+    /// **Close every pane but the focused one, in this workspace only** (#166): the panes go one at a time through
+    /// `close_pane`, so the refusal, the map thread's join and the cadence are that function's.
+    #[test]
+    fn closing_the_other_panes_keeps_the_focused_one_and_this_workspace() {
+        let mut state = State::default();
+        let first = state.focused();
+        let camera = state.camera_of(first);
+        state
+            .split_pane_as(first, camera, PaneContent::Map)
+            .expect("a second pane");
+        state
+            .split_pane_as(first, camera, PaneContent::Map)
+            .expect("a third");
+        let keep = state.focused();
+        assert_eq!(state.pane_count(), 3);
+        assert_eq!(
+            apply(&mut state, Intent::CloseOtherPanes),
+            Ok(Changed(true))
+        );
+        assert_eq!(state.pane_count(), 1, "one pane is left");
+        assert_eq!(state.focused(), keep, "and it is the one with the keys");
+        assert_eq!(
+            apply(&mut state, Intent::CloseOtherPanes),
+            Ok(Changed(false)),
+            "closing nothing is not a change, and not an error"
+        );
+        // A wall with panes in another workspace keeps them: the intent is this workspace's.
+        let other = state.workspaces.len();
+        assert_eq!(other, 3, "the default wall's workspaces are untouched");
+        assert!(state.workspaces[1].panes.is_empty());
+    }
+
+    /// **An empty workspace has no focused pane to keep**, so the intent is refused by name rather than succeeding
+    /// at closing nothing (#141's state, #166's rule).
+    #[test]
+    fn closing_the_other_panes_on_an_empty_workspace_is_refused() {
+        let mut state = State::default();
+        let only = state.focused();
+        apply(
+            &mut state,
+            Intent::MovePane {
+                pane: only,
+                workspace: 1,
+            },
+        )
+        .expect("the pane moves");
+        apply(&mut state, Intent::FocusWorkspace(0)).expect("back to the empty one");
+        assert_eq!(
+            apply(&mut state, Intent::CloseOtherPanes),
+            Err(Refused("no pane has the keys"))
+        );
+    }
+
+    /// **Close every workspace but the one on screen** (#166): the chips go, their panes go with them, and the wall
+    /// stays where the operator was — the active workspace is never closed and never emptied.
+    #[test]
+    fn closing_the_other_workspaces_keeps_the_one_on_screen() {
+        let mut state = State::default();
+        let only = state.focused();
+        let camera = state.camera_of(only);
+        let second = state
+            .split_pane_as(only, camera, PaneContent::Map)
+            .expect("a second pane");
+        apply(
+            &mut state,
+            Intent::MovePane {
+                pane: second,
+                workspace: 1,
+            },
+        )
+        .expect("a pane in workspace 2");
+        apply(
+            &mut state,
+            Intent::MovePane {
+                pane: second,
+                workspace: 2,
+            },
+        )
+        .expect("and in workspace 3");
+        assert_eq!(state.workspaces.len(), 3);
+        let active_before = state.active;
+        assert_eq!(
+            apply(&mut state, Intent::CloseOtherWorkspaces),
+            Ok(Changed(true))
+        );
+        assert_eq!(state.workspaces.len(), 1, "one workspace is left");
+        assert_eq!(state.active, 0, "and the wall is on it");
+        let names: Vec<&str> = state.workspaces.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Workspace 3"],
+            "the one that was on screen, by name"
+        );
+        assert_eq!(
+            state.workspaces[0]
+                .panes
+                .iter()
+                .map(|pane| pane.id)
+                .collect::<Vec<_>>(),
+            vec![second],
+            "with the pane that was in it, and no other"
+        );
+        let _ = active_before;
+        assert_eq!(
+            apply(&mut state, Intent::CloseOtherWorkspaces),
+            Ok(Changed(false)),
+            "one workspace is nothing to close"
+        );
     }
 
     /// A pane that is not on the wall is refused with its own reason, never a panic and never a default.

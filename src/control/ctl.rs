@@ -162,6 +162,8 @@ pub fn parse(words: &[String]) -> Result<Intent, Failure> {
             content: super::wire::content_from_words(rest.get(1).map(String::as_str))
                 .map_err(Failure::Usage)?,
         },
+        "pane.close_others" => Intent::CloseOtherPanes,
+        "workspace.close_others" => Intent::CloseOtherWorkspaces,
         "pane.open" => Intent::OpenPane(
             super::wire::content_from_words(rest.first().map(String::as_str))
                 .map_err(Failure::Usage)?,
@@ -345,6 +347,8 @@ arcons-cc ctl <noun> <verb> [args]
                              pane that has the keys — read from `wall` (#181)
   pane split <id> [kind]     a new pane beside it: map (default), tree, newsroom
   pane open <kind>           the same, beside the focused pane
+  pane close_others          close every pane in this workspace but the one with the keys
+  workspace close_others     close every workspace but the one on screen
   pane move <id> <index>     carry a pane into another workspace
   pane select <id> [hull]    put a pane's card on a hull, or `clear`
   workspace focus <index>    make a workspace the wall on screen
@@ -393,6 +397,8 @@ mod tests {
             "pane split 2 map",
             "pane split 2 newsroom",
             "pane open tree",
+            "pane close_others",
+            "workspace close_others",
             "pane move 2 1",
             "pane select 2 512345",
             "workspace focus 1",

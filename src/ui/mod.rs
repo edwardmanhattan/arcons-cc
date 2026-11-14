@@ -1176,6 +1176,20 @@ impl State {
         {
             self.switch_to(target);
         }
+        // **A workspace that just became a one-pane wall** (#166): the survivor's frame was its *slot's*, and markers
+        // project against a frame rather than a pane (`INV-04`) — so they would sit in the corner of a pane that is
+        // now the whole panel. Clearing it lets the next frame hand it one at its new size: a wall's map thread, a
+        // capture's synthetic frame.
+        let survived = self.workspaces[index]
+            .layout
+            .as_ref()
+            .filter(|layout| layout.len() == 1)
+            .map(|layout| layout.focused());
+        if let Some(id) = survived
+            && let Some(pane) = self.workspace_pane_mut(index, id)
+        {
+            pane.frame = None;
+        }
         self.arranged();
         self.layout_dirty = true;
         true
@@ -1651,6 +1665,72 @@ impl State {
             });
             self.layout_dirty = true;
         }
+    }
+
+    /// **Close every pane in the active workspace but the focused one** (#166).
+    ///
+    /// One at a time, through [`State::close_pane`]: the refusal, the map thread's join, the surface that was on the
+    /// pane and the cadence are that function's, and a bulk shortcut would be a second copy of all four. The
+    /// focused pane's workspace only — a wall-wide reset would empty workspaces a remote cannot see.
+    ///
+    /// Returns how many panes went, so the caller can say whether anything happened.
+    pub fn close_panes_but_focused(&mut self) -> Option<usize> {
+        // A workspace with no tiling has no focused pane, and no pane to keep: that is a refusal, not a reset.
+        self.layout()?;
+        let keep = self.focused();
+        let doomed: Vec<ViewId> = self
+            .active()
+            .panes
+            .iter()
+            .map(|pane| pane.id)
+            .filter(|id| *id != keep)
+            .collect();
+        let mut closed = 0;
+        for id in doomed {
+            if self.close_pane(id) {
+                closed += 1;
+            }
+        }
+        Some(closed)
+    }
+
+    /// **Close every workspace but the one on screen** (#166).
+    ///
+    /// The active workspace is never closed and never emptied: a client that has read the wall knows which one it is
+    /// looking at, and one that has not may not take the wall's focus away. A closed workspace's panes **drop**, and
+    /// a `Pane`'s map thread is joined by its drop (the rule `close_maps` relies on), so nothing is leaked and
+    /// nothing is closed twice.
+    ///
+    /// Returns how many workspaces went.
+    pub fn close_workspaces_but_active(&mut self) -> usize {
+        let before = self.workspaces.len();
+        // **The index follows the workspace, not the number** (#166): removing one before the kept workspace moves it
+        // down, and a `keep` that stayed put would stop pointing at it — and then remove the wall the operator is
+        // looking at on the next step.
+        let mut keep = self.active;
+        let mut index = 0;
+        while index < self.workspaces.len() {
+            if index == keep {
+                index += 1;
+                continue;
+            }
+            // Its panes drop with it, and a `Pane`'s map thread is joined by its drop (the rule `close_maps` relies
+            // on) — nothing is leaked, and nothing is closed twice.
+            self.workspaces.remove(index);
+            if index < keep {
+                keep -= 1;
+            }
+        }
+        self.active = keep;
+        let closed = before - self.workspaces.len();
+        if closed > 0 {
+            // The panes that went took their threads; the ones left keep their cadence.
+            #[cfg(feature = "map")]
+            self.apply_cadence();
+            self.arranged();
+            self.layout_dirty = true;
+        }
+        closed
     }
 
     /// The hull whose marker is within [`Cursor::HIT`] of `local` (a point in `pane`'s own points), if one is.

@@ -650,6 +650,45 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
         //
         // The strip is the ringed row's own: a menu box also holds the focused pane's focus edge, which crosses it,
         // so the question is asked of one row and the answer is a *count* — a border's worth of ink, or a line's.
+        // **A reset from a remote** (#166): one chip in the header, and one pane in the picture. The chip is a
+        // *fill* at least as tall as a chip (`name_plate`), which is what makes it the raised one.
+        "close-all" => {
+            let header = (0.0, f64::from(tokens::CHIP_H) + f64::from(tokens::PAD));
+            let raised: Vec<(f64, f64)> =
+                colour_runs_in_band(image, header, ink(tokens::name_plate()), 10, 2)
+                    .into_iter()
+                    .filter(|(start, end)| end - start >= f64::from(tokens::CHIP_H))
+                    .collect();
+            if raised.len() != 1 {
+                failures.push(format!(
+                    "close-all: {} raised chips in the header, and `workspace.close_others` leaves one",
+                    raised.len()
+                ));
+            } else {
+                lines.push(
+                    "close-all: one raised chip, the workspace the wall stayed on".to_string(),
+                );
+            }
+            // One pane: the panel has no gutter, so its whole width is ink-free water between the name plates.
+            let Some((px, py, pw, _ph)) = image.find_panel_rect(ink(tokens::panel())) else {
+                failures.push("close-all: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let plates = count_colour_in(
+                image,
+                (px, py, pw, f64::from(tokens::NAME_H) * 2.0),
+                ink(tokens::name_plate()),
+                10,
+            );
+            if plates == 0 {
+                failures.push("close-all: no pane's name plate in the picture".to_string());
+            } else {
+                lines.push(format!("close-all: one pane's plate, {plates} px"));
+            }
+            if failures.is_empty() {
+                lines.push("close-all: one chip, one pane".to_string());
+            }
+        }
         "menu-ring" => {
             let x = 1044.0;
             let y = 188.0 + f64::from(tokens::MENU_ROW) * crate::scene::MENU_RING_ROW as f64;
@@ -3864,6 +3903,44 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     let mut failures = Vec::new();
     let mut lines = Vec::new();
     let state = crate::scene::state_for(scene);
+    // **Everything but the focused pane, and every workspace but this one** (#166): the reset's end state, in the
+    // machine. The picture half is the golden — one chip and one pane are what it is a picture of.
+    if scene == "close-all" {
+        let panes = state.panes().len();
+        if state.workspaces.len() != 1 {
+            failures.push(format!(
+                "close-all: {} workspaces, and `workspace.close_others` keeps exactly one — the one on screen",
+                state.workspaces.len()
+            ));
+        }
+        if panes != 1 {
+            failures.push(format!(
+                "close-all: {panes} panes in the workspace the wall is on, and `pane.close_others` keeps exactly \
+                 one — the one with the keys"
+            ));
+        }
+        if state.active != 0 {
+            failures.push(format!(
+                "close-all: the wall is on workspace {}, and the workspace it was on is the one that stays",
+                state.active
+            ));
+        }
+        if state.intents_applied != state.pending_intents.len() {
+            failures.push(format!(
+                "close-all: {} of {} steps ran, so the wall is not the state the script meant",
+                state.intents_applied,
+                state.pending_intents.len()
+            ));
+        }
+        if failures.is_empty() {
+            lines.push(format!(
+                "close-all: one workspace, one pane ({}), focused, after {} steps",
+                state.focused(),
+                state.intents_applied
+            ));
+        }
+    }
+
     // **The menu's ring is a value in the machine** (#164): the capture is of the row the keyboard is on, so the
     // structure half asks which row that is.
     if scene == "menu-ring" {
