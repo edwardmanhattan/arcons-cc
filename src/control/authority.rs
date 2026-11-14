@@ -345,6 +345,8 @@ mod tests {
     /// The falsification this is written against: applying locally "because the wire was busy" would move a pane the
     /// authority had not agreed to, and then move it back when the scene landed — a wall that visibly argues with
     /// itself.
+    // The field these drive is `State::session`, which only a unix build has (#203).
+    #[cfg(unix)]
     #[test]
     fn a_viewer_s_press_asks_and_does_not_change_the_wall() {
         let (wall_end, peer) = Loopback::pair();
@@ -430,6 +432,8 @@ mod tests {
     ///
     /// *Showing* the refusal on the glass waits for #198 (`kind`), which is where a refusal grows a category a client
     /// can act on; today the far end logs it.
+    // The field these drive is `State::session`, which only a unix build has (#203).
+    #[cfg(unix)]
     #[test]
     fn a_refusal_does_not_end_a_viewer_s_session() {
         let (wall_end, peer) = Loopback::pair();
