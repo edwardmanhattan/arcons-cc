@@ -177,7 +177,9 @@ The decision is revisited — deliberately, with a ticket — when **either** is
    first client, and then the projection becomes the whole contract rather than a convenience.
 
 Until one of those is true, a second process is a protocol to maintain with no customer, and this ADR says so
-rather than leaving it to be discovered.
+rather than leaving it to be discovered. **Both became true when the wall became a fleet** — see
+[ADR-0006](0006-a-fleet-of-walls.md), which makes the plane a process of its own and keeps this ADR's reasoning: the
+picture still never crosses the wire, and `State` is still applied in one place.
 
 ## As built: the vocabulary, and what it does not cover (#170)
 
