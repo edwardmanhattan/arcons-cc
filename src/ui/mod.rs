@@ -575,6 +575,13 @@ pub struct State {
     /// deliberate read.
     pub installation_types: Vec<crate::data::types::InstallationType>,
     pub installations: Vec<crate::data::types::Installation>,
+    /// **When the authority read the facilities** (#211), on the frame clock. A scene carries the age rather than the
+    /// instant, because an instant is only true on the machine that made it (`INV-06`).
+    pub facilities_at: Option<f64>,
+    /// When the tactical objects, their manifest and their vocabulary were read (#211).
+    pub objects_at: Option<f64>,
+    /// When the structures, their trees and the supreme command were read (#211).
+    pub structures_at: Option<f64>,
     /// **The tactical-object picker's vocabulary** (`GET /tactical-objects/facets`), read once at init:
     /// the panel's domain and category rows and the **server's** counts for them. `None` is "not read
     /// yet", which draws no vocabulary rows rather than an empty vocabulary.
@@ -783,6 +790,9 @@ impl Default for State {
             placements: Vec::new(),
             installation_types: Vec::new(),
             installations: Vec::new(),
+            facilities_at: None,
+            objects_at: None,
+            structures_at: None,
             facets: None,
             assets: std::collections::HashMap::new(),
             assets_pending: std::collections::HashSet::new(),
@@ -5085,6 +5095,7 @@ pub(crate) fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool
             changed = true;
         }
         crate::data::Reply::TacticalObjectManifest(Ok(manifest)) => {
+            state.objects_at = Some(state.logical);
             // **The offline library, cached by code** (#110). An unsigned entry is kept: a signing
             // failure omits the URL, not the entry, because the map still needs to know the symbol
             // exists and what it is called.
@@ -5114,6 +5125,7 @@ pub(crate) fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool
             );
         }
         crate::data::Reply::TacticalObjectPlacements(Ok(pages)) => {
+            state.objects_at = Some(state.logical);
             state.placements.clone_from(&pages.rows);
             tracing::info!(
                 marks = pages.rows.len(),
@@ -5243,6 +5255,7 @@ pub(crate) fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool
             );
         }
         crate::data::Reply::TniCommander(Ok(post)) => {
+            state.structures_at = Some(state.logical);
             // **A vacant post is not a missing read** (#116): `commander` is absent when nobody is
             // appointed, and the post is drawn without a name rather than with one invented here.
             tracing::info!(
@@ -5295,11 +5308,17 @@ pub(crate) fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool
         crate::data::Reply::Stories(query, result) => {
             let mut applied = 0;
             let mut relocated = Vec::new();
+            let read_at = state.logical;
             for pane in state.panes_mut() {
                 if let Some(view) = pane.news.as_mut()
                     && view.apply(*query, result)
                 {
                     applied += 1;
+                    // **A page read now** (#211): the authority's own clock, so a viewer can say how old the rows it
+                    // is drawing are without reading anything itself.
+                    if view.asked.is_none() {
+                        view.read_at = Some(read_at);
+                    }
                     // **A page the deployment no longer holds** (#153): a wall restored on page 4 of a feed
                     // that now has two opens on the last page that exists and asks for it, rather than
                     // sitting on a page nobody wrote.
@@ -5369,6 +5388,7 @@ pub(crate) fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool
             );
         }
         crate::data::Reply::Installations(Ok(places)) => {
+            state.facilities_at = Some(state.logical);
             tracing::info!(
                 facilities = places.len(),
                 endpoint = "GET /installations",
@@ -5385,6 +5405,7 @@ pub(crate) fn apply_reply(state: &mut State, reply: &crate::data::Reply) -> bool
             );
         }
         crate::data::Reply::TacticalObjectFacets(Ok(facets)) => {
+            state.objects_at = Some(state.logical);
             tracing::info!(
                 total = facets.total,
                 domains = facets.domains.len(),

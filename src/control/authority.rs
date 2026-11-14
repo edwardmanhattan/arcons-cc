@@ -380,6 +380,110 @@ mod tests {
         serving.thread().unpark();
         let _ = serving.join();
     }
+    /// **A card's reads travel, and are stamped once** (#211): the authority read the identity, the commander and the
+    /// specification; the viewer draws them from the scene and asks Minos nothing.
+    ///
+    /// The falsification: a card whose COMMANDER row says "loading" forever on a viewer that has no reads thread — the
+    /// half of a card the fleet cannot carry. Two panes showing one hull's card is the shape the wire has to survive,
+    /// because the reads are keyed by *pane* and not by hull.
+    #[test]
+    fn a_card_s_reads_survive_the_trip_and_are_stamped_by_the_authority() {
+        use crate::units::card::Fetch;
+
+        // The scene that has a card open on a hull: the fleet half of the water, and the reads beside it.
+        let mut wall = crate::scene::state_for("cursor-hull");
+        let pane = wall.focused();
+        let hull = wall.selected_in(pane).expect("the scene selects a hull");
+        let card = wall
+            .pane_mut(pane)
+            .and_then(|pane| pane.view.card.as_mut())
+            .expect("a selection builds a card");
+        // An identity the fixture feed does not have is fine: the claim is that whatever the wall read arrives, not
+        // that this test can invent a hull's class.
+        card.identity = Fetch::Failed("the identity read was refused".to_string());
+        card.commander = Fetch::Ready(Vec::new());
+        card.specification = Fetch::Failed("the specification read was refused".to_string());
+
+        let scene = wall.scene();
+        let sent = scene
+            .workspace
+            .iter()
+            .flat_map(|workspace| workspace.pane.iter())
+            .find_map(|pane| pane.card.as_ref())
+            .expect("the card travels");
+        assert_eq!(
+            sent.unit, hull,
+            "the reads travel with the hull they are about, so a scene cannot hang yesterday's commander on today's \
+             selection"
+        );
+
+        // **A viewer is the door**: built from the scene alone, with no reads thread and no Minos.
+        let mut viewer = State::default();
+        viewer.apply_scene_forced(&scene);
+        let drawn = viewer
+            .pane_mut(pane)
+            .and_then(|pane| pane.view.card.as_mut())
+            .expect("the viewer draws a card for the same selection");
+        assert!(
+            matches!(drawn.commander, Fetch::Ready(_)),
+            "the commander row must be the authority's answer, not a skeleton (#211)"
+        );
+        assert!(
+            matches!(drawn.identity, Fetch::Failed(ref why) if why.contains("identity")),
+            "every one of the three reads travels, not just the one the card draws first"
+        );
+        assert!(
+            matches!(drawn.specification, Fetch::Failed(ref why) if why.contains("refused")),
+            "a refused read travels with its reason: 'unavailable' and 'still loading' are different pictures"
+        );
+    }
+
+    /// **The newsroom's rows travel** (#211): a viewer draws the page the authority read instead of a footer that says
+    /// "reading the feed…" forever, which is what a pane with no reads thread would honestly have to say.
+    ///
+    /// The falsification is the picture: `newsroom` replays byte for byte in `tests/scene_replay.rs`, and this is the
+    /// state half of the same claim — the rows, the pager, and what the authority said about them.
+    #[test]
+    fn the_newsroom_s_page_travels_with_its_pane() {
+        let wall = crate::scene::state_for("newsroom");
+        let (pane, rows, state) = wall
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.panes.iter())
+            .find_map(|pane| {
+                pane.news
+                    .as_ref()
+                    .map(|news| (pane.id, news.stories.len(), news.state.clone()))
+            })
+            .expect("the scene is the newsroom");
+        assert!(rows > 0, "the fixture feed has stories to draw");
+        assert!(
+            matches!(state, crate::ui::newsroom::ReadState::Ready),
+            "the scene read its page"
+        );
+
+        let scene = wall.scene();
+        let mut viewer = State::default();
+        viewer.apply_scene_forced(&scene);
+        let drawn = viewer
+            .pane(pane)
+            .and_then(|pane| pane.news.as_ref())
+            .expect("the viewer draws the newsroom");
+        assert_eq!(
+            drawn.stories.len(),
+            rows,
+            "every row the authority read is a row the viewer draws (#211)"
+        );
+        assert!(
+            drawn.pagination.is_some(),
+            "the pager travels, or the footer cannot say which page it is on"
+        );
+        assert!(
+            drawn.asked.is_none(),
+            "a viewer asks nothing: it has no reads thread and no credential (#203)"
+        );
+    }
+
     /// **A viewer's press is a request, not a change** (#204): on a screen that draws somebody else's wall, an intent
     /// goes to the authority and **nothing moves here** — `changed: false` is the truth, because no pixel did. The
     /// change arrives with the next `Scene`, which is the only thing that may move a viewer's picture.

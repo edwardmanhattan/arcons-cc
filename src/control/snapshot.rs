@@ -10,10 +10,9 @@
 //! `Pane::frame`, `Pane::map`, `State::pictures`, `State::assets` and the image cache — none of which can be sent,
 //! and none of which a picture can be computed from without the machine that drew it.
 //!
-//! **The water is not here either — yet.** The fleet, the fixes, the cards' text, the newsroom's stories and the
-//! facilities are `State`'s data, and moving them into the `Scene` is #203 ("the water moves to the authority").
-//! Until then a replay proves the **arrangement** is complete with the water held still, which is the half this
-//! ticket owns, and the test says so out loud rather than pretending.
+//! **The water is here too** (#203, #211): the fleet and its fixes, and the four things a pane draws that are
+//! **read through** rather than held in the fleet — a hull's card, the newsroom's rows, the facilities, the tactical
+//! objects and the structures. A viewer reads nothing from Minos: what the authority read, the scene carries.
 //!
 //! **Absence is not zero** (`INV-01`): a pane no one named has `name: null`, a pane looking at nothing has
 //! `selected: null`, a workspace whose tiling could not be read has `tiling: null` and the wall falls back to a row.
@@ -27,6 +26,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::layout::SavedNode;
 use crate::control::projection::CameraView;
+use crate::data::types::{
+    Installation, InstallationType, NewsStory, NewsStoryDetail, Pagination, TacticalObjectFacets,
+    TacticalObjectManifestEntry, TacticalObjectPlacement, TniCommandPost, UnitCommander,
+    UnitDetail, UnitOrganisation, UnitOrganisationDetail, UnitSpecification,
+};
 use crate::ui::ViewId;
 
 /// The version a client must speak. A viewer that cannot speak it says so instead of guessing at fields.
@@ -53,8 +57,55 @@ pub struct Scene {
     /// Minos yet, which is `INV-09`'s "not asked" and not "no hulls".
     #[serde(default)]
     pub water: Option<Water>,
+    /// **The facility layer** (#109, #211), or `null` when the authority has read none — which is `INV-09`'s "not
+    /// asked", not an empty map. Present in a scene only when it changed (#211), so a viewer keeps what it holds.
+    #[serde(default)]
+    pub facilities: Option<Facilities>,
+    /// **The tactical objects** (#110, #211), or `null`. Same rule as [`Scene::facilities`].
+    #[serde(default)]
+    pub objects: Option<Objects>,
+    /// **The standing orders of battle** (#116, #211), or `null`. Same rule.
+    #[serde(default)]
+    pub structures: Option<Structures>,
     /// The workspaces, in chip order.
     pub workspace: Vec<Workspace>,
+}
+
+/// **The facilities a pane draws** (#109, #211): the layer and the vocabulary behind its counts.
+///
+/// `age_seconds` is **the authority's** age at the instant this scene was cast — the same rule as a fix's
+/// (`INV-06`): a viewer adds only the time since it received the scene, on its own monotonic clock, so five screens
+/// agree about how old this read is.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Facilities {
+    pub age_seconds: f64,
+    pub installations: Vec<Installation>,
+    /// The type names and the filter's rows. Unpaginated and complete, so a type's count is the cache's (#112).
+    pub types: Vec<InstallationType>,
+}
+
+/// **The tactical objects** (#110, #211): the operational marks, the offline library, and the picker's vocabulary.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Objects {
+    pub age_seconds: f64,
+    /// The manifest, keyed by symbol `code` — a page of it would be an incomplete cache, so it travels whole.
+    pub manifest: Vec<TacticalObjectManifestEntry>,
+    pub placements: Vec<TacticalObjectPlacement>,
+    /// The panel's domain and category rows, or `null` when the authority has read no vocabulary (#111).
+    pub facets: Option<TacticalObjectFacets>,
+}
+
+/// **The standing orders of battle** (#116, #211): the structures, the forests read so far, and the supreme command.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Structures {
+    pub age_seconds: f64,
+    pub organisations: Vec<UnitOrganisation>,
+    /// The trees the authority has read. A structure absent from this list is one no pane asked for, which draws as
+    /// the structure's own root rather than as an empty tree.
+    pub trees: Vec<UnitOrganisationDetail>,
+    /// `GET /tni-commander`, or `null` when it has not been read. A **vacant** post is a `TniCommandPost` whose
+    /// commander is absent, which is a different claim from no read at all.
+    pub tni: Option<TniCommandPost>,
 }
 
 /// **The water** (#203): the fleet, with the ages **the authority measured**.
@@ -125,14 +176,58 @@ pub struct Pane {
     /// The hull this pane's camera is following (#169), or `null`. A follow is a live mode, and a viewer is told
     /// about it because it is what the pane is doing — not because it should be saved.
     pub follow: Option<i64>,
+    /// **The facility whose card this pane shows** (#109, #211), or `null` — a facility card is "this pane's card"
+    /// too, so a scene that carried only the hull's selection would draw a wall with the right marker layers and one
+    /// card missing.
+    #[serde(default)]
+    pub installation: Option<i64>,
     /// The hull whose card this pane shows (#99), or `null`. The card's *text* is water (#203); the selection is
     /// arrangement, and it is what decides which card is drawn.
     pub selected: Option<i64>,
     pub filter: Filter,
     /// The tree pane's own camera (#127), or `null` on a pane that draws no tree.
     pub tree: Option<Tree>,
-    /// The newsroom's tab, page and open story (#136), or `null` on a pane that is not the newsroom.
+    /// The newsroom's tab, page, open story **and the rows** (#136, #211), or `null` on a pane that is not the
+    /// newsroom.
     pub news: Option<News>,
+    /// **The card's read half** (#99, #211), or `null` when the pane shows no card. The fleet half travels in
+    /// [`Water`]; this is what the authority asked Minos for and a viewer must not ask again.
+    #[serde(default)]
+    pub card: Option<CardAt>,
+}
+
+/// **One card's reads** (#211), for the hull in [`Pane::selected`].
+///
+/// Three `Fetch`es on the wall, three [`Read`]s on the wire: what the wall asked, and what came back. `Failed`
+/// travels with its reason because a card that says "unavailable" and a card that is still waiting are different
+/// pictures, and the reason is the server's words, not the wall's.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CardAt {
+    /// The hull these reads are about, so a scene cannot attach yesterday's commander to today's selection.
+    pub unit: i64,
+    #[serde(default)]
+    pub identity: Read<UnitDetail>,
+    #[serde(default)]
+    pub commander: Read<Vec<UnitCommander>>,
+    #[serde(default)]
+    pub specification: Read<Vec<UnitSpecification>>,
+}
+
+/// **A read, as a picture draws it** (#211): asked and waiting, answered, or refused with the reason.
+///
+/// The tags are words because a client must be able to say which of the three it is looking at without inferring it
+/// from a `null` — `INV-01`: absence is not zero, and "not answered" is not "answered with nothing".
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "read", rename_all = "lowercase")]
+pub enum Read<T> {
+    #[default]
+    Pending,
+    Ready {
+        value: T,
+    },
+    Failed {
+        why: String,
+    },
 }
 
 /// **What a pane is** (#116, #136) — the same three kinds the projection names, with the one field a tree pane needs.
@@ -187,6 +282,23 @@ pub struct News {
     pub page: u32,
     /// The story whose detail is open, or `null` on the list.
     pub selected: Option<i64>,
+    /// **The rows on screen** (#211), with the pager and the open story's articles. A viewer draws the page the
+    /// authority read instead of saying "reading the feed…" for a read it cannot make.
+    #[serde(default)]
+    pub stories: Vec<NewsStory>,
+    #[serde(default)]
+    pub pagination: Option<Pagination>,
+    /// The open story's articles, or `null` on the list. A story that is *being* read and one that *failed* are both
+    /// on the way to a picture, so this is a [`Read`] and not an `Option` of the answer (#211): `null` here is "no
+    /// story open".
+    #[serde(default)]
+    pub detail: Option<Read<NewsStoryDetail>>,
+    /// `reading`, `ready`, or `failed` — the three states of the read, in the words a client can act on.
+    #[serde(default)]
+    pub state: String,
+    /// How long before this scene was cast the authority read the page, in seconds (`INV-06`).
+    #[serde(default)]
+    pub age_seconds: f64,
 }
 
 /// **The surfaces a hand can leave open** (`ADR-0004`), without the ones a hand *holds*.
@@ -291,6 +403,20 @@ mod tests {
                     received_at: "2026-11-14T08:00:00Z".to_string(),
                 }],
             }),
+            // **The read half** (#211): a card's three reads and the three caches, so the round trip covers the fields
+            // a viewer draws that the wall's fleet does not carry.
+            facilities: Some(Facilities {
+                age_seconds: 30.0,
+                installations: Vec::new(),
+                types: Vec::new(),
+            }),
+            objects: None,
+            structures: Some(Structures {
+                age_seconds: 4.0,
+                organisations: Vec::new(),
+                trees: Vec::new(),
+                tni: None,
+            }),
             workspace: vec![Workspace {
                 name: "Straits watch".to_string(),
                 focused: Some(0),
@@ -319,6 +445,15 @@ mod tests {
                         touched: true,
                     }),
                     news: None,
+                    installation: None,
+                    card: Some(CardAt {
+                        unit: 12,
+                        identity: Read::Pending,
+                        commander: Read::Failed {
+                            why: "the commander read was refused".to_string(),
+                        },
+                        specification: Read::Ready { value: Vec::new() },
+                    }),
                 }],
             }],
         };

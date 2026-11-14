@@ -360,6 +360,17 @@ a banner is only a mitigation if it is drawn — and checks the state says the p
 client's on the water, far apart. The assertion counts the ink — one ring is 36 px of it, so two is over 60 — because a
 second client's pointer that is not drawn is a hand nobody can see.
 
+**Every scene replays from its own `Scene`** (#211). `tests/scene_replay.rs` renders each scene the ordinary way and
+again with `ARCONS_REPLAY=1`, which empties the wall — the arrangement, the fleet, the facilities, the objects, the
+structures — and rebuilds it from the scene alone before drawing; the two PNGs must be byte-identical. The one scene
+that *holds* a pane in the air is expected to differ, because a hold is the pointer's (`ADR-0005`), and that exclusion
+is asserted too rather than assumed.
+
+The day it stopped sampling, it found three real gaps in one run: a card was built before the water that feeds it
+arrived (so it drew a card-shaped hole), a **facility's** card selection was not in the scene at all, and the objects'
+manifest came out of a `HashMap` in an order that was not stable between two reads — which would have redrawn a viewer's
+wall for nothing, every frame.
+
 `cursor-hull` and `cursor-idle` are **a client's cursor** (#167): a remote's point on a hull, its press, its
 release, and its point moving off the hull — every step a `cursor.move`, `cursor.press` or `cursor.release` intent
 applied on the frame clock. The pixel claim is a colour the wall uses for nothing else: the ring is

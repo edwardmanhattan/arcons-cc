@@ -612,6 +612,9 @@ fn the_control_document_names_the_scene_the_code_sends() {
         surface: Default::default(),
         cursors: Vec::new(),
         water: None,
+        facilities: None,
+        objects: None,
+        structures: None,
         workspace: vec![arcons_cc::control::snapshot::Workspace {
             name: "one".to_string(),
             focused: None,
@@ -630,6 +633,8 @@ fn the_control_document_names_the_scene_the_code_sends() {
                 filter: Default::default(),
                 tree: None,
                 news: None,
+                installation: None,
+                card: None,
             }],
         }],
     };
