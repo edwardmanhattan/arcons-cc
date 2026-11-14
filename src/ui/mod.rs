@@ -5575,13 +5575,14 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
             "terminating on SIGTERM/SIGINT after {} ms",
             crate::platform::since_start()
         );
-        // **The arrangement is written before the wall leaves** (#153): a `SIGTERM` a second after a split
-        // must not lose the split, and this is the last moment the state is whole.
-        state.flush_layout();
-        // **Every pane's map thread is joined here, not by the drop of a `State` the runtime owns.**
-        // The engine asserts in `~RunLoop` when a process with a live map walks out, and with N panes
-        // there are N contexts to close (#71).
-        state.close_maps();
+        // **The stop, in the one order that keeps a clean stop clean** (#153, #174): the arrangement is written
+        // while the state is whole, the deadline is armed once nothing of the wall's is left to lose, and the map
+        // threads are joined last — that join is the step a wedged thread holds past systemd's timeout.
+        stop(
+            state,
+            &crate::ui::saved::saved_layout_path(),
+            &crate::platform::arm_exit_deadline,
+        );
         tx.quit();
         return false;
     }
@@ -6010,6 +6011,25 @@ pub fn run(window: config::Window, passthrough: Vec<String>) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// **What a wall does when it is told to stop** (#153, #174), as one function, so the order can be read and
+/// tested rather than trusted.
+///
+/// 1. **The arrangement is written** while the state is whole: a `SIGTERM` a second after a split must not lose
+///    the split, and a slow disk must not turn a clean stop into a truncated file — so this completes first.
+/// 2. **The deadline is armed**, and only now: Rune ends the process if the quit is still running after
+///    [`crate::platform::QUIT_DEADLINE`]. Armed before the write, a slow disk would be a lost arrangement.
+/// 3. **The map threads are joined**, which is the step that can hang: the engine asserts in `~RunLoop` when a
+///    process with a live map walks out, and with N panes there are N contexts to close (#71). A thread that will
+///    not let go now costs a logged stop instead of a `SIGKILL`.
+///
+/// `arm` is a parameter rather than a call inside so a test can watch the order against a file it owns: the closure
+/// runs at the moment the wall would arm the deadline, not afterwards.
+pub fn stop(state: &mut State, layout: &std::path::Path, arm: &dyn Fn()) {
+    state.flush_layout_at(layout);
+    arm();
+    state.close_maps();
 }
 
 #[cfg(test)]

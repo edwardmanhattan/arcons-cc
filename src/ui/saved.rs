@@ -137,23 +137,38 @@ impl State {
     /// **Write the arrangement before the process leaves.** Called where the wall stops, because a
     /// `SIGTERM` a second after a split must not lose the split.
     pub fn flush_layout(&mut self) {
+        self.flush_layout_at(&saved_layout_path());
+    }
+
+    /// The same write, at a path the caller names — **so the order of a stop can be proved against a file a test
+    /// owns** (#174): the deadline is armed only after this returned, because a truncated `layout.toml` is worse
+    /// than a slow stop.
+    ///
+    /// Returns whether anything was written: nothing to write is not a failure, and a caller that arms a deadline
+    /// anyway is a caller that does not need to know.
+    pub fn flush_layout_at(&mut self, path: &std::path::Path) -> bool {
         // A capture is not a wall, and a scene built by handlers that ran before `headless` was set must
         // not write a file on its way out: the guard is the same one `arranged` and `save_layout` carry.
         if self.headless {
-            return;
+            return false;
         }
-        if self.arranged_at.take().is_some() {
-            let saved = self.snapshot();
-            let path = saved_layout_path();
-            match toml::to_string_pretty(&saved) {
-                Ok(text) => {
-                    if let Err(error) = crate::config::write_atomically(&path, &text) {
-                        tracing::warn!("layout: {error}");
-                    } else {
-                        tracing::info!("layout: wrote {} on the way out", path.display());
-                    }
+        if self.arranged_at.take().is_none() {
+            return false;
+        }
+        let saved = self.snapshot();
+        match toml::to_string_pretty(&saved) {
+            Ok(text) => {
+                if let Err(error) = crate::config::write_atomically(path, &text) {
+                    tracing::warn!("layout: {error}");
+                    false
+                } else {
+                    tracing::info!("layout: wrote {} on the way out", path.display());
+                    true
                 }
-                Err(error) => tracing::warn!("layout: the wall cannot describe itself ({error})"),
+            }
+            Err(error) => {
+                tracing::warn!("layout: the wall cannot describe itself ({error})");
+                false
             }
         }
     }
@@ -741,6 +756,40 @@ mod tests {
             state.save_due(),
             "a beat after the last change, it is written"
         );
+    }
+
+    /// **The deadline is armed after the arrangement is written, never before** (#174): a truncated `layout.toml`
+    /// is worse than a slow stop, so a slow disk must not be able to lose the file the deadline exists to protect.
+    ///
+    /// The closure runs where the wall arms the deadline, so what it can see is what the wall would see.
+    #[test]
+    fn the_deadline_is_armed_after_the_layout_is_written() {
+        let directory = std::env::temp_dir().join(format!("arcons-stop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let path = directory.join("layout.toml");
+        let mut state = State {
+            logical: 10.0,
+            ..State::default()
+        };
+        state.arranged();
+        assert!(
+            state.arranged_at.is_some(),
+            "the state has something to write"
+        );
+        let armed = std::cell::Cell::new(0_u32);
+        crate::ui::stop(&mut state, &path, &|| {
+            armed.set(armed.get() + 1);
+            let text = std::fs::read_to_string(&path).expect(
+                "the layout file must be on disk before the deadline is armed — a slow disk would otherwise be a \
+                 truncated file that the deadline then kills the process over (#174)",
+            );
+            assert!(
+                text.contains("version"),
+                "the file is written whole, not merely opened: got {text:?}"
+            );
+        });
+        assert_eq!(armed.get(), 1, "the deadline is armed exactly once");
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     /// A capture is not a wall: nothing a scene does marks the arrangement dirty, so a golden can never
