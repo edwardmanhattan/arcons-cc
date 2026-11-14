@@ -529,6 +529,68 @@ fn the_mobile_note_names_only_verbs_the_wall_answers_to() {
     );
 }
 
+/// **The document's scene is the code's `Scene`** (#201), both ways: a field a viewer is told about is one the code
+/// sends, and a field the code sends is one a viewer's author can find.
+///
+/// The same shape as the projection's claim (#181), for the same reason: a serialisation is the one place a document
+/// is most tempted to invent a different vocabulary from the code's, and the failure — a viewer that draws a wall
+/// missing a camera because nobody documented it — is invisible until a fleet shows it.
+#[test]
+fn the_control_document_names_the_scene_the_code_sends() {
+    use arcons_cc::control::snapshot::Scene;
+
+    let doc = read("docs/control.md");
+    let scene = Scene {
+        v: arcons_cc::control::snapshot::SCENE_VERSION,
+        seq: 1,
+        active: 0,
+        focused: None,
+        maximised: None,
+        surface: Default::default(),
+        cursors: Vec::new(),
+        workspace: vec![arcons_cc::control::snapshot::Workspace {
+            name: "one".to_string(),
+            focused: None,
+            tiling: None,
+            pane: vec![arcons_cc::control::snapshot::Pane {
+                id: 1,
+                content: arcons_cc::control::snapshot::Content::Map,
+                camera: arcons_cc::control::projection::CameraView {
+                    lat: 0.0,
+                    lon: 0.0,
+                    zoom: 1.0,
+                },
+                name: None,
+                follow: None,
+                selected: None,
+                filter: Default::default(),
+                tree: None,
+                news: None,
+            }],
+        }],
+    };
+    let value = serde_json::to_value(&scene).expect("a scene serialises");
+    for key in value.as_object().expect("an object").keys() {
+        assert!(
+            doc.contains(&format!("| `{key}` |")),
+            "docs/control.md does not document the scene's `{key}` (#201): a viewer's author cannot find it"
+        );
+    }
+    let pane = value["workspace"][0]["pane"][0]
+        .as_object()
+        .expect("a pane is an object");
+    for key in pane.keys() {
+        assert!(
+            doc.contains(&format!("`{key}`")),
+            "docs/control.md does not document a scene pane's `{key}` (#201)"
+        );
+    }
+    assert!(
+        doc.contains("\"read\": \"wall\""),
+        "docs/control.md must show the projection a viewer asks for first (#181)"
+    );
+}
+
 /// A client is written from `docs/control.md`, so a field the code sends and the document does not name is a field
 /// nobody uses, and a field the document names and the code does not send is a client that reads `undefined`. Both
 /// are checked here, from one `serde` serialization of an empty-projection's shape.

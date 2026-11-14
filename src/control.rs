@@ -35,6 +35,7 @@ use crate::ui::{self, MenuAction, PaneContent, RenameTarget, State, ViewId};
 // a Windows build (which the gate's `check` job compiles) still has them — it simply has no plane to drive them
 // through until someone decides on a named pipe.
 pub mod projection;
+pub mod snapshot;
 pub mod wire;
 
 #[cfg(unix)]
