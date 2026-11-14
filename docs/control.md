@@ -34,6 +34,23 @@ a verb.
 **One or the other, never both**: a line that changed the wall and read it at once could not say which answer the
 client is waiting for. A request with neither is refused by name.
 
+**Every refusal says what kind it is** (#198), because the client is not always a person at a terminal:
+
+| `kind` | what a client does | examples |
+| --- | --- | --- |
+| `rule` | the wall will not do that — do not retry until something else changes | `the last pane on the wall`, `no such pane`, `no menu is open` |
+| `input` | the request was malformed — fix the call, then retry it | `unknown verb`, `not JSON`, `"pane" is a pane id`, `unknown read` |
+| `version` | this client is out of date — send nothing more, update it | `unsupported protocol version` |
+| `busy` | the wall is not answering now — retry, and do not read it as a refusal | `the wall did not answer`, `the wall has stopped` |
+
+```json
+{"v": 1, "ok": false, "why": "the last pane on the wall", "kind": "rule"}
+```
+
+The table of every message and its kind is one table in `src/control.rs` (`REFUSALS`), and
+`tests/scaffold.rs` reads the source for every refusal the code can make and fails when the two disagree — both
+directions. A refusal with no category does not merge.
+
 A request is refused **by name** and **on the same connection**: an unknown verb, a missing field, a wrong type or
 a rule the wall will not break all come back as `{"ok": false, "why": …}`, and the next line may be a fresh
 request. `changed` says whether anything on screen moved — a `pane.focus` on the pane that already has the keys is

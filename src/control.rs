@@ -203,6 +203,118 @@ pub struct Changed(pub bool);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Refused(pub &'static str);
 
+/// **What a client can do about a refusal** (#198): the category of a "no", beside its words.
+///
+/// A refusal is a named rule, and the words are for the person at the screen (`INV-07`). A *client* is not a person at
+/// a terminal: it has to choose between retrying, fixing the call it sent, and telling its user the app is out of date.
+/// Reading prose to decide that is a client coupled to a sentence, so every refusal carries its category too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefusalKind {
+    /// **The wall will not do that.** Understood and refused; sending it again changes nothing until something else on
+    /// the wall does — `the last pane on the wall`, `no such pane`.
+    Rule,
+    /// **This client speaks a version the wall does not.** Send nothing more: update the app.
+    Version,
+    /// **The request was malformed** — a field of the wrong type, a verb that does not exist. Fix the call, retry.
+    Input,
+    /// **The wall is not answering now** — mid-frame, or going away. Retry, and do not read it as a refusal of the
+    /// change itself.
+    Busy,
+}
+
+impl RefusalKind {
+    /// The word on the wire and in `docs/control.md`. A client matches on these four and never on a sentence.
+    pub fn word(self) -> &'static str {
+        match self {
+            RefusalKind::Rule => "rule",
+            RefusalKind::Version => "version",
+            RefusalKind::Input => "input",
+            RefusalKind::Busy => "busy",
+        }
+    }
+
+    /// The category a word names, or `None` for a word this wall does not use (`INV-07`: no default).
+    pub fn of_word(word: &str) -> Option<RefusalKind> {
+        [
+            RefusalKind::Rule,
+            RefusalKind::Version,
+            RefusalKind::Input,
+            RefusalKind::Busy,
+        ]
+        .into_iter()
+        .find(|kind| kind.word() == word)
+    }
+}
+
+/// **Every refusal this wall can make, and what kind it is** (#198).
+///
+/// One table, in one place, beside the messages. A refusal that is not here is a refusal with no category — and
+/// `tests/scaffold.rs` walks the source for every `Refused("…")` literal and fails when the two disagree, in both
+/// directions. That is what makes "a new refusal is a visible branch" true without a `match` that could grow a `_`.
+pub const REFUSALS: &[(&str, RefusalKind)] = &[
+    ("\"at\" is [x, y] in the pane's frame", RefusalKind::Input),
+    (
+        "\"at\" is [x, y] in the picture panel's points",
+        RefusalKind::Input,
+    ),
+    ("\"camera\" is {lat, lon, zoom}", RefusalKind::Input),
+    ("\"content\" needs a \"kind\"", RefusalKind::Input),
+    ("\"name\" is a string or null", RefusalKind::Input),
+    ("\"open\" is true or false", RefusalKind::Input),
+    (
+        "\"organisation\" is a structure id or null",
+        RefusalKind::Input,
+    ),
+    ("\"pane\" is a pane id", RefusalKind::Input),
+    ("\"row\" is a row index or null", RefusalKind::Input),
+    (
+        "\"target\" is {\"pane\": n} or {\"workspace\": n}",
+        RefusalKind::Input,
+    ),
+    ("\"unit\" is a hull id or null", RefusalKind::Input),
+    ("\"zoom\" is a number or null", RefusalKind::Input),
+    (
+        "a request carries \"intent\" or \"read\"",
+        RefusalKind::Input,
+    ),
+    ("a request carries \"v\"", RefusalKind::Input),
+    ("a request is a JSON object", RefusalKind::Input),
+    ("an id is a non-negative integer", RefusalKind::Input),
+    ("an intent has no verb", RefusalKind::Input),
+    ("an intent is a JSON object", RefusalKind::Input),
+    ("no menu is open", RefusalKind::Rule),
+    ("no pane has the keys", RefusalKind::Rule),
+    ("no row has the ring", RefusalKind::Rule),
+    ("no submenu is open", RefusalKind::Rule),
+    ("no such pane", RefusalKind::Rule),
+    ("no such workspace", RefusalKind::Rule),
+    ("not JSON", RefusalKind::Input),
+    ("the cursor has not been placed", RefusalKind::Rule),
+    ("the cursor is not pressed", RefusalKind::Rule),
+    ("the hull has not reported", RefusalKind::Rule),
+    ("the last pane on the wall", RefusalKind::Rule),
+    ("the pane draws no map", RefusalKind::Rule),
+    ("the pane has no frame yet", RefusalKind::Rule),
+    ("the pane is already in that workspace", RefusalKind::Rule),
+    ("the ring is on no row", RefusalKind::Rule),
+    ("the row opens nothing", RefusalKind::Rule),
+    ("the tiling refused the pane", RefusalKind::Rule),
+    ("the wall did not answer", RefusalKind::Busy),
+    ("the wall has stopped", RefusalKind::Busy),
+    ("unknown pane kind", RefusalKind::Input),
+    ("unknown read", RefusalKind::Input),
+    ("unknown verb", RefusalKind::Input),
+    ("unsupported protocol version", RefusalKind::Version),
+];
+
+/// The category of a refusal, by its words — `None` for a message this wall never sends.
+pub fn refusal_kind(why: &str) -> Option<RefusalKind> {
+    REFUSALS
+        .iter()
+        .find(|(message, _)| *message == why)
+        .map(|(_, kind)| *kind)
+}
+
 /// Whether this process handed `intent` to its authority instead of applying it (#204).
 ///
 /// A viewer has a session and no authority of its own; everything else — a wall, a capture, the authority process

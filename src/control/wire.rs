@@ -444,7 +444,14 @@ pub fn reply(answer: Answer) -> String {
             json!({ "v": PROTOCOL, "ok": true, "changed": changed.0 }).to_string()
         }
         Answer::Changed(Err(Refused(why))) => {
-            json!({ "v": PROTOCOL, "ok": false, "why": why }).to_string()
+            // **The words and the category** (#198): a client decides what to do from `kind`, and a person reads `why`.
+            // A message with no category is a message nobody classified — `tests/scaffold.rs` refuses that, so this
+            // branch is unreachable in a green tree rather than a default nobody notices.
+            let mut reply = json!({ "v": PROTOCOL, "ok": false, "why": why });
+            if let Some(kind) = super::refusal_kind(why) {
+                reply["kind"] = json!(kind.word());
+            }
+            reply.to_string()
         }
         // **A read is a body, and a good one**: `wall` beside `ok`, and no `changed` — a client that asked to
         // change nothing is not told something did.
@@ -549,13 +556,26 @@ mod tests {
     }
 
     /// A reply is one line with the version on it, whether it worked or not — a client never has to guess
-    /// whether silence meant success.
+    /// whether silence meant success. **A refusal carries its category beside its words** (#198).
     #[test]
-    fn a_reply_says_whether_it_worked() {
+    fn a_reply_says_whether_it_worked_and_why_in_a_word() {
         let ok = reply(Answer::Changed(Ok(Changed(true))));
         assert_eq!(ok, r#"{"changed":true,"ok":true,"v":1}"#);
         let refused = reply(Answer::Changed(Err(Refused("unknown verb"))));
-        assert_eq!(refused, r#"{"ok":false,"v":1,"why":"unknown verb"}"#);
+        assert_eq!(
+            refused, r#"{"kind":"input","ok":false,"v":1,"why":"unknown verb"}"#,
+            "a client decides from `kind`: `unknown verb` is a call to fix, not a rule to wait out"
+        );
+        // The three families, each through the one table: the wall's rule, a version to update, a wall to retry.
+        for (why, kind) in [
+            ("the last pane on the wall", "rule"),
+            ("unsupported protocol version", "version"),
+            ("the wall has stopped", "busy"),
+        ] {
+            let line = reply(Answer::Changed(Err(Refused(why))));
+            let value: Value = serde_json::from_str(&line).expect("a reply is JSON");
+            assert_eq!(value["kind"], json!(kind), "{why} is a {kind}");
+        }
     }
     /// **A scene travels as a line and comes back as itself** (#202): one encoder, one decoder, and the identity in
     /// between — which is what lets a viewer on another machine draw the wall the authority owns.

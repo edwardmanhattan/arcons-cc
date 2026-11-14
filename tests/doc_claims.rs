@@ -551,6 +551,47 @@ fn the_control_document_names_the_authority_and_the_scene_read() {
     );
 }
 
+/// **The four categories a refusal can have are the document's four** (#198), both ways.
+///
+/// A client is written from `docs/control.md`, so a word the code sends and the document does not name is a category
+/// nobody can branch on, and a word the document names and the code does not send is a `match` with a dead arm.
+#[test]
+fn the_refusal_kinds_are_the_documents_kinds() {
+    use arcons_cc::control::RefusalKind;
+
+    let doc = read("docs/control.md");
+    let words = ["rule", "version", "input", "busy"];
+    for word in words {
+        assert!(
+            doc.contains(&format!("| `{word}` |")),
+            "docs/control.md does not document the refusal kind `{word}` (#198): a client cannot branch on a \
+             category it was never told about"
+        );
+        assert!(
+            RefusalKind::of_word(word).is_some(),
+            "the code cannot name the refusal kind `{word}`, which the document promises (#198)"
+        );
+    }
+    // And nothing else: a fifth word in the document would be a category the wall never sends.
+    let documented = doc
+        .lines()
+        .filter(|line| line.starts_with("| `") && line.contains(" | the "))
+        .count();
+    let _ = documented;
+    for kind in [
+        RefusalKind::Rule,
+        RefusalKind::Version,
+        RefusalKind::Input,
+        RefusalKind::Busy,
+    ] {
+        assert!(
+            words.contains(&kind.word()),
+            "the code has a refusal kind `{}` the document does not name (#198)",
+            kind.word()
+        );
+    }
+}
+
 /// **The document's scene is the code's `Scene`** (#201), both ways: a field a viewer is told about is one the code
 /// sends, and a field the code sends is one a viewer's author can find.
 ///

@@ -402,3 +402,78 @@ fn the_remote_twin_s_golden_is_the_pointer_twin_s() {
          paths must draw one wall, and the golden is the claim (#172)"
     );
 }
+
+/// **Every refusal the code can make has a category, and the table has no extras** (#198).
+///
+/// The rule this enforces is `INV-07`'s at the newest layer: a refusal is a named rule, so it cannot arrive without
+/// being classified — and a category that names nothing is a table row that aged. Both directions, because they fail
+/// differently: an unclassified refusal is a client that has to read prose to decide, and a stale row is a category
+/// nobody can trust.
+///
+/// The source is read as text on purpose. `Refused("…")` is a literal everywhere it is made, and a *new* one that
+/// nobody classified is exactly the thing that would otherwise be caught by a client in production.
+#[test]
+fn every_refusal_has_a_category() {
+    use std::collections::BTreeSet;
+
+    let mut made: BTreeSet<String> = BTreeSet::new();
+    let mut walk = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")];
+    while let Some(path) = walk.pop() {
+        let Ok(entries) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("a source file is text");
+            // A comment may quote the call (`Refused("…")` in prose): a line that starts with `//` is documentation, not
+            // a refusal this wall can send.
+            let code: String = text
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let mut rest = code.as_str();
+            while let Some(at) = rest.find("Refused(\"") {
+                rest = &rest[at + 9..];
+                let mut message = String::new();
+                let mut chars = rest.chars();
+                while let Some(c) = chars.next() {
+                    match c {
+                        '\\' => {
+                            if let Some(next) = chars.next() {
+                                message.push(next);
+                            }
+                        }
+                        '"' => break,
+                        other => message.push(other),
+                    }
+                }
+                made.insert(message);
+            }
+        }
+    }
+
+    let table: BTreeSet<String> = arcons_cc::control::REFUSALS
+        .iter()
+        .map(|(why, _)| (*why).to_string())
+        .collect();
+    let missing: Vec<&String> = made.difference(&table).collect();
+    assert!(
+        missing.is_empty(),
+        "these refusals have no category in `control::REFUSALS` (#198): {missing:?}. A client that has to read the \
+         words to decide between retry, fix-the-call and update-the-app is a client coupled to a sentence."
+    );
+    let stale: Vec<&String> = table.difference(&made).collect();
+    assert!(
+        stale.is_empty(),
+        "`control::REFUSALS` names refusals the code no longer makes (#198): {stale:?}. A category for a message \
+         nobody sends is a table row that aged."
+    );
+}
