@@ -217,8 +217,14 @@ mod tests {
         assert_eq!(Role::of(Some("   ")), Role::Local);
         assert_eq!(
             Role::of(Some("socket")),
-            Role::Remote(crate::control::socket_path()),
+            Role::Remote(this_walls_socket()),
             "the word `socket` is this machine's wall"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            this_walls_socket(),
+            crate::control::socket_path(),
+            "and on a unix machine that is the socket the wall listens on"
         );
         assert_eq!(
             Role::of(Some("/run/other/control.sock")),
