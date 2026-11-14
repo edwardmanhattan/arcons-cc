@@ -106,6 +106,13 @@ pub enum Intent {
     CloseOtherWorkspaces,
     /// Open a pane of this kind beside the focused one (the header's controls, a CLI's `pane open`).
     OpenPane(PaneContent),
+    /// **Lock this pane's camera onto a hull** (#169), or stop with `unit: None`. `zoom` sets it once; without one,
+    /// the pane keeps the zoom it had.
+    Follow {
+        pane: ViewId,
+        unit: Option<i64>,
+        zoom: Option<f64>,
+    },
     /// Put this pane's selection on one hull, or clear it with `None` (#99).
     Select { pane: ViewId, unit: Option<i64> },
 
@@ -163,6 +170,7 @@ impl Intent {
             Intent::CloseOtherPanes => "pane.close_others",
             Intent::CloseOtherWorkspaces => "workspace.close_others",
             Intent::OpenPane(_) => "pane.open",
+            Intent::Follow { .. } => "object.follow",
             Intent::Select { .. } => "pane.select",
             Intent::FocusWorkspace(_) => "workspace.focus",
             Intent::NewWorkspace => "workspace.new",
@@ -280,6 +288,29 @@ pub fn apply(state: &mut State, intent: Intent) -> Result<Changed, Refused> {
         }
         Intent::CloseOtherWorkspaces => state.close_workspaces_but_active() > 0,
         Intent::OpenPane(content) => ui::open_pane_focused(state, content).is_some(),
+        Intent::Follow { pane, unit, zoom } => {
+            let Some(held) = state.pane(pane) else {
+                return Err(Refused("no such pane"));
+            };
+            if !held.content.is_map() {
+                return Err(Refused("the pane draws no map"));
+            }
+            match unit {
+                Some(unit) => {
+                    if !state.follow(pane, unit, zoom) {
+                        // **Absence is not zero** (`INV-01`): a hull with no fix cannot be followed, and the reason
+                        // names the hull rather than leaving a camera where a guess would put it.
+                        return Err(Refused("the hull has not reported"));
+                    }
+                }
+                None => {
+                    if let Some(held) = state.pane_mut(pane) {
+                        held.follow = None;
+                    }
+                }
+            }
+            true
+        }
         Intent::Select { pane, unit } => {
             if state.pane(pane).is_none() {
                 return Err(Refused("no such pane"));
@@ -458,6 +489,11 @@ pub fn vocabulary() -> Vec<Intent> {
         Intent::CloseOtherPanes,
         Intent::CloseOtherWorkspaces,
         Intent::OpenPane(PaneContent::Newsroom),
+        Intent::Follow {
+            pane: 1,
+            unit: Some(12),
+            zoom: None,
+        },
         Intent::Select {
             pane: 1,
             unit: None,
@@ -755,6 +791,103 @@ mod tests {
             apply(&mut state, Intent::CloseOtherWorkspaces),
             Ok(Changed(false)),
             "one workspace is nothing to close"
+        );
+    }
+
+    /// **A follow centres the pane on the hull's fix, every frame** (#169) — and a camera intent ends it, so the
+    /// wall stops pulling the camera back the moment somebody pans.
+    #[test]
+    fn following_a_hull_centres_the_pane_and_a_camera_ends_it() {
+        let mut state = State::default();
+        // The default wall has no picture; the fixture is what a hull's fix comes from.
+        state.load_fixture(&crate::scene::fixture().expect("the fixture"));
+        let pane = state.focused();
+        let unit = crate::scene::LIVE_UNIT;
+        let Some(fix) = state
+            .picture
+            .units()
+            .iter()
+            .find(|held| held.unit.id_unit == unit)
+            .and_then(|held| held.drawn(state.now()))
+            .map(|pos| (pos.lat, pos.lon))
+        else {
+            panic!("the fixture's live hull has a fix");
+        };
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::Follow {
+                    pane,
+                    unit: Some(unit),
+                    zoom: Some(13.0)
+                }
+            ),
+            Ok(Changed(true))
+        );
+        let camera = state.camera_of(pane);
+        assert!(
+            (camera.center.0 - fix.0).abs() < 1e-9 && (camera.center.1 - fix.1).abs() < 1e-9,
+            "the pane is centred on the hull: {camera:?} against {fix:?}"
+        );
+        assert_eq!(camera.zoom, 13.0, "and at the zoom the intent asked for");
+
+        // A camera intent is the operator's: the follow goes, and the camera stays where it was put.
+        let elsewhere = crate::map::geometry::Camera::new((-5.0, 105.0), 10.0);
+        apply(
+            &mut state,
+            Intent::Camera {
+                pane,
+                camera: elsewhere,
+            },
+        )
+        .expect("a camera");
+        assert_eq!(
+            state.pane(pane).and_then(|pane| pane.follow),
+            None,
+            "any camera intent ends the follow (#169)"
+        );
+        assert_eq!(state.camera_of(pane), elsewhere);
+        assert!(
+            !state.tick_follows(),
+            "and nothing moves it back: the hand is driving"
+        );
+    }
+
+    /// **A hull that has not reported cannot be followed** (`INV-01`): the refusal names it rather than putting a
+    /// camera where a guess would.
+    #[test]
+    fn following_a_hull_with_no_fix_is_refused() {
+        let mut state = State::default();
+        state.load_fixture(&crate::scene::fixture().expect("the fixture"));
+        let pane = state.focused();
+        let silent = crate::scene::fixture()
+            .expect("the fixture")
+            .into_iter()
+            .find(|hull| hull.position.is_none())
+            .expect("a hull that has never reported")
+            .id_unit;
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::Follow {
+                    pane,
+                    unit: Some(silent),
+                    zoom: None
+                }
+            ),
+            Err(Refused("the hull has not reported"))
+        );
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::Follow {
+                    pane,
+                    unit: None,
+                    zoom: None
+                }
+            ),
+            Ok(Changed(true)),
+            "letting go is never a refusal"
         );
     }
 

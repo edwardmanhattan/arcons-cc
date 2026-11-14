@@ -56,6 +56,7 @@ field marked **required** is a refusal when it is missing.
 | `pane.close_others` | — | closes every pane in the **workspace on screen** but the one with the keys (#166), one at a time through the close a menu row uses. Never a workspace the client cannot see. `no pane has the keys` (an empty workspace) |
 | `workspace.close_others` | — | closes every workspace but the one on screen (#166): the chips go, their panes go with them and join their map threads, and **the active workspace is never closed and never emptied** |
 | `pane.open` | `content` | a pane of that kind beside the focused one — the header's tree and newsroom controls (#116, #136), asking their first reads |
+| `object.follow` | `pane`, `unit`, `zoom` | **locks that pane's camera onto a hull** (#169): every frame the camera centres the hull's current fix, at `zoom` if one is given (once — the pane keeps it afterwards). `unit: null` lets go. `no such pane`, `the pane draws no map`, `the hull has not reported` (no fix is not a fix at zero, `INV-01`) |
 | `pane.select` | `pane`, `unit` | puts that pane's card on a hull; `unit: null` clears it (#99). `no such pane` |
 | `workspace.focus` | `index` | makes that workspace the wall on screen (#138). `no such workspace` |
 | `workspace.new` | — | appends an empty workspace and switches to it (#138) |
@@ -111,6 +112,18 @@ the picture, which is the one thing this protocol decided not to send.
 ```sh
 arcons-cc ctl wall | jq '.workspaces[] | {name, panes: [.panes[].kind]}'
 ```
+
+## Following a hull
+
+`object.follow` makes a pane's camera track a hull: every frame the camera centres that hull's fix, so a remote can say
+"look at 512345" and the wall keeps looking. Three rules, and each is a test:
+
+- **A hull with no fix cannot be followed** — `INV-01`'s absence is not zero, and the refusal names the hull rather
+  than leaving the camera where a guess would put it.
+- **Any camera intent ends it** — a pan, a zoom, another `map.camera` — otherwise the operator pans and the next frame
+  pulls the camera back, which is a wall fighting the hand driving it. A hull that stops reporting ends it too.
+- **It is not saved.** `layout.toml` remembers where a pane is looking (#153); a follow is a live mode, and a hull that
+  went quiet is not a place to come back to.
 
 ## A menu, without a pointer
 
