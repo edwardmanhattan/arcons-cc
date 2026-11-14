@@ -67,6 +67,46 @@ fn rune_is_pinned_by_rev_and_the_adr_quotes_it() {
     );
 }
 
+/// **The wall's own exit deadline is shorter than the unit's `TimeoutStopSec`** (#174).
+///
+/// The two numbers live in different files for good reasons — the unit is the operator's, the constant is the
+/// program's — and the failure they can disagree about is silent: a deadline longer than the timeout means systemd's
+/// `SIGKILL` arrives first, which is the hard exit the deadline exists to avoid, and the log says only that the
+/// process died.
+#[test]
+fn the_exit_deadline_is_shorter_than_the_unit_s_timeout() {
+    let source = read("src/platform.rs");
+    let deadline = first_number_after(
+        &source,
+        "pub const QUIT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(",
+    )
+    .expect("src/platform.rs names QUIT_DEADLINE as a whole number of seconds");
+    let runbook = read("docs/runbook.md");
+    let timeout = first_number_after(&runbook, "TimeoutStopSec=").expect(
+        "docs/runbook.md's unit file sets TimeoutStopSec, so a reader knows what the backstop is",
+    );
+    assert!(
+        deadline < timeout,
+        "the exit deadline ({deadline} s) must be shorter than the unit's TimeoutStopSec ({timeout} s), or \
+         systemd's SIGKILL arrives first and the wall is killed rather than stopped (#174)"
+    );
+    assert!(
+        runbook.contains(&format!("{deadline} s after `SIGTERM`")),
+        "docs/runbook.md does not say the deadline is {deadline} s: an operator reading a killed unit needs the \
+         number the program uses, and this test is what keeps them the same (#174)"
+    );
+}
+
+/// The first integer after `marker`, as a document writes one.
+fn first_number_after(text: &str, marker: &str) -> Option<u32> {
+    text.split_once(marker)
+        .map(|(_, rest)| rest)
+        .and_then(|rest| {
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().ok()
+        })
+}
+
 /// The refusal codes in §7 of the pinned realtime protocol: `| \`101\` | … |`.
 fn documented_refusal_codes() -> Vec<u16> {
     let doc = read("docs/spec/realtime-protocol.md");

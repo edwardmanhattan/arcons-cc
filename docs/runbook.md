@@ -156,6 +156,9 @@ ExecStartPre=/usr/local/bin/arcons-cc --self-check
 ExecStart=/usr/local/bin/arcons-cc --fullscreen --no-decorations --log-file %h/.local/state/arcons-cc/wall.log
 Restart=on-failure
 RestartSec=10
+# The wall ends itself 5 s after `SIGTERM` if its quit is still running (`QUIT_DEADLINE`), so this is a
+# backstop, not the mechanism: it must be longer than 5, or systemd's `SIGKILL` arrives first.
+TimeoutStopSec=10
 # `--self-check` in ExecStartPre means a wall with a refused credential never opens a window at all.
 # The GPU variables are the app's own: `ARCONS_MAP_VK_DRIVER` selects the integrated GPU (`#16`).
 
@@ -174,7 +177,19 @@ stale picture from three days ago is worse than a wall showing nothing at all.
 
 `SIGTERM` (what `systemctl --user stop` sends) sets a flag the view loop reads; it quits through the
 runtime's own path, so the GL context and the socket are dropped in order and the exit status is `0`.
-There is no `TimeoutStopSec` dance and no leaked thread.
+
+**The stop has an order, and it is the order that keeps a clean stop clean** (`ui::stop`, #153, #174):
+
+1. `layout.toml` is written while the state is whole. A `SIGTERM` a second after a split keeps the split, and a
+   slow disk cannot truncate the file.
+2. **The exit deadline is armed** — 5 s, `platform::QUIT_DEADLINE`. If the quit is still running then, Rune says
+   on stderr which step it reached, marks `quit.deadline`, and ends the process.
+3. The pane map threads are joined, which is the step that can hang.
+
+So a wedged map thread costs a logged stop and not a `SIGKILL`. Read the log for `quit.deadline`: **its absence is
+the good news** — a wall that left in order never reaches the deadline, and a wall that was killed at the unit's
+`TimeoutStopSec` (the `code=killed, signal=KILL` in `systemctl --user status`) was one whose deadline was set
+longer than that timeout, which `tests/doc_claims.rs` refuses to let the two files disagree about.
 
 ## 6. Build the binary a wall runs
 

@@ -135,6 +135,28 @@ pub fn rss_mb() -> Option<f64> {
     }
 }
 
+/// **How long a wall may take to stop before it ends itself** (#174).
+///
+/// A map thread that is wedged mid-frame holds the process open past systemd's `TimeoutStopSec`, and the `SIGKILL`
+/// that follows is the hard exit `src/platform.rs` exists to avoid: it leaves the driver complaining and the log
+/// saying nothing. Five seconds is longer than a clean stop takes — a `layout.toml` write and N map threads closing
+/// are milliseconds — and shorter than any `TimeoutStopSec` an operator would set (`docs/runbook.md` names ten, and
+/// `tests/doc_claims.rs` compares the two numbers both ways).
+pub const QUIT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// **Arm the exit deadline**, once the arrangement is written and nothing of the wall's own is left to lose.
+///
+/// Rune ends the process `QUIT_DEADLINE` from now if it is still alive, says on stderr which quit step it reached,
+/// and marks `quit.deadline`. A clean stop never reaches it, so a log without that mark is a wall that left in
+/// order — which is the thing an operator needs to be able to tell at a glance.
+pub fn arm_exit_deadline() {
+    tracing::debug!(
+        "quit: arming a {} ms deadline, so a map thread that will not let go cannot earn a SIGKILL",
+        QUIT_DEADLINE.as_millis()
+    );
+    rune::exit_deadline(QUIT_DEADLINE);
+}
+
 /// Watch for `SIGTERM` and `SIGINT` and set a flag the view loop reads.
 ///
 /// A wall is stopped by systemd (`SIGTERM`) or by someone pressing Ctrl-C in a terminal (`SIGINT`).
