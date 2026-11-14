@@ -10,7 +10,6 @@
 //! handshake. The directory is what closes the window between `bind` and `set_permissions` — nobody else can
 //! enter it to race the chmod.
 
-use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -191,13 +190,23 @@ fn serve(
 /// One connection: read lines, answer each one, stop at end of file or at the wall's stop — which `Drop` says
 /// by shutting this socket down (the read then returns end-of-file, and a half-typed line goes with it).
 fn serve_one(stream: UnixStream, tx: &Sender<Job>, stop: &AtomicBool) -> std::io::Result<()> {
-    let mut writer = stream.try_clone()?;
-    let reader = BufReader::new(stream);
-    for line in reader.lines() {
+    serve_session(super::carrier::Unix::new(stream)?, tx, stop)
+}
+
+/// **The session loop, over whatever carrier the wall has** (#195).
+///
+/// This is the whole of the plane's behaviour — read a line, hand it to the UI thread, write the answer back — and it
+/// knows the transport only as [`super::carrier::Carrier`]. A relay (#196) and a viewer's connection (#202) reuse it,
+/// so there is one vocabulary, one refusal path and one place that could break `INV-05`.
+fn serve_session(
+    mut carrier: impl super::carrier::Carrier,
+    tx: &Sender<Job>,
+    stop: &AtomicBool,
+) -> std::io::Result<()> {
+    while let Some(line) = carrier.read_line()? {
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        let line = line?;
         if line.trim().is_empty() {
             continue;
         }
@@ -207,8 +216,7 @@ fn serve_one(stream: UnixStream, tx: &Sender<Job>, stop: &AtomicBool) -> std::io
         };
         // **A refused request is a line, never a closed connection** (`INV-07`): a client that asked for
         // something impossible can ask for something else without reconnecting.
-        writeln!(writer, "{}", super::wire::reply(answer))?;
-        writer.flush()?;
+        carrier.write_line(&super::wire::reply(answer))?;
     }
     Ok(())
 }
@@ -237,6 +245,7 @@ mod tests {
     use crate::control::wire::Answer;
     use crate::control::{self, Changed, Intent, LAST_PANE};
     use crate::ui::State;
+    use std::io::{BufRead, BufReader, Write};
 
     /// A socket in this test's own directory, so two runs of the gate cannot collide and nothing is left in the
     /// operator's run directory by a test.
@@ -404,5 +413,66 @@ mod tests {
             .read_line(&mut second)
             .expect("the second reply comes");
         assert_eq!(second.trim(), r#"{"changed":false,"ok":true,"v":1}"#);
+    }
+    /// **The session loop knows the transport only as a `Carrier`** (#195): the same loop that serves a unix socket
+    /// serves a pair of in-memory ends, and nothing about intents, answers or the wall changed to allow it.
+    ///
+    /// It also holds `INV-05`: the loop does not apply anything. It hands the wall a `Job` and waits, so the client
+    /// hears nothing until the UI thread has finished — asserted, not assumed, by asking the peer for its line before
+    /// answering and getting nothing.
+    #[test]
+    fn the_session_loop_serves_a_carrier_it_has_never_seen() {
+        let (wall_end, peer) = crate::control::carrier::Loopback::pair();
+        let (tx, jobs) = mpsc::channel::<Job>();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = Arc::clone(&stop);
+        let serving = std::thread::spawn(move || serve_session(wall_end, &tx, &stopping));
+
+        peer.send(r#"{"v":1,"intent":{"verb":"workspace.new"}}"#);
+        // Bounded: a loop that answered for itself would never send a job, and a test that hangs tells you less than
+        // one that fails with a sentence.
+        let job = jobs.recv_timeout(Duration::from_secs(2)).expect(
+            "the loop did not hand the request to the wall: something answered for the UI thread (INV-05)",
+        );
+        assert!(
+            peer.recv_within(Duration::from_millis(50)).is_none(),
+            "the loop answered before the wall did: a carrier must never apply a change itself (INV-05)"
+        );
+
+        // The UI thread, played by this test: apply, then answer.
+        let mut state = State::default();
+        let answer = match job.request.clone() {
+            super::super::wire::Request::Intent(intent) => {
+                super::super::wire::Answer::Changed(control::apply(&mut state, intent))
+            }
+            super::super::wire::Request::Wall => {
+                super::super::wire::Answer::Wall(crate::control::projection::of(&state))
+            }
+        };
+        job.answer(answer);
+        let line = peer
+            .recv_within(Duration::from_secs(2))
+            .expect("the answer came back through the carrier");
+        // The reply is built by `wire::reply`, so this compares against the same function the socket uses rather than
+        // against a hand-written copy of its key order.
+        assert_eq!(
+            line,
+            super::super::wire::reply(super::super::wire::Answer::Changed(Ok(
+                crate::control::Changed(true)
+            ))),
+            "the answer is the same line the socket sends"
+        );
+        assert_eq!(
+            state.workspaces.len(),
+            4,
+            "the wall changed once, on the thread that owns it"
+        );
+
+        drop(peer);
+        stop.store(true, Ordering::SeqCst);
+        serving
+            .join()
+            .expect("the loop thread ends")
+            .expect("a hung-up peer is end of file, not an error");
     }
 }

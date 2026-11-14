@@ -34,6 +34,7 @@ use crate::ui::{self, MenuAction, PaneContent, RenameTarget, State, ViewId};
 // behind `unix` (#165). The vocabulary above is not: `Intent` and `apply` are the wall's own state machine, and
 // a Windows build (which the gate's `check` job compiles) still has them — it simply has no plane to drive them
 // through until someone decides on a named pipe.
+pub mod carrier;
 pub mod projection;
 pub mod snapshot;
 pub mod wire;

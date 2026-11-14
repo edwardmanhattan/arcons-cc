@@ -127,6 +127,16 @@ arcons-cc ctl wall | jq '.workspaces[] | {name, panes: [.panes[].kind]}'
 - **It is not saved.** `layout.toml` remembers where a pane is looking (#153); a follow is a live mode, and a hull that
   went quiet is not a place to come back to.
 
+## The transport is a seam (#195)
+
+The socket above is **one carrier**. Everything the plane *does* — read a line, hand it to the UI thread, write the
+answer back — lives in one session loop that knows the transport only as a carrier: read a line, write a line, hang up.
+A relay the wall dials out to (a phone, #196) and a network session (a viewer, #202) are the same three calls, so there
+is one vocabulary, one refusal path and one place that could break `INV-05`.
+
+The unix socket stays what it is: the local credential, one client at a time, no token. A carrier adds a way to reach the
+same loop; it does not add a second way to change the wall.
+
 ## The scene: the whole arrangement (#201)
 
 `{"v": 1, "read": "wall"}` is the projection — small, for a client that needs to know what the wall is doing. A
