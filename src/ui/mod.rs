@@ -847,17 +847,14 @@ impl State {
     /// **Whether this process draws somebody else's wall** (#203): a viewer reads nothing from Minos, holds no
     /// credential, and is told the arrangement and the water by its authority.
     pub fn is_viewer(&self) -> bool {
-        if self.viewer {
-            return true;
-        }
+        // Two facts, one answer: the role says so, or a session exists. Written as a binding rather than an early
+        // `return`, because on a platform with no session the `if`/`false` shape is a `clippy` lint there and the code
+        // that reads is the code that compiles.
         #[cfg(unix)]
-        {
-            self.session.is_some()
-        }
+        let has_session = self.session.is_some();
         #[cfg(not(unix))]
-        {
-            false
-        }
+        let has_session = false;
+        self.viewer || has_session
     }
 
     /// **How long the authority has been quiet** (#206), in seconds on the frame clock, or `None` if it has never been
