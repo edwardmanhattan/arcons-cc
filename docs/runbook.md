@@ -191,6 +191,21 @@ the good news** — a wall that left in order never reaches the deadline, and a 
 `TimeoutStopSec` (the `code=killed, signal=KILL` in `systemctl --user status`) was one whose deadline was set
 longer than that timeout, which `tests/doc_claims.rs` refuses to let the two files disagree about.
 
+## 5b. A second screen, if there is one
+
+A fleet is `ADR-0006`: one authority owns the wall, every other screen draws it. On one machine that needs no network at
+all — the viewer connects to the wall's own control socket:
+
+```sh
+# the wall (as above), then, on the same machine:
+ARCONS_AUTHORITY=socket /usr/local/bin/arcons-cc --fullscreen
+```
+
+`ARCONS_AUTHORITY=/path/to/control.sock` points at another wall's socket; unset means this process *is* the wall.
+`arcons-cc --self-check` says which in its `authority` row, because a viewer and a wall answer the same requests and an
+operator has to be able to tell them apart. A viewer that cannot reach its authority says so in one line and draws its
+own default wall rather than a blank screen.
+
 ## 6. Build the binary a wall runs
 
 ```sh

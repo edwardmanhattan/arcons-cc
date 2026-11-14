@@ -127,6 +127,34 @@ arcons-cc ctl wall | jq '.workspaces[] | {name, panes: [.panes[].kind]}'
 - **It is not saved.** `layout.toml` remembers where a pane is looking (#153); a follow is a live mode, and a hull that
   went quiet is not a place to come back to.
 
+## A second screen: the authority and the viewer (#202)
+
+One process owns the wall's state; every other screen draws what it is given. That is a **role**, not a second program:
+`ADR-0006` is the decision, and the only difference is which process calls `apply`.
+
+| | |
+| --- | --- |
+| `ARCONS_AUTHORITY` unset or empty | **this wall.** It owns everything; no network exists anywhere in its path, and a capture is always this |
+| `ARCONS_AUTHORITY=socket` | **a viewer** of the wall on this machine — the control socket beside it |
+| `ARCONS_AUTHORITY=/path/to/control.sock` | **a viewer** of the wall whose socket that is |
+| `--self-check` | an `authority` row says which, in those words |
+
+A viewer asks for the arrangement and draws it:
+
+```json
+{"v": 1, "read": "scene"}
+{"v": 1, "ok": true, "scene": { "v": 1, "seq": 41, "active": 0, … }}
+```
+
+**Pull, not push.** A viewer asks for the newest scene and `seq` tells it whether anything moved, so a wall that has
+changed nothing costs one small answer. A push channel belongs to the relay (#196), where a connection is already held
+open; two ways to learn about a change would be two ways to disagree about when it happened.
+
+A viewer that cannot reach its authority says so once and draws its own default wall — a screen that shows nothing
+because a socket is missing is worse than one that shows its own wall and says why. Its **own inputs still apply
+locally** until #204 puts them on the wire; the role lands first, because "who owns the state" is the question a fleet
+cannot get wrong.
+
 ## The transport is a seam (#195)
 
 The socket above is **one carrier**. Everything the plane *does* — read a line, hand it to the UI thread, write the

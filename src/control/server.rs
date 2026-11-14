@@ -441,14 +441,7 @@ mod tests {
 
         // The UI thread, played by this test: apply, then answer.
         let mut state = State::default();
-        let answer = match job.request.clone() {
-            super::super::wire::Request::Intent(intent) => {
-                super::super::wire::Answer::Changed(control::apply(&mut state, intent))
-            }
-            super::super::wire::Request::Wall => {
-                super::super::wire::Answer::Wall(crate::control::projection::of(&state))
-            }
-        };
+        let (answer, _) = crate::control::authority::answer(&mut state, &job.request);
         job.answer(answer);
         let line = peer
             .recv_within(Duration::from_secs(2))

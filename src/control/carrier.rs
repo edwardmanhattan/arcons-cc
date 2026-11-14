@@ -108,6 +108,18 @@ impl Carrier for Loopback {
     }
 }
 
+impl Carrier for Peer {
+    fn read_line(&mut self) -> std::io::Result<Option<String>> {
+        Ok(self.from_wall.recv().ok())
+    }
+
+    fn write_line(&mut self, line: &str) -> std::io::Result<()> {
+        self.to_wall
+            .send(line.to_string())
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "the wall hung up"))
+    }
+}
+
 impl Peer {
     /// Send one line to the wall's carrier.
     pub fn send(&self, line: &str) {

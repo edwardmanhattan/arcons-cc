@@ -34,6 +34,11 @@ use crate::ui::{self, MenuAction, PaneContent, RenameTarget, State, ViewId};
 // behind `unix` (#165). The vocabulary above is not: `Intent` and `apply` are the wall's own state machine, and
 // a Windows build (which the gate's `check` job compiles) still has them — it simply has no plane to drive them
 // through until someone decides on a named pipe.
+// A viewer's half needs a carrier, and Windows has none (#202): the vocabulary stays compiled so a role can be parsed
+// and reported by `--self-check`, and the parts no Windows build can reach are allowed to be unused there rather than
+// cut away by `cfg` into a second vocabulary that could drift.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub mod authority;
 pub mod carrier;
 pub mod projection;
 pub mod snapshot;
