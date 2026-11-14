@@ -1226,6 +1226,12 @@ impl State {
             // **Any camera intent ends a follow** (#169): otherwise the operator pans and the next frame pulls the
             // camera back to the hull, which is a wall fighting the hand that is driving it.
             pane.follow = None;
+            // **The frame's camera moves with the pane's** (#187): markers project against the frame (`INV-04`), and a
+            // camera that changed with no gesture makes no new frame — the picture would keep drawing the old place.
+            // A wall's map thread replaces this with the frame it renders, at this camera.
+            if let Some(frame) = pane.frame {
+                pane.frame = Some(crate::map::geometry::Rendered { camera, ..frame });
+            }
             self.arranged();
         }
     }
