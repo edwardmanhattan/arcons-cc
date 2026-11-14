@@ -5544,23 +5544,35 @@ fn setup(state: &mut State, waker: rune::Waker) {
     // everything, which is what a capture, a test and a single display are. A viewer that cannot reach its authority
     // says so once and carries on as a wall: a screen that refuses to draw anything because a socket is absent is
     // worse than one drawing its own default wall and saying why.
-    let role = crate::control::authority::Role::from_env();
-    match &role {
-        crate::control::authority::Role::Local => {}
-        crate::control::authority::Role::Remote(path) => match connect_authority(path) {
-            Ok(session) => {
-                tracing::info!(
-                    "authority: a viewer of {} ({})",
-                    path.display(),
-                    role.label()
-                );
-                state.session = Some(session);
+    #[cfg(unix)]
+    {
+        let role = crate::control::authority::Role::from_env();
+        if let crate::control::authority::Role::Remote(path) = &role {
+            match connect_authority(path) {
+                Ok(session) => {
+                    tracing::info!(
+                        "authority: a viewer of {} ({})",
+                        path.display(),
+                        role.label()
+                    );
+                    state.session = Some(session);
+                }
+                Err(error) => tracing::warn!(
+                    "authority: {} is not reachable ({error}); this wall owns its own state until it is",
+                    path.display()
+                ),
             }
-            Err(error) => tracing::warn!(
-                "authority: {} is not reachable ({error}); this wall owns its own state until it is",
-                path.display()
-            ),
-        },
+        }
+    }
+    // **Windows has no carrier, and says so** (#195, #202): the control plane is a unix socket and a named pipe is a
+    // decision nobody has taken. A `#[cfg(not(unix))]` *branch* would leave the code after it type-checked against
+    // fields that do not exist there, so this is a whole block.
+    #[cfg(not(unix))]
+    if let crate::control::authority::Role::Remote(_) = crate::control::authority::Role::from_env()
+    {
+        tracing::warn!(
+            "authority: no carrier on this platform — the control plane is a unix socket, so this wall owns its state"
+        );
     }
 
     // **The control plane** (#165). A capture returned above: `INV-11` forbids a scene reading or writing a

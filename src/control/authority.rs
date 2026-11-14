@@ -47,7 +47,7 @@ impl Role {
     pub fn of(value: Option<&str>) -> Role {
         match value.map(str::trim) {
             None | Some("") => Role::Local,
-            Some("socket") => Role::Remote(crate::control::socket_path()),
+            Some("socket") => Role::Remote(this_walls_socket()),
             Some(path) => Role::Remote(PathBuf::from(path)),
         }
     }
@@ -58,6 +58,22 @@ impl Role {
             Role::Local => "this wall (no ARCONS_AUTHORITY)".to_string(),
             Role::Remote(path) => format!("a viewer of {}", path.display()),
         }
+    }
+}
+
+/// This machine's wall, as a path.
+///
+/// Unix has one; Windows has no plane at all (a named pipe is a decision nobody has taken), so the word resolves to
+/// something a `--self-check` row and a log line can print and nothing can connect to. The refusal belongs where the
+/// transport is, not in a parser: `Role::of` stays portable so the row can say what was configured.
+fn this_walls_socket() -> PathBuf {
+    #[cfg(unix)]
+    {
+        crate::control::socket_path()
+    }
+    #[cfg(not(unix))]
+    {
+        PathBuf::from("socket")
     }
 }
 
