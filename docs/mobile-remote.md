@@ -86,9 +86,11 @@ apart retries the wrong one forever.
 
 ## Decisions this note takes, so they are not discovered later
 
-- **One cursor.** The wall draws one pointer (#167), so a phone's `cursor.move` moves the wall's pointer. Two arrows
-  that neither client can explain is worse than one that everybody shares. If two remotes must coexist, the cursor
-  gains an `origin` — a decision with a ticket, not a default.
+- **A cursor belongs to a client.** This note first said *one cursor*, because the wall drew one pointer (#167) and
+  two arrows that neither client could explain seemed worse than one they shared. A fleet made that wrong
+  ([ADR-0006](adr/0006-a-fleet-of-walls.md) decision 5): a pointer is a hand, every viewer draws every cursor it is
+  told about, and the wall's own pointer is the `wall` origin. A phone's press is therefore visible where it lands,
+  which is the property a remote actually needs.
 - **The projection does not grow a field for the phone.** In particular it does not carry `follow`: a follow is ended
   by any camera intent (#169), so a phone that wants to stop one sends `map.camera`, and the camera it reads is where
   the pane is looking, which is what a controller needs. A `follow` field would be a fact a client acts on, and acting
@@ -114,6 +116,7 @@ apart retries the wrong one forever.
 - **The phone's framework, design and identity provider** — not this repository's business, and not decided here.
 - **Whether the relay is Minos or a separate deployment service.** The wall's side of the contract is the same either
   way, which is why it can be built first.
-- **Whether two remotes may be paired at once.** One is the shape the socket already has ("one client at a time"); two
-  is a decision about the cursor and about who wins a refusal.
+- **Whether two remotes may be paired at once.** The cursor question is answered by ADR-0006 (per-`origin`); the one
+  that remains is who wins a refusal when two clients ask for contradictory things at once — the authority applies them
+  in order, and the second is refused or wins, which a fleet makes a rule rather than a coincidence.
 - **Anything about the picture.** If that changes it is a different epic, and it starts with a codec.
