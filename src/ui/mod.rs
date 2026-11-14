@@ -475,6 +475,18 @@ pub struct State {
     /// How many of [`State::pending_intents`] have been applied, in order: a script is a sequence, and applying
     /// step 3 before step 2 would be a different wall.
     pub intents_applied: usize,
+    /// **This screen is a viewer** (#206), as a fact about the state rather than about whether a socket happens to be
+    /// open: a capture cannot open one (`INV-11`), and a banner about a lost authority has to be a picture a test can
+    /// take. A wall is `false`; a viewer is `true` from the moment it is told, whether or not the wire is up.
+    pub viewer: bool,
+    /// **The bucket the stale banner last showed** (#206), so its counter stays live without a relayout every frame.
+    /// Five seconds is the resolution: a person needs to tell a blip from an afternoon, not to the second.
+    stale_bucket: Option<u64>,
+    /// **When the authority was last heard from, and the `seq` it said** (#206), on the frame clock.
+    ///
+    /// `None` before the first `Scene`. A viewer whose authority has been quiet for longer than
+    /// [`STALE_AFTER`] stops calling its picture current and says so — the mobile note's rule, on a kiosk.
+    pub heard_at: Option<(f64, u64)>,
     /// **A viewer's session to the authority** (#202): `None` when this process is the wall, which is the default and
     /// the only case a capture is in. `Some` means another process owns the arrangement and this one draws the scenes
     /// it is given.
@@ -733,6 +745,9 @@ impl Default for State {
             #[cfg(feature = "map")]
             cadenced: None,
             cursors: std::collections::BTreeMap::new(),
+            viewer: false,
+            stale_bucket: None,
+            heard_at: None,
             scene_seq: 0,
             #[cfg(unix)]
             session: None,
@@ -832,6 +847,9 @@ impl State {
     /// **Whether this process draws somebody else's wall** (#203): a viewer reads nothing from Minos, holds no
     /// credential, and is told the arrangement and the water by its authority.
     pub fn is_viewer(&self) -> bool {
+        if self.viewer {
+            return true;
+        }
         #[cfg(unix)]
         {
             self.session.is_some()
@@ -840,6 +858,23 @@ impl State {
         {
             false
         }
+    }
+
+    /// **How long the authority has been quiet** (#206), in seconds on the frame clock, or `None` if it has never been
+    /// heard from. A wall is never quiet — it *is* the authority — so this answers only for a viewer.
+    pub fn quiet_for(&self) -> Option<f64> {
+        let (at, _) = self.heard_at?;
+        Some((self.logical - at).max(0.0))
+    }
+
+    /// **Whether this picture is no longer the authority's** (#206): a viewer, heard from, and quiet for too long.
+    ///
+    /// A viewer that has *never* heard anything is not stale — it is connecting, which the header already says.
+    pub fn is_stale(&self) -> bool {
+        self.is_viewer()
+            && self
+                .quiet_for()
+                .is_some_and(|quiet| quiet > crate::control::authority::STALE_AFTER)
     }
 
     pub fn now(&self) -> std::time::Instant {
@@ -2251,6 +2286,17 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
         // A viewer is not degraded: it is a different kind of screen, and a permanent banner would be furniture.
         (Link::NotThisScreen, _) => None,
     };
+    // **A picture that is no longer the authority's says so** (#206): the mode, how long it has been quiet, and the
+    // sequence it last held — no host, no user, no token (`INV-08`). This is the fleet's honest weakness made visible:
+    // one authority for N screens, and every screen able to say what it is showing.
+    let quiet = state.is_stale().then(|| {
+        let seq = state.heard_at.map_or(0, |(_, seq)| seq);
+        // Five-second buckets, the same resolution the redraw uses: a number that says 30 while the truth is 34 is a
+        // counter telling the truth at its own resolution, not a lie.
+        let seconds = (state.quiet_for().unwrap_or(0.0) as u64) / 5 * 5;
+        format!("no scene from the authority for {seconds} s · last held #{seq}")
+    });
+    let banner = banner.or(quiet.as_deref());
 
     let header = row()
         .w_full()
@@ -5744,6 +5790,19 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
             state.layout_dirty = true;
         }
     }
+    // **A viewer that has gone quiet says so** (#206): the flip from current to stale changes the header and nothing
+    // else, so nothing would ask for a frame — the same trap the cursor's fade has, and answered the same way.
+    if state.is_viewer() {
+        // The counter is in five-second buckets and the banner redraws when the bucket turns: a live number that does
+        // not cost a relayout every frame while a wall is already having a bad afternoon.
+        let bucket = state
+            .is_stale()
+            .then(|| state.quiet_for().unwrap_or(0.0) as u64 / 5);
+        if bucket != state.stale_bucket {
+            state.stale_bucket = bucket;
+            state.layout_dirty = true;
+        }
+    }
     // **A scene can drive the wall through the control plane** (#172): the steps it carries are applied here, in
     // order, when their frame comes. This is the same `apply` the pointer and the socket use — a capture is not a
     // second kind of client, it is a client whose clock is virtual.
@@ -5812,6 +5871,9 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
         };
         for answer in answers {
             if let crate::control::wire::Answer::Scene(scene) = answer {
+                // **The authority was heard from** (#206): the clock and the sequence, so "how long has this picture
+                // been mine?" is a question the state can answer and a capture can draw.
+                state.heard_at = Some((elapsed, scene.seq));
                 viewed |= state.apply_scene(&scene);
             }
         }

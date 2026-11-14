@@ -1390,6 +1390,19 @@ fn cursor_idle(state: &mut State) {
     ];
 }
 
+/// The `stale-banner` scene: **a viewer whose authority has gone quiet** (#206).
+///
+/// The `panes` wall, marked as a viewer that last heard from its authority thirty-two seconds before the capture: the
+/// header draws the banner a real outage draws, because the banner is **state** and not a paint-time guess. This is the
+/// one picture in the gate that proves a fleet's honest weakness is visible rather than silent.
+fn stale_banner(state: &mut State) {
+    panes(state);
+    state.viewer = true;
+    // Thirty-two seconds of silence at the capture's own clock (two seconds), and a sequence nobody else holds — so the
+    // banner's numbers are the scene's, not the machine's.
+    state.heard_at = Some((2.0 - 32.0, 41));
+}
+
 /// The `cursor-two` scene: **two clients, two pointers** (#205).
 ///
 /// The same wall as `cursor-hull`, and two cursors that are both still: a phone's over the hull, and a second client's
@@ -1671,6 +1684,7 @@ pub const SCENES: &[Scene] = &[
     ("menu-ring", menu_ring),
     ("cursor-hull", cursor_hull),
     ("cursor-two", cursor_two),
+    ("stale-banner", stale_banner),
     ("cursor-idle", cursor_idle),
     // A workspace that is not on screen can be named (#154): the sheet is the title's, offered on a chip.
     ("workspaces-rename-hidden", workspaces_rename_hidden),
@@ -2083,6 +2097,7 @@ mod tests {
                 "menu-ring",
                 "cursor-hull",
                 "cursor-two",
+                "stale-banner",
                 "cursor-idle",
                 "workspaces-rename-hidden"
             ]
