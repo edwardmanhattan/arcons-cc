@@ -59,6 +59,7 @@ pub fn to_wire(intent: &Intent) -> Value {
             object.insert("pane".into(), json!(pane));
             object.insert("workspace".into(), json!(workspace));
         }
+        Intent::CloseOtherPanes | Intent::CloseOtherWorkspaces => {}
         Intent::OpenPane(content) => {
             object.insert("content".into(), content_json(content));
         }
@@ -149,6 +150,8 @@ pub fn from_wire(value: &Value) -> Result<Intent, Refused> {
             pane: pane(object)?,
             workspace: integer(object, "workspace")? as usize,
         },
+        "pane.close_others" => Intent::CloseOtherPanes,
+        "workspace.close_others" => Intent::CloseOtherWorkspaces,
         "pane.open" => Intent::OpenPane(content(object)?),
         "pane.select" => Intent::Select {
             pane: pane(object)?,

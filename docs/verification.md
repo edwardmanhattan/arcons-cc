@@ -141,7 +141,7 @@ cargo run -- --scenes            # empty · picture · stale · card-open · pho
                                  # workspaces-named · workspaces-menu · workspaces-moved
                                  # workspaces-new · workspaces-close
                                  # workspaces-new-remote
-                                 # menu-ring · cursor-hull · cursor-idle
+                                 # close-all · menu-ring · cursor-hull · cursor-idle
                                  # workspaces-rename-hidden
 scripts/verify.sh                # renders and asserts each one
 ```
@@ -336,6 +336,14 @@ first leaf, one fewer pane in total, and — in pixels — the focus edge on the
 and none on the left's. The two panes share their top and bottom edges with the picture panel, so the
 honest pixel is a vertical one; a ring drawn on the wrong pane, or a wall that forgot `Layout::focused()`
 and landed on the first leaf, is red.
+
+`close-all` is **a reset from a remote** (#166): three panes in workspace 1 and one in each of the other two, then
+`pane.close_others` (the panes beside the focused one go, one at a time through `close_pane`) and
+`workspace.close_others` (the other chips go with their panes). The capture is the wall an operator is left with —
+**one chip, one pane, focused** — and the structure half checks each of those, plus that every step of the script
+ran. Its detail is a bug the capture found: a workspace that collapses to one pane keeps the *slot's* frame, and
+markers project against a frame (`INV-04`), so they sat in the corner of a pane that is now the whole panel.
+`close_pane` clears the survivor's frame, and the next one comes at its new size.
 
 `menu-ring` is **a menu the keyboard is on** (#164): `panes-menu`'s wall and menu, with the ring put on
 `Name this pane…` by a `menu.focus` intent — so the capture is of the *keyboard's* row and not of a hover (the

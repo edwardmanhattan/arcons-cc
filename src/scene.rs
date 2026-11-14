@@ -1465,6 +1465,35 @@ pub fn apply_due_intents(state: &mut State, now: f64) -> bool {
     changed
 }
 
+/// The `close-all` scene: **everything but the focused pane, and every workspace but this one** (#166).
+///
+/// A wall of three panes in workspace 1 and a pane in each of the other two, then two intents: `pane.close_others`
+/// (the two panes beside the focused one go) and `workspace.close_others` (the other chips go with their panes).
+/// What the capture shows is the wall an operator is left with after a "reset" from a remote — one pane, one chip.
+fn close_all(state: &mut State) {
+    panes(state);
+    // A pane of its own in each of the other two workspaces, so the second intent has something to close.
+    let here = state.focused();
+    let camera = state.camera_of(here);
+    for workspace in [1, 2] {
+        let Some(id) = state.split_pane_as(here, camera, crate::ui::PaneContent::Map) else {
+            return;
+        };
+        if !crate::ui::move_pane_to(state, id, workspace) {
+            return;
+        }
+        // **Back to workspace 1 after each move**: `move_pane_to` takes the wall with it, and a split's target has
+        // to be in the tiling that is on screen — the next iteration splits `here`, which is in workspace 1.
+        state.switch_to(0);
+    }
+    // On the pane the `panes` scene left focused, so the pane the reset keeps is that one.
+    state.focus_pane(here);
+    state.pending_intents = vec![
+        (0.3, crate::control::Intent::CloseOtherPanes),
+        (0.6, crate::control::Intent::CloseOtherWorkspaces),
+    ];
+}
+
 /// The `menu-ring` scene: **a menu the keyboard is on** (#164).
 ///
 /// `panes-menu`'s wall and menu, with the ring put on `Name this pane…` by an intent at a third of a second — so the
@@ -1567,6 +1596,8 @@ pub const SCENES: &[Scene] = &[
     ("workspaces-new-remote", workspaces_new_remote),
     // The client's cursor (#167): a remote's press on a hull, and the same wall after its cursor faded.
     // A menu the keyboard is on (#164): the ring, drawn on the row Enter would act on.
+    // Everything but the focused pane, and every workspace but this one (#166).
+    ("close-all", close_all),
     ("menu-ring", menu_ring),
     ("cursor-hull", cursor_hull),
     ("cursor-idle", cursor_idle),
@@ -1967,6 +1998,7 @@ mod tests {
                 "workspaces-new",
                 "workspaces-close",
                 "workspaces-new-remote",
+                "close-all",
                 "menu-ring",
                 "cursor-hull",
                 "cursor-idle",
