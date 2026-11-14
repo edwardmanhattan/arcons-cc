@@ -231,11 +231,20 @@ pub enum Target {
 ///
 /// There is one today and a list already, because #205 makes it one per origin: a pointer is a hand, and a fleet has
 /// more than one. `moved_at` is on the **frame clock**, so a fade is a function of the picture and not of a wall.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CursorAt {
+    /// **Whose pointer** (#205): the wall's own, or a client's name. A scene carries every cursor the wall draws, so a
+    /// viewer shows a remote's press where it lands.
+    #[serde(default = "wall_origin")]
+    pub origin: String,
     pub at: (f32, f32),
     pub down: bool,
     pub moved_at: f64,
+}
+
+/// The origin a scene's cursor has when it does not say: the wall's own pointer.
+fn wall_origin() -> String {
+    "wall".to_string()
 }
 
 #[cfg(test)]
@@ -259,6 +268,7 @@ mod tests {
                 ring: Some(3),
             },
             cursors: vec![CursorAt {
+                origin: "ctl".to_string(),
                 at: (1.0, 2.0),
                 down: false,
                 moved_at: 0.5,

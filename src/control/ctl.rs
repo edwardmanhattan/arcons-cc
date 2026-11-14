@@ -243,10 +243,13 @@ pub fn parse(words: &[String]) -> Result<Intent, Failure> {
         "cursor.move" => {
             let x = number(0, "an x in points")? as f32;
             let y = number(1, "a y in points")? as f32;
-            Intent::CursorMove { at: (x, y) }
+            Intent::CursorMove {
+                at: (x, y),
+                origin: None,
+            }
         }
-        "cursor.press" => Intent::CursorPress,
-        "cursor.release" => Intent::CursorRelease,
+        "cursor.press" => Intent::CursorPress { origin: None },
+        "cursor.release" => Intent::CursorRelease { origin: None },
         "surface.settings" => Intent::OpenSettings,
         "surface.close" => Intent::CloseSurfaces,
         _ => {

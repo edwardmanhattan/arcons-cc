@@ -144,12 +144,16 @@ pub enum Intent {
 
     // ---- the client's cursor (#167)
     /// Put a client's cursor at a point in the **picture panel's** points, and start its fade from now.
-    CursorMove { at: (f32, f32) },
+    CursorMove {
+        /// **Whose pointer** (#205): absent is the local client's, which is what a `ctl` is.
+        origin: Option<crate::ui::Origin>,
+        at: (f32, f32),
+    },
     /// Press where the cursor is: the hull under it (its card), or the pane it is over (the keys, and a cleared
     /// card).
-    CursorPress,
+    CursorPress { origin: Option<crate::ui::Origin> },
     /// Release. The cursor starts fading from here.
-    CursorRelease,
+    CursorRelease { origin: Option<crate::ui::Origin> },
 
     // ---- surfaces
     /// The settings sheet (#82).
@@ -186,8 +190,8 @@ impl Intent {
             Intent::MenuSubmenu { .. } => "menu.submenu",
             Intent::MenuChoose => "menu.choose",
             Intent::CursorMove { .. } => "cursor.move",
-            Intent::CursorPress => "cursor.press",
-            Intent::CursorRelease => "cursor.release",
+            Intent::CursorPress { .. } => "cursor.press",
+            Intent::CursorRelease { .. } => "cursor.release",
             Intent::OpenSettings => "surface.settings",
             Intent::CloseSurfaces => "surface.close",
         }
@@ -271,6 +275,7 @@ pub const REFUSALS: &[(&str, RefusalKind)] = &[
         "\"target\" is {\"pane\": n} or {\"workspace\": n}",
         RefusalKind::Input,
     ),
+    ("\"origin\" is a client name", RefusalKind::Input),
     ("\"unit\" is a hull id or null", RefusalKind::Input),
     ("\"zoom\" is a number or null", RefusalKind::Input),
     (
@@ -535,27 +540,29 @@ pub fn apply(state: &mut State, intent: Intent) -> Result<Changed, Refused> {
             }
             ui::menu_choose(state)
         }
-        Intent::CursorMove { at } => {
-            state.cursor_move(at);
+        Intent::CursorMove { at, origin } => {
+            state.cursor_move(origin.unwrap_or_default(), at);
             true
         }
-        Intent::CursorPress => {
-            if state.cursor.is_none() {
+        Intent::CursorPress { origin } => {
+            let origin = origin.unwrap_or_default();
+            if !state.cursors.contains_key(&origin) {
                 // Nothing to press with: a client must point before it can press, and guessing a point would be
                 // the wall inventing input nobody gave it.
                 return Err(Refused("the cursor has not been placed"));
             }
-            state.cursor_press();
+            state.cursor_press(&origin);
             true
         }
-        Intent::CursorRelease => {
-            let Some(cursor) = state.cursor else {
+        Intent::CursorRelease { origin } => {
+            let origin = origin.unwrap_or_default();
+            let Some(cursor) = state.cursors.get(&origin).copied() else {
                 return Err(Refused("the cursor has not been placed"));
             };
             if !cursor.down {
                 return Err(Refused("the cursor is not pressed"));
             }
-            state.cursor_release();
+            state.cursor_release(&origin);
             true
         }
         Intent::OpenSettings => ui::open_settings(state),
@@ -657,9 +664,12 @@ pub fn vocabulary() -> Vec<Intent> {
         Intent::MenuFocus { row: Some(1) },
         Intent::MenuSubmenu { open: true },
         Intent::MenuChoose,
-        Intent::CursorMove { at: (100.0, 80.0) },
-        Intent::CursorPress,
-        Intent::CursorRelease,
+        Intent::CursorMove {
+            at: (100.0, 80.0),
+            origin: None,
+        },
+        Intent::CursorPress { origin: None },
+        Intent::CursorRelease { origin: None },
         Intent::OpenSettings,
         Intent::CloseSurfaces,
     ]
@@ -1044,6 +1054,82 @@ mod tests {
     /// **A camera write moves the frame with it** (#187): markers project against a *frame* (`INV-04`), so a camera
     /// that changed with no gesture to make a new frame would leave the picture drawing the old place. The state was
     /// right and the picture was stale — worse than a refusal, because nothing said so.
+    /// **A cursor belongs to a client** (#205): two origins, two cursors, moving one leaves the other where it was,
+    /// pressing one does not press the other, and each fades on its own age. The falsification this is written
+    /// against: one shared pointer, where the last client to move wins and nobody can tell whose press landed.
+    #[test]
+    fn two_clients_have_two_cursors_and_one_cannot_move_the_other() {
+        let mut state = crate::scene::state_for("panes");
+        let phone = crate::ui::Origin::named("phone");
+        let tablet = crate::ui::Origin::named("tablet");
+        assert!(
+            state.cursors.is_empty(),
+            "a wall nobody has pointed at has no cursor"
+        );
+
+        state.set_frame_clock(1.0);
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::CursorMove {
+                    at: (100.0, 100.0),
+                    origin: Some(phone.clone()),
+                }
+            ),
+            Ok(Changed(true))
+        );
+        // A second and a half later — one full fade — the tablet points somewhere else.
+        state.set_frame_clock(1.0 + crate::ui::Cursor::FADE);
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::CursorMove {
+                    at: (300.0, 200.0),
+                    origin: Some(tablet.clone()),
+                }
+            ),
+            Ok(Changed(true))
+        );
+
+        assert_eq!(state.cursors.len(), 2, "two hands, two pointers");
+        assert_eq!(
+            state.cursors[&phone].at,
+            (100.0, 100.0),
+            "the phone's pointer has not moved"
+        );
+        assert_eq!(state.cursors[&tablet].at, (300.0, 200.0));
+
+        // **Ages are per cursor**: the phone has been still for one fade and its ring is gone; the tablet's is not.
+        let now = 1.0 + crate::ui::Cursor::FADE;
+        assert!(!state.cursors[&phone].visible_at(now));
+        assert!(state.cursors[&tablet].visible_at(now));
+
+        // A press is one client's: the phone's button goes down, the tablet's does not.
+        apply(
+            &mut state,
+            Intent::CursorPress {
+                origin: Some(phone.clone()),
+            },
+        )
+        .expect("the phone's press");
+        assert!(state.cursors[&phone].down);
+        assert!(
+            !state.cursors[&tablet].down,
+            "one hand's press is not another's"
+        );
+
+        // And a client that has not pointed is refused **by name**, not handed somebody else's pointer.
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::CursorPress {
+                    origin: Some(crate::ui::Origin::named("stranger")),
+                }
+            ),
+            Err(Refused("the cursor has not been placed"))
+        );
+    }
+
     #[test]
     fn a_camera_write_moves_the_frame_with_it() {
         let mut state = State::default();

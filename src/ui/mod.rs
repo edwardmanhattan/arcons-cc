@@ -463,7 +463,7 @@ pub struct State {
     pub camera_reported: bool,
     /// **The client's cursor** (#167): where a remote is pointing, when it last moved, and whether it is pressing.
     /// `None` until a client points — a wall nobody is driving has no cursor to draw.
-    pub cursor: Option<Cursor>,
+    pub cursors: std::collections::BTreeMap<Origin, Cursor>,
     /// **How many times the arrangement has changed** (#201): the `seq` a `Scene` carries, so a viewer can order two
     /// scenes and notice a gap without an event log. The authority owns it once there is one (#202); today it moves
     /// wherever `arranged()` is called or a scene is applied.
@@ -608,6 +608,49 @@ pub struct State {
     asked_tni: bool,
 }
 
+/// **Whose pointer a cursor is** (#205).
+///
+/// A pointer is a hand, and a fleet has more than one: the wall's own, a CLI's, a phone's. Each cursor is keyed by
+/// this, so one client moving its pointer cannot move another's — and `ADR-0006` decision 5 is the reason the wall
+/// draws every one of them: a press must be visible where it lands.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Origin(String);
+
+impl Origin {
+    /// The wall's own pointer — the OS's, for the hand on the glass.
+    pub fn wall() -> Origin {
+        Origin("wall".to_string())
+    }
+
+    /// **The client with no identity of its own**: a `ctl` over the local socket. One client at a time and its
+    /// credential is the socket's file mode (`INV-08`), so "ctl" is the honest name for it.
+    pub fn ctl() -> Origin {
+        Origin("ctl".to_string())
+    }
+
+    /// A named client — a paired phone's device name, once #194 lands. Trimmed, and nothing else: a client's name is
+    /// its own, not a key this wall gets to respell.
+    pub fn named(name: &str) -> Origin {
+        Origin(name.trim().to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Default for Origin {
+    fn default() -> Self {
+        Origin::ctl()
+    }
+}
+
+impl std::fmt::Display for Origin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// **A cursor the wall owns** (#167): where a client is pointing, in the picture panel's points.
 ///
 /// The wall's own pointer is the OS's — it belongs to whichever hand is on the glass. A client that has no hand (a
@@ -689,7 +732,7 @@ impl Default for State {
 
             #[cfg(feature = "map")]
             cadenced: None,
-            cursor: None,
+            cursors: std::collections::BTreeMap::new(),
             scene_seq: 0,
             #[cfg(unix)]
             session: None,
@@ -1716,25 +1759,22 @@ impl State {
     ///
     /// A cursor appears with its first move; a wall no client has pointed at has none, and `--self-check` does not
     /// claim one. The frame clock is passed in so this stays a function of the frame like every other age.
-    pub fn cursor_move(&mut self, at: (f32, f32)) {
+    pub fn cursor_move(&mut self, origin: Origin, at: (f32, f32)) {
         // The frame clock, which is the only clock a frame may read: a cursor's fade is an age like any other.
         let now = self.logical;
         let at = (
             at.0.clamp(0.0, self.pane_viewport().w as f32),
             at.1.clamp(0.0, self.pane_viewport().h as f32),
         );
-        self.cursor = Some(match self.cursor {
-            Some(cursor) => Cursor {
+        let down = self.cursors.get(&origin).is_some_and(|cursor| cursor.down);
+        self.cursors.insert(
+            origin,
+            Cursor {
                 at,
-                down: cursor.down,
+                down,
                 moved_at: now,
             },
-            None => Cursor {
-                at,
-                down: false,
-                moved_at: now,
-            },
-        });
+        );
         self.layout_dirty = true;
     }
 
@@ -1745,16 +1785,19 @@ impl State {
     /// (its card) and the water (a clear, and the pane's focus) — because that is the space this cursor lives in;
     /// the header's chips and a menu's rows are Rune's own layout, and reaching them needs an event injection Rune
     /// does not expose (recorded in `docs/control.md`).
-    pub fn cursor_press(&mut self) {
+    pub fn cursor_press(&mut self, origin: &Origin) {
         let now = self.logical;
-        let Some(cursor) = self.cursor else {
+        let Some(cursor) = self.cursors.get(origin).copied() else {
             return;
         };
-        self.cursor = Some(Cursor {
-            down: true,
-            moved_at: now,
-            ..cursor
-        });
+        self.cursors.insert(
+            origin.clone(),
+            Cursor {
+                down: true,
+                moved_at: now,
+                ..cursor
+            },
+        );
         let at = (f64::from(cursor.at.0), f64::from(cursor.at.1));
         // The pane under the point, in the panel's own space.
         let Some((id, rect)) = self.pane_rects().into_iter().find(|(_, rect)| {
@@ -1798,14 +1841,17 @@ impl State {
     }
 
     /// **A client's release** (#167): the button comes up, and the cursor starts its fade from here.
-    pub fn cursor_release(&mut self) {
+    pub fn cursor_release(&mut self, origin: &Origin) {
         let now = self.logical;
-        if let Some(cursor) = self.cursor {
-            self.cursor = Some(Cursor {
-                down: false,
-                moved_at: now,
-                ..cursor
-            });
+        if let Some(cursor) = self.cursors.get(origin).copied() {
+            self.cursors.insert(
+                origin.clone(),
+                Cursor {
+                    down: false,
+                    moved_at: now,
+                    ..cursor
+                },
+            );
             self.layout_dirty = true;
         }
     }
@@ -3075,31 +3121,35 @@ fn close_plate() -> El {
 ///
 /// A cursor that has not moved for [`Cursor::FADE`] is not drawn: `visible_at` is the whole rule, on the frame
 /// clock.
-fn cursor_glyph(state: &State) -> Option<El> {
-    let cursor = state.cursor?;
-    if !cursor.visible_at(state.logical) {
-        return None;
-    }
+fn cursor_glyphs(state: &State) -> Vec<El> {
+    // **Every cursor, not one** (#205): a fleet has more than one hand, and a press must be visible where it lands.
+    state
+        .cursors
+        .iter()
+        .filter(|(_, cursor)| cursor.visible_at(state.logical))
+        .map(|(origin, cursor)| cursor_glyph(origin, cursor))
+        .collect()
+}
+
+fn cursor_glyph(origin: &Origin, cursor: &Cursor) -> El {
     let half = tokens::CURSOR / 2.0;
     // **A colour of its own** (#167): a pointer is not content, and white is nothing else on this wall — so a
     // capture can ask "is the cursor in the picture?" without guessing where it should be.
     let ink = tokens::cursor_ink();
-    Some(
-        el()
-            // **Keyed by its point** (#167): a keyed element keeps its layout across frames, so a cursor that
-            // moved under one key would be drawn where it used to be. One key per point means the ring follows
-            // the point, and a still cursor still reuses one element.
-            .key(format!(
-                "client-cursor-{}-{}",
-                cursor.at.0.round() as i32,
-                cursor.at.1.round() as i32
-            ))
-            .absolute(cursor.at.0 - half, cursor.at.1 - half)
-            .size(tokens::CURSOR, tokens::CURSOR)
-            .radius(tokens::CURSOR / 2.0)
-            .fill(if cursor.down { ink } else { tokens::clear() })
-            .border(tokens::HAIRLINE * 2.0, ink),
-    )
+    el()
+        // **Keyed by its point** (#167): a keyed element keeps its layout across frames, so a cursor that
+        // moved under one key would be drawn where it used to be. One key per point means the ring follows
+        // the point, and a still cursor still reuses one element.
+        .key(format!(
+            "client-cursor-{origin}-{}-{}",
+            cursor.at.0.round() as i32,
+            cursor.at.1.round() as i32
+        ))
+        .absolute(cursor.at.0 - half, cursor.at.1 - half)
+        .size(tokens::CURSOR, tokens::CURSOR)
+        .radius(tokens::CURSOR / 2.0)
+        .fill(if cursor.down { ink } else { tokens::clear() })
+        .border(tokens::HAIRLINE * 2.0, ink)
 }
 
 fn picture(state: &State, scale: f32) -> El {
@@ -3157,7 +3207,7 @@ fn picture(state: &State, scale: f32) -> El {
     body = menu_view(state, scale, body);
     // **The client's cursor last, over everything** (#167): a pointer is above the wall it points at, and a remote
     // that is pressing a menu row or a hull should see where its point is.
-    if let Some(cursor) = cursor_glyph(state) {
+    for cursor in cursor_glyphs(state) {
         body = body.child(cursor);
     }
     body
@@ -5687,7 +5737,7 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     // **A cursor that has just reached its fade must be drawn once more** (#167): nothing else on the wall
     // changed, so nothing would ask for a frame — and the ring would stay on screen at the last place it was
     // drawn. The frame where visibility flips is the one the fade needs.
-    if let Some(cursor) = state.cursor {
+    for cursor in state.cursors.values() {
         let now = cursor.visible_at(elapsed);
         let before = cursor.visible_at(elapsed - state.poll_gap.as_secs_f64());
         if now != before {
@@ -7933,19 +7983,30 @@ mod tests {
     #[test]
     fn a_fresh_client_cursor_is_drawn_at_its_point() {
         let state = crate::scene::state_for("cursor-hull");
-        let cursor = state.cursor.expect("the scene placed a cursor");
+        let cursor = state
+            .cursors
+            .values()
+            .next()
+            .copied()
+            .expect("the scene placed a cursor");
         assert!(cursor.visible_at(2.0), "the capture is at 2 s");
         assert!(
-            cursor_glyph(&state).is_some(),
+            cursor_glyphs(&state).len() == 1,
             "a visible cursor must be an element: a state value nothing draws is a pointer nobody sees"
         );
         // The capture's clock: `scripts/capture.sh` renders at `--at 2`, and the fade is read off that clock.
         let mut idle = crate::scene::state_for("cursor-idle");
         idle.set_frame_clock(2.0);
         assert!(
-            cursor_glyph(&idle).is_none(),
+            cursor_glyphs(&idle).is_empty(),
             "and a faded one must not be: the scene moved it {:.2} s before the capture, and the fade is {:.1} s",
-            2.0 - idle.cursor.expect("the scene placed a cursor").moved_at,
+            2.0 - idle
+                .cursors
+                .values()
+                .next()
+                .copied()
+                .expect("the scene placed a cursor")
+                .moved_at,
             Cursor::FADE
         );
     }

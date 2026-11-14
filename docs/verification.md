@@ -141,7 +141,7 @@ cargo run -- --scenes            # empty · picture · stale · card-open · pho
                                  # workspaces-named · workspaces-menu · workspaces-moved
                                  # workspaces-new · workspaces-close
                                  # workspaces-new-remote
-                                 # close-all · menu-ring · cursor-hull · cursor-idle
+                                 # close-all · menu-ring · cursor-hull · cursor-two · cursor-idle
                                  # workspaces-rename-hidden
 scripts/verify.sh                # renders and asserts each one
 ```
@@ -351,6 +351,10 @@ pointer is nowhere near the menu). The pair with `panes-menu` is the claim: the 
 pointer-opened menu has **none** of it on any row. `cargo test ui::tests` holds what a picture cannot: the ring wraps
 at both ends, `Enter` acts on the ringed row and never on a hovered one, `Right` opens the waterfall onto its first
 row and `Left` closes that surface and no other, and the ringed row is the menu's **active descendant**.
+
+`cursor-two` is **two clients, two pointers** (#205): the same wall with a phone's cursor over the hull and a second
+client's on the water, far apart. The assertion counts the ink — one ring is 36 px of it, so two is over 60 — because a
+second client's pointer that is not drawn is a hand nobody can see.
 
 `cursor-hull` and `cursor-idle` are **a client's cursor** (#167): a remote's point on a hull, its press, its
 release, and its point moving off the hull — every step a `cursor.move`, `cursor.press` or `cursor.release` intent

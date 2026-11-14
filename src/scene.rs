@@ -1345,12 +1345,21 @@ fn cursor_hull(state: &mut State) {
         return;
     };
     state.pending_intents = vec![
-        (1.90, crate::control::Intent::CursorMove { at }),
-        (1.92, crate::control::Intent::CursorPress),
-        (1.94, crate::control::Intent::CursorRelease),
+        (
+            1.90,
+            crate::control::Intent::CursorMove { at, origin: None },
+        ),
+        (1.92, crate::control::Intent::CursorPress { origin: None }),
+        (1.94, crate::control::Intent::CursorRelease { origin: None }),
         // A press, a release, and the point moves off the hull: the capture shows a cursor that is not hiding the
         // hull it just pressed, and the ring is drawn over water where an assertion can see it.
-        (1.96, crate::control::Intent::CursorMove { at: beside(at) }),
+        (
+            1.96,
+            crate::control::Intent::CursorMove {
+                at: beside(at),
+                origin: None,
+            },
+        ),
     ];
 }
 
@@ -1365,12 +1374,73 @@ fn cursor_idle(state: &mut State) {
         return;
     };
     state.pending_intents = vec![
-        (0.20, crate::control::Intent::CursorMove { at }),
-        (0.22, crate::control::Intent::CursorPress),
-        (0.24, crate::control::Intent::CursorRelease),
-        (0.26, crate::control::Intent::CursorMove { at: beside(at) }),
+        (
+            0.20,
+            crate::control::Intent::CursorMove { at, origin: None },
+        ),
+        (0.22, crate::control::Intent::CursorPress { origin: None }),
+        (0.24, crate::control::Intent::CursorRelease { origin: None }),
+        (
+            0.26,
+            crate::control::Intent::CursorMove {
+                at: beside(at),
+                origin: None,
+            },
+        ),
     ];
 }
+
+/// The `cursor-two` scene: **two clients, two pointers** (#205).
+///
+/// The same wall as `cursor-hull`, and two cursors that are both still: a phone's over the hull, and a second client's
+/// on the open water, each named by its `origin`. A fleet has more than one hand, so the wall draws every cursor it has
+/// — and this is the capture that says so, because one pointer and two pointers are different pictures.
+fn cursor_two(state: &mut State) {
+    load(state);
+    let Some(at) = cursor_point(state, CURSOR_UNIT) else {
+        return;
+    };
+    state.pending_intents = vec![
+        // A phone, pointing at a hull and pressing it: the card is what its press opened.
+        (
+            1.90,
+            crate::control::Intent::CursorMove {
+                at,
+                origin: Some(crate::ui::Origin::named("phone")),
+            },
+        ),
+        (
+            1.92,
+            crate::control::Intent::CursorPress {
+                origin: Some(crate::ui::Origin::named("phone")),
+            },
+        ),
+        (
+            1.94,
+            crate::control::Intent::CursorRelease {
+                origin: Some(crate::ui::Origin::named("phone")),
+            },
+        ),
+        (
+            1.96,
+            crate::control::Intent::CursorMove {
+                at: beside(at),
+                origin: Some(crate::ui::Origin::named("phone")),
+            },
+        ),
+        // And a second client, pointing somewhere else — nowhere near the hull, so the picture has two rings.
+        (
+            1.98,
+            crate::control::Intent::CursorMove {
+                at: CURSOR_TWO_AT,
+                origin: Some(crate::ui::Origin::named("tablet")),
+            },
+        ),
+    ];
+}
+
+/// Where the `cursor-two` scene's second client points: open water, in the picture panel's points.
+pub const CURSOR_TWO_AT: (f32, f32) = (1010.0, 610.0);
 
 // ---------------------------------------------------------------------------------------------------------
 // Intent scripts (#172): a scene that drives the wall **only** through the control plane.
@@ -1600,6 +1670,7 @@ pub const SCENES: &[Scene] = &[
     ("close-all", close_all),
     ("menu-ring", menu_ring),
     ("cursor-hull", cursor_hull),
+    ("cursor-two", cursor_two),
     ("cursor-idle", cursor_idle),
     // A workspace that is not on screen can be named (#154): the sheet is the title's, offered on a chip.
     ("workspaces-rename-hidden", workspaces_rename_hidden),
@@ -1657,7 +1728,12 @@ mod tests {
             state.card_in(focused).is_some(),
             "and a selected hull has a card"
         );
-        let cursor = state.cursor.expect("the scene placed a cursor");
+        let cursor = state
+            .cursors
+            .values()
+            .next()
+            .copied()
+            .expect("the scene placed a cursor");
         // The capture's clock: `scripts/capture.sh` renders every scene at `--at 2`, and that is the frame the
         // assertion is about. The scene moved the cursor at 1.94 s, so a sixth of a second before the capture.
         const CAPTURE_AT: f64 = 2.0;
@@ -1680,7 +1756,12 @@ mod tests {
             Some(CURSOR_UNIT),
             "the press happened and nothing undid it"
         );
-        let cursor = state.cursor.expect("the scene placed a cursor");
+        let cursor = state
+            .cursors
+            .values()
+            .next()
+            .copied()
+            .expect("the scene placed a cursor");
         const CAPTURE_AT: f64 = 2.0;
         assert!(
             !cursor.visible_at(CAPTURE_AT),
@@ -2001,6 +2082,7 @@ mod tests {
                 "close-all",
                 "menu-ring",
                 "cursor-hull",
+                "cursor-two",
                 "cursor-idle",
                 "workspaces-rename-hidden"
             ]

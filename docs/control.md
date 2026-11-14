@@ -242,6 +242,19 @@ put there would be a second answer to "which row". The first `Down` (or `menu.fo
 
 ## The client's cursor
 
+**A cursor belongs to a client** (#205). Every cursor is keyed by an `origin` — the wall's own, a `ctl`'s, a paired
+device's name — so one client moving its pointer cannot move another's, and a `cursor.press` from a client that has not
+pointed is refused by name rather than handed somebody else's pointer. The wall draws **every** cursor it has, because a
+press on a shared wall must be visible where it lands; each fades on its own age.
+
+```json
+{"v": 1, "intent": {"verb": "cursor.move", "at": [420, 180], "origin": "phone"}}
+```
+
+`origin` is optional: absent is the local client — a `ctl` over the socket, whose credential is the socket's file mode,
+so it needs no name of its own. Selection and focus stay **shared**: the wall is one wall, and what one client selects,
+every screen shows.
+
 A remote has no hand on the glass, so the wall keeps a pointer for it (#167): `cursor.move` puts it at a point in
 the **picture panel's points**, `cursor.press` acts where it is, `cursor.release` lets go. The wall draws it — a
 ring at the point, filled while the button is down — and **fades it after four seconds of stillness**, because a
