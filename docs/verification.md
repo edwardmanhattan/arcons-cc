@@ -141,7 +141,7 @@ cargo run -- --scenes            # empty · picture · stale · card-open · pho
                                  # workspaces-named · workspaces-menu · workspaces-moved
                                  # workspaces-new · workspaces-close
                                  # workspaces-new-remote
-                                 # close-all · menu-ring · cursor-hull · cursor-two · cursor-idle
+                                 # close-all · menu-ring · cursor-hull · cursor-two · cursor-idle · stale-banner
                                  # workspaces-rename-hidden
 scripts/verify.sh                # renders and asserts each one
 ```
@@ -351,6 +351,10 @@ pointer is nowhere near the menu). The pair with `panes-menu` is the claim: the 
 pointer-opened menu has **none** of it on any row. `cargo test ui::tests` holds what a picture cannot: the ring wraps
 at both ends, `Enter` acts on the ringed row and never on a hovered one, `Right` opens the waterfall onto its first
 row and `Left` closes that surface and no other, and the ringed row is the menu's **active descendant**.
+
+`stale-banner` is **a viewer whose authority has gone quiet** (#206): the `panes` wall marked as a viewer that last heard
+from its authority half a minute before the capture. Its assertion counts the ink between the header and the picture —
+a banner is only a mitigation if it is drawn — and checks the state says the picture is no longer current.
 
 `cursor-two` is **two clients, two pointers** (#205): the same wall with a phone's cursor over the hull and a second
 client's on the water, far apart. The assertion counts the ink — one ring is 36 px of it, so two is over 60 — because a

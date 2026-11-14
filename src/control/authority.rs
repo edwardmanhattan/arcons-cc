@@ -199,6 +199,13 @@ impl Drop for Session {
     }
 }
 
+/// **How long a viewer may hear nothing before it stops calling its picture current** (#206).
+///
+/// A viewer asks for a scene every frame, so silence this long is not a slow frame — it is a wire that is gone, or an
+/// authority that is. Five seconds is long enough that a hiccup is not an alarm and short enough that nobody reads a
+/// dead wall as a live one for a whole shift.
+pub const STALE_AFTER: f64 = 5.0;
+
 /// A refusal a viewer can say out loud when its authority is not there — one name, one place.
 pub const NO_AUTHORITY: &str = "the authority is not reachable";
 
@@ -265,6 +272,41 @@ mod tests {
             "the scene is the wall it was asked of"
         );
         assert_eq!(scene.seq, state.scene_seq, "and says how old it is");
+    }
+
+    /// **A viewer that hears nothing stops calling its picture current** (#206), and a scene clears it.
+    ///
+    /// The falsification: a wall that keeps drawing a stale picture with a confident label. A fleet's honest weakness is
+    /// one authority for N screens; the mitigation is that every screen can say what it is showing, and a banner is only
+    /// a mitigation if it appears.
+    #[test]
+    fn a_viewer_that_hears_nothing_is_stale_and_a_scene_clears_it() {
+        let mut state = State::default();
+        assert!(
+            !state.is_stale(),
+            "a wall is never stale: it is the authority"
+        );
+
+        // A viewer that has never heard from its authority is *connecting*, which the header already says — not stale.
+        state.viewer = true;
+        assert!(
+            !state.is_stale(),
+            "never heard from is not the same as gone quiet"
+        );
+
+        state.set_frame_clock(10.0);
+        state.heard_at = Some((1.0, 7));
+        assert!(state.is_stale(), "nine seconds of silence is gone quiet");
+        assert!(state.quiet_for().unwrap_or(0.0) >= STALE_AFTER);
+
+        // A scene that arrives is the authority speaking: the picture is current again.
+        state.heard_at = Some((9.0, 8));
+        assert!(!state.is_stale(), "a scene clears it");
+        state.viewer = false;
+        assert!(
+            !state.is_stale(),
+            "and a wall with the same clock is still never stale"
+        );
     }
 
     /// **A viewer applies only what the scene carried** (#202), over a carrier it has never seen (#195).

@@ -250,6 +250,17 @@ impl Image {
             .count()
     }
 
+    /// How many pixels of `colour` lie in a band: `y_from` to `y_to`, the full width.
+    ///
+    /// For a row of the wall that is not a panel — a banner between the header and the picture — where "is there text
+    /// here" is the question and a rectangle of ink is the answer.
+    pub fn count_colour_in(&self, colour: [u8; 3], tolerance: u8, y_from: u32, y_to: u32) -> usize {
+        (y_from.min(self.height)..y_to.min(self.height))
+            .flat_map(|y| (0..self.width).map(move |x| (x, y)))
+            .filter(|(x, y)| near(self.at(*x, *y), colour, tolerance))
+            .count()
+    }
+
     /// How many pixels are within `tolerance` of `colour`. Presence, not placement: "the wall drew
     /// markers at all" is a different question from "this one is here".
     pub fn count_colour(&self, colour: [u8; 3], tolerance: u8) -> usize {
@@ -800,6 +811,34 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             // The card is there in every one of these: the point of the pairs is that only the pointer goes, and a
             // remote's press selects a hull whatever the origin.
             lines.extend(assert_card(image, origin, &mut failures));
+        }
+        "stale-banner" => {
+            // **The banner is drawn, and it is the only thing above the picture** (#206): the header is one row, the
+            // banner another, and the panel starts below both. Ink in that band is the sentence a person reads when the
+            // authority has gone quiet.
+            let Some(origin) = image.find_panel(ink(tokens::panel())) else {
+                failures.push("stale-banner: no picture panel on screen".to_string());
+                return Err(failures);
+            };
+            let band = image.count_colour_in(ink(tokens::ink_dim()), 40, 28, origin.1 as u32);
+            let state = scene::state_for(scene);
+            if !state.is_stale() {
+                failures.push(
+                    "stale-banner: the state does not say it is stale, so nothing tells the operator this picture \
+                     is no longer the authority's (#206)"
+                        .to_string(),
+                );
+            }
+            if band < 50 {
+                failures.push(format!(
+                    "stale-banner: {band} px of ink between the header and the picture — a wall that has lost its \
+                     authority must say so on the glass, not only in its state (#206)"
+                ));
+            } else {
+                lines.push(format!(
+                    "stale-banner: a banner over a picture that is no longer current, {band} px of it"
+                ));
+            }
         }
         "photo" => {
             // The picture half of #32: at this zoom the hull is drawn as its **picture**, not its symbol.

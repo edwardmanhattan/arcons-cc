@@ -167,6 +167,19 @@ A viewer asks for the arrangement and draws it:
 changed nothing costs one small answer. A push channel belongs to the relay (#196), where a connection is already held
 open; two ways to learn about a change would be two ways to disagree about when it happened.
 
+**A viewer that has lost its authority says so** (#206). It asks for a scene every frame, so silence for five seconds
+is not a slow frame — it is a wire that is gone, or an authority that is. The header then carries a banner over a picture
+it stops calling current:
+
+```
+no scene from the authority for 30 s · last held #41
+```
+
+The counter is in five-second buckets, so it stays live without a relayout every frame; the sequence is the last one the
+viewer held. No host, no user, no token (`INV-08`). A viewer that has **never** heard from its authority is not stale —
+it is connecting, which the header says differently. This is the fleet's honest weakness made visible: one authority for
+N screens, and every screen able to say what it is showing.
+
 **A viewer's inputs are requests, never changes** (#204). Every handler in the app goes through one door —
 `control::apply` — and on a viewer that door *asks* instead of applying: the answer is `changed: false`, because no pixel
 moved, and the picture moves when the `Scene` arrives. That is the same rule the mobile note states for a phone, applied
