@@ -439,7 +439,14 @@ fn the_control_document_names_exactly_the_vocabulary() {
         // A verb is `noun.verb`. The projection's table (#181) also starts its rows with a backticked field, and
         // `panes[].id` is a dotted field name, not a verb — the brackets are what tells them apart.
         let Some(verb) = line.split('`').nth(1).filter(|verb| {
-            verb.contains('.') && !verb.contains(' ') && !verb.contains('[') && !verb.contains(']')
+            // A verb is `noun.verb`. A row may also start with a *value* — an environment variable
+            // (`ARCONS_AUTHORITY=/path`), a field (`panes[].id`) — and those are not things a client sends.
+            verb.contains('.')
+                && !verb.contains(' ')
+                && !verb.contains('[')
+                && !verb.contains(']')
+                && !verb.contains('=')
+                && !verb.contains('/')
         }) else {
             continue;
         };
@@ -526,6 +533,21 @@ fn the_mobile_note_names_only_verbs_the_wall_answers_to() {
         named >= 5,
         "docs/mobile-remote.md's table names {named} verbs, which is too few to be the table this claim is \
          about — did the table change shape? (#168)"
+    );
+}
+
+/// **A viewer's read is documented** (#202): `read: "scene"` is what a second screen asks for, and the document says
+/// so beside the projection — a viewer's author who finds `"wall"` and not `"scene"` builds a controller instead.
+#[test]
+fn the_control_document_names_the_authority_and_the_scene_read() {
+    let doc = read("docs/control.md");
+    assert!(
+        doc.contains("\"read\": \"scene\""),
+        "docs/control.md does not show `read: \"scene\"`, which is how a viewer gets the arrangement (#202)"
+    );
+    assert!(
+        doc.contains("ARCONS_AUTHORITY"),
+        "docs/control.md does not name ARCONS_AUTHORITY, so nobody can make a screen a viewer (#202)"
     );
 }
 

@@ -191,6 +191,15 @@ pub fn run(args: &Args, env: &Env, world: &dyn World, out: &mut dyn std::fmt::Wr
     let control = control_row();
     let _ = writeln!(out, "  {:<11} ok  {}", "control", control);
 
+    // **Whose state this is** (#202): a fact beside the plane's, because a viewer and a wall answer the same requests
+    // and an operator has to be able to tell which one they are looking at.
+    let _ = writeln!(
+        out,
+        "  {:<11} ok  {}",
+        "authority",
+        crate::control::authority::Role::from_env().label()
+    );
+
     match world.sign_in(&config) {
         Ok(detail) => {
             let _ = writeln!(out, "  {:<11} ok  {detail}", "login");

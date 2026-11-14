@@ -20,6 +20,7 @@
 use serde_json::{Map, Value, json};
 
 use super::projection::Wall;
+use super::snapshot::Scene;
 use super::{Changed, Intent, PROTOCOL, Refused};
 use crate::ui::{PaneContent, RenameTarget};
 
@@ -350,6 +351,9 @@ fn content(object: &Map<String, Value>) -> Result<PaneContent, Refused> {
 pub enum Request {
     Intent(Intent),
     Wall,
+    /// **The whole arrangement, for a viewer** (#201, #202): what a picture is computed from, so a second screen can
+    /// draw the same wall. Not a projection — that is for a controller, and it deliberately leaves the picture out.
+    Scene,
 }
 
 /// **The wall's answer**, in the shape the listener sends back (#165, #181).
@@ -357,6 +361,8 @@ pub enum Request {
 pub enum Answer {
     Changed(Result<Changed, Refused>),
     Wall(Wall),
+    /// The arrangement a viewer draws (#202), with the `seq` that says how old it is.
+    Scene(Box<Scene>),
 }
 
 /// **One request line** — the version, and the intent inside it.
@@ -379,12 +385,55 @@ pub fn request(line: &str) -> Result<Request, Refused> {
         (Some(intent), None) => from_wire(intent).map(Request::Intent),
         (None, Some(read)) => match read.as_str() {
             Some("wall") => Ok(Request::Wall),
+            Some("scene") => Ok(Request::Scene),
             _ => Err(Refused("unknown read")),
         },
         (Some(_), Some(_)) => Err(Refused(
             "a request carries \"intent\" or \"read\", not both",
         )),
         (None, None) => Err(Refused("a request carries \"intent\" or \"read\"")),
+    }
+}
+
+/// **A request as one line** — the reverse of [`request`], so a client builds lines with the same vocabulary the wall
+/// reads them with (#202). One encoder, one decoder, and a round-trip test between them.
+pub fn request_line(request: &Request) -> String {
+    match request {
+        Request::Intent(intent) => json!({ "v": PROTOCOL, "intent": to_wire(intent) }).to_string(),
+        Request::Wall => json!({ "v": PROTOCOL, "read": "wall" }).to_string(),
+        Request::Scene => json!({ "v": PROTOCOL, "read": "scene" }).to_string(),
+    }
+}
+
+/// **One reply line, read back** (#202): a viewer takes the line a wall wrote and turns it into the answer, so neither
+/// side has a private spelling.
+pub fn answer(line: &str) -> Result<Answer, String> {
+    let value: Value = serde_json::from_str(line).map_err(|_| "not JSON".to_string())?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "an answer is a JSON object".to_string())?;
+    if object.get("ok").and_then(Value::as_bool) == Some(false) {
+        // A refusal the wall named is the wall's own words (`INV-07`), passed on as text: a client does not re-spell
+        // it, and the reason a viewer logs is the reason the authority gave.
+        let why = object
+            .get("why")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "a refusal carries \"why\"".to_string())?;
+        return Err(why.to_string());
+    }
+    if let Some(scene) = object.get("scene") {
+        let scene: Scene = serde_json::from_value(scene.clone())
+            .map_err(|_| "the scene is not a scene this client knows".to_string())?;
+        return Ok(Answer::Scene(Box::new(scene)));
+    }
+    if let Some(wall) = object.get("wall") {
+        let wall: Wall = serde_json::from_value(wall.clone())
+            .map_err(|_| "the wall is not a projection this client knows".to_string())?;
+        return Ok(Answer::Wall(wall));
+    }
+    match object.get("changed").and_then(Value::as_bool) {
+        Some(changed) => Ok(Answer::Changed(Ok(Changed(changed)))),
+        None => Err("an answer carries \"changed\", \"wall\", \"scene\" or \"why\"".to_string()),
     }
 }
 
@@ -400,6 +449,7 @@ pub fn reply(answer: Answer) -> String {
         // **A read is a body, and a good one**: `wall` beside `ok`, and no `changed` — a client that asked to
         // change nothing is not told something did.
         Answer::Wall(wall) => json!({ "v": PROTOCOL, "ok": true, "wall": wall }).to_string(),
+        Answer::Scene(scene) => json!({ "v": PROTOCOL, "ok": true, "scene": scene }).to_string(),
     }
 }
 
@@ -506,5 +556,38 @@ mod tests {
         assert_eq!(ok, r#"{"changed":true,"ok":true,"v":1}"#);
         let refused = reply(Answer::Changed(Err(Refused("unknown verb"))));
         assert_eq!(refused, r#"{"ok":false,"v":1,"why":"unknown verb"}"#);
+    }
+    /// **A scene travels as a line and comes back as itself** (#202): one encoder, one decoder, and the identity in
+    /// between — which is what lets a viewer on another machine draw the wall the authority owns.
+    #[test]
+    fn a_scene_round_trips_through_the_lines_a_socket_carries() {
+        assert_eq!(
+            request(&request_line(&Request::Scene)).expect("parses"),
+            Request::Scene
+        );
+        assert_eq!(
+            request(&request_line(&Request::Wall)).expect("parses"),
+            Request::Wall,
+            "the projection and the scene are different reads, and both survive the trip"
+        );
+
+        let scene = crate::ui::State::default().scene();
+        let line = reply(Answer::Scene(Box::new(scene.clone())));
+        match answer(&line).expect("the reply parses") {
+            Answer::Scene(back) => assert_eq!(*back, scene, "the scene is the identity: {line}"),
+            other => panic!("a scene reply read as {other:?}"),
+        }
+    }
+
+    /// **A refusal the wall named comes back as the wall's words**, not as a default and not as a client's
+    /// paraphrase (`INV-07`).
+    #[test]
+    fn a_refusal_travels_with_its_reason() {
+        let line = reply(Answer::Changed(Err(Refused("the last pane on the wall"))));
+        assert_eq!(
+            answer(&line),
+            Err("the last pane on the wall".to_string()),
+            "a client gets the rule's own name"
+        );
     }
 }

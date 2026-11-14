@@ -475,6 +475,11 @@ pub struct State {
     /// How many of [`State::pending_intents`] have been applied, in order: a script is a sequence, and applying
     /// step 3 before step 2 would be a different wall.
     pub intents_applied: usize,
+    /// **A viewer's session to the authority** (#202): `None` when this process is the wall, which is the default and
+    /// the only case a capture is in. `Some` means another process owns the arrangement and this one draws the scenes
+    /// it is given.
+    #[cfg(unix)]
+    pub session: Option<crate::control::authority::Session>,
     /// **The control plane's listener** (#165): the socket a client drives the wall through, and the queue of
     /// requests this thread answers between frames. `None` in a capture (a scene opens nothing, `INV-11`) and
     /// when the plane is turned off — so a wall with no socket is a wall nothing can be driven through, and
@@ -686,6 +691,8 @@ impl Default for State {
             cadenced: None,
             cursor: None,
             scene_seq: 0,
+            #[cfg(unix)]
+            session: None,
             pending_intents: Vec::new(),
             intents_applied: 0,
             #[cfg(unix)]
@@ -5504,6 +5511,21 @@ fn replay_enabled() -> bool {
     *WANTED.get_or_init(|| std::env::var_os("ARCONS_REPLAY").is_some_and(|value| value != "0"))
 }
 
+/// **Dial the authority a viewer was pointed at** (#202) over the one carrier that exists for a process on this
+/// machine: the control socket. A relay's carrier arrives with #196, and the session does not change when it does.
+#[cfg(unix)]
+fn connect_authority(
+    path: &std::path::Path,
+) -> std::io::Result<crate::control::authority::Session> {
+    let stream = std::os::unix::net::UnixStream::connect(path)?;
+    // A scene is small and a viewer waits for one at most once a frame: a read that blocks the session's own thread
+    // (never the UI thread, `INV-05`) is the right trade, and a timeout keeps a wedged authority from holding it for
+    // ever.
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+    let carrier = crate::control::carrier::Unix::new(stream)?;
+    crate::control::authority::Session::new(Box::new(carrier))
+}
+
 fn setup(state: &mut State, waker: rune::Waker) {
     // A scene is offline by construction: `--snap` renders a fixture, and a capture that opened a
     // socket would be a capture that depends on a server being awake.
@@ -5517,6 +5539,30 @@ fn setup(state: &mut State, waker: rune::Waker) {
         seed_single_pane_frame(state);
         return;
     }
+    // **A viewer connects to the authority it was told about** (#202): the socket beside a wall on this machine, or the
+    // path `ARCONS_AUTHORITY` names. With nothing configured this is `Local` and no line is written — the wall owns
+    // everything, which is what a capture, a test and a single display are. A viewer that cannot reach its authority
+    // says so once and carries on as a wall: a screen that refuses to draw anything because a socket is absent is
+    // worse than one drawing its own default wall and saying why.
+    let role = crate::control::authority::Role::from_env();
+    match &role {
+        crate::control::authority::Role::Local => {}
+        crate::control::authority::Role::Remote(path) => match connect_authority(path) {
+            Ok(session) => {
+                tracing::info!(
+                    "authority: a viewer of {} ({})",
+                    path.display(),
+                    role.label()
+                );
+                state.session = Some(session);
+            }
+            Err(error) => tracing::warn!(
+                "authority: {} is not reachable ({error}); this wall owns its own state until it is",
+                path.display()
+            ),
+        },
+    }
+
     // **The control plane** (#165). A capture returned above: `INV-11` forbids a scene reading or writing a
     // file, and a socket is both. A wall can turn the plane off (`ARCONS_CONTROL=0`) and says so in one line,
     // because "a client cannot connect" is otherwise a mystery with a log to read.
@@ -5655,6 +5701,32 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     if state.save_due() {
         state.save_layout();
     }
+    // **A viewer draws what the authority says** (#202): one scene request at a time, and whatever has come back is
+    // applied here — on the only thread that owns `State`, exactly like a request from the plane. The `seq` makes a
+    // scene that has not moved cost one comparison rather than a rebuild.
+    #[cfg(unix)]
+    let mut viewed = false;
+    #[cfg(unix)]
+    {
+        // Taken out while it is drained, so the session's borrow ends before `apply_scene` needs the state mutably.
+        let answers: Vec<_> = match &state.session {
+            Some(session) => {
+                if !session.busy() {
+                    session.send(crate::control::wire::Request::Scene);
+                }
+                std::iter::from_fn(|| session.next()).collect()
+            }
+            None => Vec::new(),
+        };
+        for answer in answers {
+            if let crate::control::wire::Answer::Scene(scene) = answer {
+                viewed |= state.apply_scene(&scene);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let viewed = false;
+
     // **The control plane's requests, applied here and nowhere else** (#165): a socket read on this thread
     // would block the frame, and an `apply` on the listener's thread would be two threads changing one wall.
     // The queue is drained, not waited on: a wall that waited for a client would freeze for one that has not
@@ -5667,17 +5739,11 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
         .as_ref()
         .and_then(crate::control::Server::next_job)
     {
-        // **A change or a look** (#181): both are answered here, between frames, because `State` is this
-        // thread's. A read is built from the state as it is on this frame — which is what "the wall" means.
-        use crate::control::wire::{Answer, Request};
-        let answer = match &job.request {
-            Request::Intent(intent) => {
-                let result = crate::control::apply(state, intent.clone());
-                controlled |= result.map(|changed| changed.0).unwrap_or(false);
-                Answer::Changed(result)
-            }
-            Request::Wall => Answer::Wall(crate::control::projection::of(state)),
-        };
+        // **A change, a look, or the arrangement** (#181, #201): all three are answered here, between frames, because
+        // `State` is this thread's — and by `control::authority::answer`, so a wall's loop and a viewer's session
+        // cannot grow two opinions about what a request means.
+        let (answer, did) = crate::control::authority::answer(state, &job.request);
+        controlled |= did;
         job.answer(answer);
     }
     #[cfg(not(unix))]
@@ -5686,6 +5752,7 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     changed |= scripted;
     changed |= followed;
     changed |= controlled;
+    changed |= viewed;
     changed |= drain_card_reads(state);
     changed |= tick_card_age(state);
     // **A newsroom pane restored from the file has asked for nothing yet** (#153): one read, on this
