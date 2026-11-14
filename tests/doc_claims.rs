@@ -481,6 +481,54 @@ fn the_control_document_names_exactly_the_vocabulary() {
 
 /// **The projection's keys are the document's keys** (#181).
 ///
+/// **`docs/mobile-remote.md`'s "today" table is a promise** (#168): every verb its rows name in `noun.verb` form
+/// must be one the code answers to.
+///
+/// One direction only, deliberately. The note is written *for* a client that does not exist yet, so its prose names
+/// verbs the epic will add (`pair.begin`, `pair.claim`, `pair.forget`) — those are plans, not promises, and only the
+/// table is scanned. The reverse failure is the one that hurts: a note telling a phone's author to send a verb the
+/// wall refuses is worse than a note that is silent about it.
+#[test]
+fn the_mobile_note_names_only_verbs_the_wall_answers_to() {
+    use arcons_cc::control::Intent;
+
+    let note = read("docs/mobile-remote.md");
+    let code: Vec<&'static str> = arcons_cc::control::vocabulary()
+        .iter()
+        .map(Intent::verb)
+        .collect();
+    let mut named = 0_usize;
+    for line in note.lines().filter(|line| line.starts_with("| ")) {
+        for piece in line.split('`').skip(1).step_by(2) {
+            let verb = piece.trim();
+            if !verb.contains('.') || verb.contains(' ') || verb.contains('*') || verb.contains('[')
+            {
+                continue;
+            }
+            // A file name has a dot too, and `devices.toml` is not a verb. A suffix, named rather than guessed, so a
+            // new *file* in the note is a one-line change here and a new *verb* is still caught.
+            const FILES: [&str; 6] = ["toml", "md", "json", "png", "rs", "sock"];
+            if FILES
+                .iter()
+                .any(|extension| verb.ends_with(&format!(".{extension}")))
+            {
+                continue;
+            }
+            named += 1;
+            assert!(
+                code.contains(&verb),
+                "docs/mobile-remote.md tells a phone's author to send `{verb}`, which no intent answers \
+                 (#168): the vocabulary is {code:?}"
+            );
+        }
+    }
+    assert!(
+        named >= 5,
+        "docs/mobile-remote.md's table names {named} verbs, which is too few to be the table this claim is \
+         about — did the table change shape? (#168)"
+    );
+}
+
 /// A client is written from `docs/control.md`, so a field the code sends and the document does not name is a field
 /// nobody uses, and a field the document names and the code does not send is a client that reads `undefined`. Both
 /// are checked here, from one `serde` serialization of an empty-projection's shape.

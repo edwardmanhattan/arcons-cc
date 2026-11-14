@@ -155,6 +155,18 @@ hit-testing, which is why it is a smaller vocabulary and why it came later (#167
 - **An in-process plugin for the "remote client".** Rejected: a plugin shares the wall's failure modes and its
   address space, so it cannot be the client that proves the seam is real.
 
+## The remote, as a phone (#168)
+
+`docs/mobile-remote.md` is the note. Two of its decisions touch this ADR directly, and both keep it intact:
+
+- **The projection is the client's only truth.** A phone reads the wall on connect and on every resume, and never
+  replays intents — an intent is a change, and a wall that changed while the client was away would be changed wrongly
+  by a replay. This is the read half (#181) used the way it was designed to be used, not extended.
+- **The wall still does not listen.** The rejected "TCP, HTTP or WebSocket" above stands: a phone reaches the wall
+  through an **outbound carrier** the wall dials — the same authenticated, reconnecting connection it already holds to
+  Minos — and the relay's protocol is a contract this repo pins and tests. The unix socket stays the local credential,
+  and pairing (a code drawn on the wall, a hashed device key in `devices.toml`) is the phone's, not the socket's.
+
 ## The test that would make this two processes
 
 The decision is revisited — deliberately, with a ticket — when **either** is true:
