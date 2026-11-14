@@ -350,7 +350,7 @@ mod tests {
             .expect("the reply comes");
         assert_eq!(
             reply.trim(),
-            format!(r#"{{"ok":false,"v":1,"why":"{LAST_PANE}"}}"#),
+            format!(r#"{{"kind":"rule","ok":false,"v":1,"why":"{LAST_PANE}"}}"#),
             "the client gets the rule's name, not a generic failure"
         );
     }
@@ -401,7 +401,11 @@ mod tests {
         let mut reply = String::new();
         let mut reader = BufReader::new(client.try_clone().expect("clone"));
         reader.read_line(&mut reply).expect("the reply comes");
-        assert_eq!(reply.trim(), r#"{"ok":false,"v":1,"why":"not JSON"}"#);
+        assert_eq!(
+            reply.trim(),
+            r#"{"kind":"input","ok":false,"v":1,"why":"not JSON"}"#,
+            "a client that sent rubbish is told to fix the call, not to wait for a rule to change"
+        );
         // And the same connection still works afterwards.
         client
             .write_all(b"{\"v\":1,\"intent\":{\"verb\":\"surface.close\"}}\n")
