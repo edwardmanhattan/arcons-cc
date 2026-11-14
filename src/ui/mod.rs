@@ -25,6 +25,7 @@ pub mod markers;
 pub mod newsroom;
 pub mod objects;
 pub mod saved;
+pub mod snapshot;
 pub mod symbol;
 pub mod tokens;
 pub mod tree;
@@ -463,6 +464,10 @@ pub struct State {
     /// **The client's cursor** (#167): where a remote is pointing, when it last moved, and whether it is pressing.
     /// `None` until a client points — a wall nobody is driving has no cursor to draw.
     pub cursor: Option<Cursor>,
+    /// **How many times the arrangement has changed** (#201): the `seq` a `Scene` carries, so a viewer can order two
+    /// scenes and notice a gap without an event log. The authority owns it once there is one (#202); today it moves
+    /// wherever `arranged()` is called or a scene is applied.
+    pub scene_seq: u64,
     /// **An intent script waiting for its frame** (#172): a scene that drives the wall **only** through the
     /// control plane carries its steps here, and `poll` applies the ones that are due. Empty on a wall — nothing
     /// scripts a wall — which is why it is a field on the state and not an environment variable.
@@ -680,6 +685,7 @@ impl Default for State {
             #[cfg(feature = "map")]
             cadenced: None,
             cursor: None,
+            scene_seq: 0,
             pending_intents: Vec::new(),
             intents_applied: 0,
             #[cfg(unix)]
@@ -4246,6 +4252,25 @@ pub const MENU_MOVE: &str = "Move to workspace";
 pub const MENU_RENAME: &str = "Name this pane…";
 pub const MENU_CLOSE: &str = "Close pane";
 
+/// **Every row key a menu can open, as a literal** (#140, #201).
+///
+/// `Interaction::Menu` holds `open: Option<&'static str>` — a row's key is a compile-time name — and a `Scene`
+/// carries it as text, so it needs the literal back. A key with an index in it (`menu-move-2`, one per workspace)
+/// is deliberately absent: reopening a waterfall from a scene would be a scene inventing which workspace it means,
+/// so a scene that names one opens the first surface instead, and a test keeps this list in step with the rows.
+pub const MENU_KEYS: [&str; 5] = [
+    "menu-split",
+    "menu-new-workspace",
+    "menu-rename",
+    "menu-move",
+    "menu-close",
+];
+
+/// The literal a scene's row key names, or `None` for a name the wall does not have.
+pub fn menu_key(name: &str) -> Option<&'static str> {
+    MENU_KEYS.iter().copied().find(|key| *key == name)
+}
+
 /// **What a menu row does** (#140): a value, so a row can name a workspace and a submenu can be a row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
@@ -5453,6 +5478,32 @@ pub(crate) fn seed_single_pane_frame(state: &mut State) {
     });
 }
 
+/// **Whether this capture asks the wall to rebuild itself from its own scene** (#201), once.
+///
+/// `ARCONS_REPLAY=1` is read once and answered once — **the first frame after every scripted step has landed**.
+///
+/// Earlier than that proves the wall the script started from; every frame rebuilds against a layout that a wall only
+/// makes once. One round trip, at the moment a client would have taken one, is what a viewer does with a snapshot.
+fn replay_due(state: &State) -> bool {
+    replay_enabled()
+        && state.frame_clock() > 0.0
+        && state.intents_applied >= state.pending_intents.len()
+        && !replayed_once()
+}
+
+/// Whether the replay has happened, as a flag rather than a field: it is a capture's business, not a wall's.
+fn replayed_once() -> bool {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static DONE: AtomicBool = AtomicBool::new(false);
+    DONE.swap(true, Ordering::Relaxed)
+}
+
+fn replay_enabled() -> bool {
+    use std::sync::OnceLock;
+    static WANTED: OnceLock<bool> = OnceLock::new();
+    *WANTED.get_or_init(|| std::env::var_os("ARCONS_REPLAY").is_some_and(|value| value != "0"))
+}
+
 fn setup(state: &mut State, waker: rune::Waker) {
     // A scene is offline by construction: `--snap` renders a fixture, and a capture that opened a
     // socket would be a capture that depends on a server being awake.
@@ -5559,6 +5610,17 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     // order, when their frame comes. This is the same `apply` the pointer and the socket use — a capture is not a
     // second kind of client, it is a client whose clock is virtual.
     let scripted = crate::scene::apply_due_intents(state, elapsed);
+    // **A capture can rebuild its own wall** (#201): with `ARCONS_REPLAY=1` the scene's state is turned into a
+    // `Scene` and applied straight back, on the first frame. The golden rendered that way is the proof that the
+    // `Scene` is the whole arrangement — if a pane's camera, name, filter, selection or surface is missing from it,
+    // the picture differs and `tests/scene_replay.rs` says so. A wall never does this: `apply_scene` is what a
+    // viewer does with a scene the authority sent (#202).
+    // Once, and **after the script**: a scene that an intent script drives changes after its first frame, and a round
+    // trip taken before the last step would prove the wall the script started from and nothing it reached.
+    if state.headless && replay_due(state) {
+        state.rebuild_from_scene();
+    }
+
     // **Every follow, one frame of it** (#169): a pane locked onto a hull follows that hull's fix, and the wall
     // redraws only when the camera actually moved.
     let followed = state.tick_follows();

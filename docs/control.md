@@ -127,6 +127,35 @@ arcons-cc ctl wall | jq '.workspaces[] | {name, panes: [.panes[].kind]}'
 - **It is not saved.** `layout.toml` remembers where a pane is looking (#153); a follow is a live mode, and a hull that
   went quiet is not a place to come back to.
 
+## The scene: the whole arrangement (#201)
+
+`{"v": 1, "read": "wall"}` is the projection — small, for a client that needs to know what the wall is doing. A
+**viewer** on another machine needs more: everything a picture is computed from. That is a `Scene`, and it is
+`ADR-0006`'s vocabulary:
+
+| field | what it carries |
+| --- | --- |
+| `v` | the protocol version — `1`. A client that cannot speak it says so rather than guessing |
+| `seq` | a counter that only goes up, so two scenes can be ordered and a gap is detectable |
+| `active` | the workspace on screen, as an index into `workspace` |
+| `focused` | the pane with the keys, or `null` on a workspace that holds none |
+| `maximised` | the pane drawn over the wall, or `null` |
+| `surface` | the one surface a hand can leave open: a menu (with its row and ring), a filter panel, a rename sheet, settings — never a *held* gesture |
+| `cursors` | every cursor the wall draws, by point and age |
+| `workspace` | the workspaces, in chip order: `name`, `focused` (an index into `pane`), `tiling` (the same shape `layout.toml` writes), `pane` |
+
+And a pane: `id`, `content` (`map`, `tree` with its `organisation`, `newsroom`), `lat`/`lon`/`zoom`, `name`, `follow`,
+`selected`, `filter` (the three layers and the hidden type, domain and category ids), `tree` (a tree pane's own camera)
+and `news` (a newsroom pane's `scope`, `page` and open `selected` story).
+
+**What is deliberately not in a scene**, and why: the frame a map thread last drew, the threads, the decoded pictures,
+the textures, the layout results — they are the *drawing machine's*, and a viewer makes its own. And the **water** —
+the fleet, the cards' text, the newsroom's stories — joins the scene in #203; until then a scene is the arrangement,
+and a replay proves the arrangement is complete with the water held still.
+
+`tests/scene_replay.rs` is the proof: it renders scenes the ordinary way and again with `ARCONS_REPLAY=1`, which makes
+the wall rebuild itself from its own `Scene` before drawing, and compares the bytes.
+
 ## A menu, without a pointer
 
 A menu is a place: which row means something is decided by the wall's own layout, so a client that has no pointer

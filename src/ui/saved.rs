@@ -63,6 +63,10 @@ impl State {
         if !self.headless {
             self.arranged_at = Some(self.logical);
         }
+        // **The scene counter** (#201): every settled change is one number further on, so a viewer can order two
+        // scenes and notice a gap. Counted for a capture too — a scene's `seq` costs nothing and a test that a
+        // round trip preserves it would otherwise only hold on a wall.
+        self.scene_seq += 1;
     }
 
     /// Whether the arrangement has held still long enough to write.
@@ -228,7 +232,7 @@ fn save_pane(pane: &Pane) -> SavedPane {
 /// `NewsScope::Unknown` is a real scope on the wire and **not a tab the wall draws**, so a pane can never
 /// be reading it: a file that says `unknown` comes back on the international tab, which is the tab the
 /// panel opens on.
-fn scope_word(scope: crate::data::types::NewsScope) -> &'static str {
+pub(crate) fn scope_word(scope: crate::data::types::NewsScope) -> &'static str {
     match scope {
         crate::data::types::NewsScope::Unknown => {
             crate::data::types::NewsScope::International.as_str()
@@ -237,7 +241,7 @@ fn scope_word(scope: crate::data::types::NewsScope) -> &'static str {
     }
 }
 
-fn scope_from_word(word: &str) -> crate::data::types::NewsScope {
+pub(crate) fn scope_from_word(word: &str) -> crate::data::types::NewsScope {
     use crate::data::types::NewsScope;
     match word {
         "regional" => NewsScope::Regional,
@@ -247,7 +251,7 @@ fn scope_from_word(word: &str) -> crate::data::types::NewsScope {
 }
 
 /// A layout's shape, in the file's terms: leaves become **indices into the workspace's panes**.
-fn save_shape(shape: &view::Shape, slots: &[ViewId]) -> Option<SavedNode> {
+pub(crate) fn save_shape(shape: &view::Shape, slots: &[ViewId]) -> Option<SavedNode> {
     match shape {
         view::Shape::Leaf(id) => {
             let index = slots.iter().position(|slot| slot == id)?;
@@ -269,7 +273,7 @@ fn save_shape(shape: &view::Shape, slots: &[ViewId]) -> Option<SavedNode> {
     }
 }
 
-fn load_shape(node: &SavedNode, ids: &[ViewId]) -> Option<view::Shape> {
+pub(crate) fn load_shape(node: &SavedNode, ids: &[ViewId]) -> Option<view::Shape> {
     match (&node.pane, node.split, &node.a, &node.b) {
         (Some(index), None, None, None) => Some(view::Shape::Leaf(*ids.get(*index as usize)?)),
         (None, Some(axis), Some(a), Some(b)) => {
@@ -359,7 +363,7 @@ pub fn apply_saved(state: &mut State, saved: &Saved) -> bool {
 }
 
 /// A workspace's panes as a row, for a tiling the file did not give: the layout a wall can always draw.
-fn row_layout(ids: &[ViewId], focused: Option<u32>) -> Option<Layout> {
+pub(crate) fn row_layout(ids: &[ViewId], focused: Option<u32>) -> Option<Layout> {
     let (first, rest) = ids.split_first()?;
     let mut layout = Layout::single_with(*first);
     let mut at = *first;
