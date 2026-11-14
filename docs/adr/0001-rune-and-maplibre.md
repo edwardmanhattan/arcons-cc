@@ -450,3 +450,38 @@ Two sharp edges, recorded because they cost coredumps to find:
 - Verification works without a display, which is what makes `scripts/verify.sh` the gate.
 - A Rune rev bump is a `Cargo.toml` + ADR change in one commit, not a `cargo update`.
 - The map's build cost arrives in one prepared ticket instead of on every clone.
+
+### Read and **declined**: `8219692` → `09ab92a5`, because the range cannot build on macOS
+
+The tracker filed #185: `dev` had moved 104 commits past the pin. The range was read the way a bump is read — every
+commit that touches a pixel surface named, and the gate run to see what moved — and then it was **not taken**, because
+the range does not compile on macOS for anything that depends on Rune rather than being Rune.
+
+**The defect.** `#791` ("Input methods: compositions carry their clauses, and committed text can be converted again")
+is the fourth commit in the range, and it makes `rune`'s macOS path call `winit::platform::macos::{set_ime_text,
+take_ime_clauses, take_ime_replacement}`. Those functions are not in the published `winit` 0.30.13; they are in
+**Rune's own vendored copy**, applied by `[patch.crates-io]` in *Rune's* manifest. Cargo applies patches from the
+workspace root only, so an app that depends on Rune by rev gets the unpatched crate and:
+
+```
+error[E0425]: cannot find function `set_ime_text` in module `winit::platform::macos`
+error[E0425]: cannot find function `take_ime_clauses` in module `winit::platform::macos`
+error[E0425]: cannot find function `take_ime_replacement` in module `winit::platform::macos`
+error: could not compile `rune` (lib) due to 3 previous errors
+```
+
+`check (macos-latest)` is a real gate, so the bump is a red PR. Taking it would mean vendoring `winit` ourselves — 3.1 MB,
+175 files, re-made on **every** future bump — to repair a packaging defect in a dependency. That is a project decision
+with a permanent maintenance cost, not a bookkeeping one, so the pin holds at
+`82196923fcb43d493353455edab0113cb4493c38` and #185 stays open with this analysis.
+
+**What the review found anyway, for the day it is takeable.** The only pixel movement would have been icon edges: with
+the range built on Linux, 45 scenes differed from their goldens in `rune::Icon` antialiasing alone — two rows of each
+workspace chip's glyph, the pane header's glyphs, the settings glyph (~100 px a scene, brightest channel +45) — from
+`#828`, icon elements covered with the op Chromium's Ganesh picks. Nothing else moved: not text (`#862`'s weight
+ranges, `#878`/`#872`'s paint caches), not markers (`#885`'s rounded-containment snap on integral rectangles), not the
+wheel (`#856`'s Chromium distances — the wall's wheel intents carry their own deltas).
+
+**What would change this decision.** Any of: the IME extensions reaching a published `winit` (or a `rune` feature that
+gates them), a rev whose macOS path does not need them, or an explicit decision that this wall vendors `winit` — which
+belongs in `vendor/README.md` with the re-vendor step, not in a bump commit.
