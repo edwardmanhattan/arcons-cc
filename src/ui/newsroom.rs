@@ -93,6 +93,9 @@ pub struct View {
     pub selected: Option<i64>,
     /// What the detail read said, when a story is open. `None` on the list.
     pub detail: Option<Detail>,
+    /// **When this page was read** (#211), on the wall's frame clock. A scene carries the age, so a page the authority
+    /// read an hour ago does not reach a viewer looking like one it read now.
+    pub read_at: Option<f64>,
 }
 
 impl Default for View {
@@ -106,6 +109,7 @@ impl Default for View {
             state: ReadState::Reading,
             selected: None,
             detail: None,
+            read_at: None,
         }
     }
 }

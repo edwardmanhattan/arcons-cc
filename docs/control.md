@@ -218,19 +218,34 @@ same loop; it does not add a second way to change the wall.
 | `surface` | the one surface a hand can leave open: a menu (with its row and ring), a filter panel, a rename sheet, settings — never a *held* gesture |
 | `cursors` | every cursor the wall draws, by point and age |
 | `water` | **the fleet** (#203): one entry per hull — `id_unit`, `name`, `hull_number`, `position`, `previous`, `age_seconds` (measured by the authority), `backfilled`, `course_deg`, `accuracy_m`, `speed_kn`, `received_at`. `null` for a wall that has not read Minos yet, which is "not asked" and not "no hulls" |
+| `facilities` | **the facility layer** (#109, #211): `age_seconds`, `installations`, `types` — the whole unpaginated cache, so a type's count is the cache's. `null` when the authority has read none, which is "not asked" |
+| `objects` | **the tactical objects** (#110, #211): `age_seconds`, `manifest` (sorted by `code`), `placements`, `facets`. `null` when not read |
+| `structures` | **the orders of battle** (#116, #211): `age_seconds`, `organisations`, `trees`, `tni`. `null` when not read |
 | `workspace` | the workspaces, in chip order: `name`, `focused` (an index into `pane`), `tiling` (the same shape `layout.toml` writes), `pane` |
 
 And a pane: `id`, `content` (`map`, `tree` with its `organisation`, `newsroom`), `lat`/`lon`/`zoom`, `name`, `follow`,
-`selected`, `filter` (the three layers and the hidden type, domain and category ids), `tree` (a tree pane's own camera)
-and `news` (a newsroom pane's `scope`, `page` and open `selected` story).
+`selected` (the hull whose card this pane shows), `installation` (the facility's, which is the same one card), `filter`
+(the three layers and the hidden type, domain and category ids), `tree` (a tree pane's own camera), `news` (a newsroom
+pane's `scope`, `page`, open `selected` story, **the rows** — `stories`, `pagination`, `detail`, `state`, `age_seconds`)
+and `card` — **the reads**: `unit`, then `identity`, `commander` and `specification`, each `{"read": "pending"}`,
+`{"read": "ready", "value": …}` or `{"read": "failed", "why": …}`.
+
+**The read half of the water** (#211) is why the scene is now the whole picture. A hull's card and the newsroom's page
+are not arrangement — they are what the authority **read**, and a viewer must not read Minos itself. So the rows and
+the reads travel with the scene, stamped with the authority's age at the instant it was cast (the same rule as a fix's,
+`INV-06`): a page read an hour ago cannot arrive on another screen looking like one read now.
+
+A cache that is `null` is **unchanged**, not empty: a client keeps what it holds, so a wall still waking up cannot
+blank the facilities layer on every other screen. That is the first place the scene earns the word *delta*.
 
 **What is deliberately not in a scene**, and why: the frame a map thread last drew, the threads, the decoded pictures,
-the textures, the layout results — they are the *drawing machine's*, and a viewer makes its own. And the **water** —
-the fleet, the cards' text, the newsroom's stories — joins the scene in #203; until then a scene is the arrangement,
-and a replay proves the arrangement is complete with the water held still.
+the textures, the layout results — they are the *drawing machine's*, and a viewer makes its own.
 
-`tests/scene_replay.rs` is the proof: it renders scenes the ordinary way and again with `ARCONS_REPLAY=1`, which makes
-the wall rebuild itself from its own `Scene` before drawing, and compares the bytes.
+`tests/scene_replay.rs` is the proof, and it is **every scene** (#211): each one is rendered the ordinary way and again
+with `ARCONS_REPLAY=1`, which empties the wall — the arrangement, the fleet and the facilities, the objects and the
+structures — and rebuilds it from its own `Scene` before drawing. The two PNGs must be byte-identical. Only the scene
+that *holds* a pane in the air is expected to differ, because a hold is the pointer's and not the arrangement
+(`ADR-0005`).
 
 ## A menu, without a pointer
 

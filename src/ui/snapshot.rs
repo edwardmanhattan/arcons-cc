@@ -12,14 +12,15 @@
 use crate::config::layout::SavedNode;
 use crate::control::projection::CameraView;
 use crate::control::snapshot::{
-    Content, CursorAt, Filter, News, Pane as ScenePane, SCENE_VERSION, Scene, Surface, Target,
-    Tree, Workspace as SceneWorkspace,
+    CardAt, Content, CursorAt, Facilities, Filter, News, Objects, Pane as ScenePane, Read,
+    SCENE_VERSION, Scene, Structures, Surface, Target, Tree, Workspace as SceneWorkspace,
 };
 use crate::ui::view::Layout;
 use crate::ui::{
     Camera, Interaction, Pane, PaneContent, Rename, RenameTarget, State, ViewId, Workspace,
     default_workspace_name,
 };
+use crate::units::card::Fetch;
 
 impl State {
     /// **The wall, as a picture is computed from it** (#201).
@@ -27,6 +28,7 @@ impl State {
     /// One function reading `State` and nothing else: no clock, no picture's pixels, no thread. A closure's order is
     /// the order of the workspaces and the panes, because that order *is* the chips and the tiling's slots.
     pub fn scene(&self) -> Scene {
+        let clock = self.logical;
         Scene {
             v: SCENE_VERSION,
             seq: self.scene_seq,
@@ -47,6 +49,36 @@ impl State {
                     moved_at: cursor.moved_at,
                 })
                 .collect(),
+            // **The read half of the water** (#211). Each cache is `None` until the authority has read it, which is
+            // `INV-09`'s "not asked" — and a viewer that is told `null` keeps what it holds, so a wall that is still
+            // waking up cannot empty another screen. The age is the authority's, measured at this cast (`INV-06`).
+            facilities: self.facilities_at.map(|at| Facilities {
+                age_seconds: (self.logical - at).max(0.0),
+                installations: self.installations.clone(),
+                types: self.installation_types.clone(),
+            }),
+            objects: self.objects_at.map(|at| Objects {
+                age_seconds: (self.logical - at).max(0.0),
+                // Sorted by `code`: a `HashMap`'s order is not stable between two reads, and a scene that shuffles
+                // would redraw a viewer's wall for nothing and make the round trip unequal to itself.
+                manifest: {
+                    let mut manifest: Vec<_> = self.manifest.values().cloned().collect();
+                    manifest.sort_by(|a, b| a.code.cmp(&b.code));
+                    manifest
+                },
+                placements: self.placements.clone(),
+                facets: self.facets.clone(),
+            }),
+            structures: self.structures_at.map(|at| Structures {
+                age_seconds: (self.logical - at).max(0.0),
+                organisations: self.organisations.clone(),
+                trees: {
+                    let mut trees: Vec<_> = self.organisation_trees.values().cloned().collect();
+                    trees.sort_by_key(|tree| tree.organisation.id);
+                    trees
+                },
+                tni: self.tni_command.clone(),
+            }),
             workspace: self
                 .workspaces
                 .iter()
@@ -68,7 +100,11 @@ impl State {
                                 workspace.panes.iter().map(|pane| pane.id).collect();
                             crate::ui::saved::save_shape(&shape, &slots)
                         }),
-                    pane: workspace.panes.iter().map(scene_of_pane).collect(),
+                    pane: workspace
+                        .panes
+                        .iter()
+                        .map(|pane| scene_of_pane(pane, clock))
+                        .collect(),
                 })
                 .collect(),
         }
@@ -86,6 +122,19 @@ impl State {
         // **The water is the scene's too** (#203): emptied first, so a scene that forgot a hull is a scene that draws
         // fewer markers — which is a claim the replay test can fail on rather than one it cannot see.
         self.picture = crate::units::Picture::default();
+        // **The read half is the scene's too** (#211): emptied with the water, so a scene that forgot the facilities
+        // draws no facilities — a claim the replay test can fail on rather than one it cannot see.
+        self.installations.clear();
+        self.installation_types.clear();
+        self.manifest.clear();
+        self.placements.clear();
+        self.facets = None;
+        self.organisations.clear();
+        self.organisation_trees.clear();
+        self.tni_command = None;
+        self.facilities_at = None;
+        self.objects_at = None;
+        self.structures_at = None;
         self.apply_scene_forced(&scene)
     }
 
@@ -109,6 +158,7 @@ impl State {
     }
 
     fn apply_scene_body(&mut self, scene: &Scene, forced: bool) -> bool {
+        let clock = self.logical;
         let before = {
             let mut mine = self.scene();
             mine.seq = scene.seq;
@@ -141,7 +191,11 @@ impl State {
             // The scene's own ids: a pane keeps its number across a viewer, because the name plate draws it (`#113`)
             // and a client reading `panes[].id` must be able to act on what it read.
             let ids: Vec<ViewId> = saved.pane.iter().map(|pane| pane.id).collect();
-            let panes: Vec<Pane> = saved.pane.iter().map(pane_from_scene).collect();
+            let panes: Vec<Pane> = saved
+                .pane
+                .iter()
+                .map(|pane| pane_from_scene(pane, clock))
+                .collect();
             let layout = saved
                 .tiling
                 .as_ref()
@@ -191,6 +245,14 @@ impl State {
             layout.maximise(pane);
         }
 
+        // **The water arrives before anything is built from it** (#203, #211). A card is a projection of the water, so
+        // a scene applied selection-first builds a card from an empty fleet and draws a card-shaped hole — which the
+        // whole-scene replay caught the day it stopped sampling. A scene from a wall that has not read Minos carries
+        // none, which is "not asked" (`INV-09`): a viewer keeps what it had rather than being emptied by a wall that is
+        // still waking up.
+        if let Some(water) = &scene.water {
+            self.picture.adopt(water, self.now());
+        }
         // **A selection rebuilds its card**, because a card is drawn from the water and a viewer's water is its own.
         // Setting the field alone would draw a card-shaped hole (#99).
         for (pane, wanted) in scene
@@ -204,17 +266,77 @@ impl State {
             }
         }
 
+        // **A facility's card** (#109, #211): set after the hulls, because one pane has one card and pressing a
+        // facility cleared the hull's. The card itself is drawn from the facilities the scene carried.
+        for (pane, wanted) in scene
+            .workspace
+            .iter()
+            .flat_map(|workspace| workspace.pane.iter())
+            .map(|pane| (pane.id, pane.installation))
+        {
+            if let Some(facility) = wanted
+                && let Some(pane) = self.pane_mut(pane)
+            {
+                pane.view.installation = Some(facility);
+            }
+        }
+
+        // **The card's read half** (#211): the water rebuilt the model, and this is what the authority asked Minos
+        // for. Attached only when the scene's card is about the hull this pane has selected, so a scene cannot hang
+        // yesterday's commander on today's selection.
+        for saved in scene
+            .workspace
+            .iter()
+            .flat_map(|workspace| workspace.pane.iter())
+        {
+            let (Some(card), Some(selected)) = (&saved.card, saved.selected) else {
+                continue;
+            };
+            if card.unit != selected {
+                continue;
+            }
+            if let Some(pane) = self.pane_mut(saved.id)
+                && let Some(live) = pane.view.card.as_mut()
+            {
+                live.identity = fetch_of(&card.identity);
+                live.commander = fetch_of(&card.commander);
+                live.specification = fetch_of(&card.specification);
+            }
+        }
+
         for (id, frame) in frames {
             if let Some(pane) = self.pane_mut(id) {
                 pane.frame = Some(frame);
             }
         }
 
-        // **The water arrives with it** (#203). A scene from a wall that has not read Minos carries none, which is
-        // "not asked" (`INV-09`) — so a viewer keeps what it had rather than being emptied by a wall that is still
-        // waking up.
-        if let Some(water) = &scene.water {
-            self.picture.adopt(water, self.now());
+        // **The read half of the water arrives too** (#211), and a `null` is *unchanged*, not empty: a delta that
+        // carried only the arrangement must not blank the facilities layer on every other screen. Each cache is
+        // stamped from the age the authority measured, so a viewer's clock never enters the arithmetic (`INV-06`).
+        if let Some(facilities) = &scene.facilities {
+            self.installations.clone_from(&facilities.installations);
+            self.installation_types.clone_from(&facilities.types);
+            self.facilities_at = Some(clock - facilities.age_seconds);
+        }
+        if let Some(objects) = &scene.objects {
+            self.manifest = objects
+                .manifest
+                .iter()
+                .map(|entry| (entry.code.clone(), entry.clone()))
+                .collect();
+            self.placements.clone_from(&objects.placements);
+            self.facets.clone_from(&objects.facets);
+            self.objects_at = Some(clock - objects.age_seconds);
+        }
+        if let Some(structures) = &scene.structures {
+            self.organisations.clone_from(&structures.organisations);
+            self.organisation_trees = structures
+                .trees
+                .iter()
+                .map(|tree| (tree.organisation.id, tree.clone()))
+                .collect();
+            self.tni_command.clone_from(&structures.tni);
+            self.structures_at = Some(clock - structures.age_seconds);
         }
 
         self.interaction = interaction_of(&scene.surface);
@@ -244,8 +366,28 @@ impl State {
     }
 }
 
+/// **A card's read, on the wire** (#211): what the wall asked, and what came back.
+fn read_of<T: Clone>(fetch: &Fetch<T>) -> Read<T> {
+    match fetch {
+        Fetch::Pending => Read::Pending,
+        Fetch::Ready(value) => Read::Ready {
+            value: value.clone(),
+        },
+        Fetch::Failed(why) => Read::Failed { why: why.clone() },
+    }
+}
+
+/// And the way back: a viewer's card draws the same three states the authority's did.
+fn fetch_of<T: Clone>(read: &Read<T>) -> Fetch<T> {
+    match read {
+        Read::Pending => Fetch::Pending,
+        Read::Ready { value } => Fetch::Ready(value.clone()),
+        Read::Failed { why } => Fetch::Failed(why.clone()),
+    }
+}
+
 /// One pane, from its scene.
-fn scene_of_pane(pane: &Pane) -> ScenePane {
+fn scene_of_pane(pane: &Pane, pane_clock: f64) -> ScenePane {
     ScenePane {
         id: pane.id,
         content: match pane.content {
@@ -260,6 +402,7 @@ fn scene_of_pane(pane: &Pane) -> ScenePane {
         },
         name: pane.name.clone(),
         follow: pane.follow,
+        installation: pane.view.installation,
         selected: pane.view.selected,
         filter: Filter {
             hulls: pane.view.filter.hulls,
@@ -275,16 +418,38 @@ fn scene_of_pane(pane: &Pane) -> ScenePane {
             zoom: tree.zoom,
             touched: tree.touched,
         }),
+        card: pane.view.card.as_ref().map(|card| CardAt {
+            unit: card.unit.id_unit,
+            identity: read_of(&card.identity),
+            commander: read_of(&card.commander),
+            specification: read_of(&card.specification),
+        }),
         news: pane.news.as_ref().map(|news| News {
             scope: crate::ui::saved::scope_word(news.scope).to_string(),
             page: news.page,
             selected: news.selected,
+            stories: news.stories.clone(),
+            pagination: news.pagination,
+            detail: news.detail.as_ref().map(|detail| match detail {
+                crate::ui::newsroom::Detail::Reading => Read::Pending,
+                crate::ui::newsroom::Detail::Ready(page) => Read::Ready {
+                    value: (**page).clone(),
+                },
+                crate::ui::newsroom::Detail::Failed(why) => Read::Failed { why: why.clone() },
+            }),
+            state: match &news.state {
+                crate::ui::newsroom::ReadState::Reading => "reading",
+                crate::ui::newsroom::ReadState::Ready => "ready",
+                crate::ui::newsroom::ReadState::Failed(_) => "failed",
+            }
+            .to_string(),
+            age_seconds: news.read_at.map_or(0.0, |at| (pane_clock - at).max(0.0)),
         }),
     }
 }
 
 /// One pane, from a scene.
-fn pane_from_scene(saved: &ScenePane) -> Pane {
+fn pane_from_scene(saved: &ScenePane, clock: f64) -> Pane {
     let camera = Camera::new((saved.camera.lat, saved.camera.lon), saved.camera.zoom);
     let mut pane = match saved.content {
         Content::Map => Pane::new(saved.id, camera),
@@ -313,13 +478,25 @@ fn pane_from_scene(saved: &ScenePane) -> Pane {
         let view = pane.news.get_or_insert_with(Default::default);
         view.scope = crate::ui::saved::scope_from_word(&news.scope);
         view.page = news.page.max(1);
-        // The rows are water (#203): a viewer is told what the pane is showing, and the stories arrive with the
-        // fleet. Until then the pane asks for its page, which is what a restored pane does (#153).
+        // **The rows arrive with the pane** (#211): the authority read them, so a viewer draws the page instead of
+        // asking for it — and says the same thing about it the authority said (`ready`, `reading`, `failed`).
         view.asked = None;
-        view.stories.clear();
-        view.pagination = None;
+        view.stories = news.stories.clone();
+        view.pagination = news.pagination;
         view.selected = news.selected;
-        view.state = crate::ui::newsroom::ReadState::Reading;
+        view.detail = news.detail.as_ref().map(|detail| match detail {
+            Read::Pending => crate::ui::newsroom::Detail::Reading,
+            Read::Ready { value } => crate::ui::newsroom::Detail::Ready(Box::new(value.clone())),
+            Read::Failed { why } => crate::ui::newsroom::Detail::Failed(why.clone()),
+        });
+        view.state = match news.state.as_str() {
+            "ready" => crate::ui::newsroom::ReadState::Ready,
+            "failed" => crate::ui::newsroom::ReadState::Failed(String::new()),
+            // Anything else is a page still on its way: a viewer that cannot tell draws what the wall draws while a
+            // read is in flight, which is the rows it has and a footer that says so.
+            _ => crate::ui::newsroom::ReadState::Reading,
+        };
+        view.read_at = Some(clock - news.age_seconds);
     }
     pane
 }

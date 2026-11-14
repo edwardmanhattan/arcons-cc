@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// `{status_code, message, data, metadata}` — the envelope every Minos route returns, success or failure.
 ///
@@ -35,7 +35,7 @@ pub struct Envelope<T> {
 /// `has_next_page` is the field a client follows; `total_records` is the field an operator reads when the
 /// wall says it knows 50 hulls and the deployment has 127. Both are kept: one is the loop's condition and
 /// the other is the check that the loop did its job.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Pagination {
     pub total_records: u64,
     pub total_pages: u32,
@@ -109,7 +109,7 @@ pub struct FeedFix {
 }
 
 /// A lookup row: `name` is the canonical English value, `id_name` the Indonesian label to show.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Helper {
     pub id: i64,
     pub name: String,
@@ -120,7 +120,7 @@ pub struct Helper {
 }
 
 /// A hull's class, with the category the class belongs to so one payload draws the whole chain.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct UnitClassSummary {
     pub id: i64,
     pub name: String,
@@ -132,7 +132,7 @@ pub struct UnitClassSummary {
 }
 
 /// `GET /units/{id}`.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct UnitDetail {
     pub id: i64,
     pub name: String,
@@ -164,7 +164,7 @@ pub struct UnitSummary {
 /// **The current commander is the entry with no `to_at`.** There is no "who commands it now" route,
 /// so ordering and currency cannot disagree. Nobody having ever commanded a hull is an empty list,
 /// which is a valid answer and not a 404.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct UnitCommander {
     pub id_unit: i64,
     pub id_user: i64,
@@ -188,7 +188,7 @@ impl UnitCommander {
 /// Every measurement is nullable, and **null means unknown, not zero** — the source data carries no
 /// submerged speed for any submarine, and a client that reads a missing speed as zero freezes the
 /// vessel while one that reads it as unbounded lets it outrun a frigate.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct UnitSpecification {
     pub version: i64,
     pub is_current: bool,
@@ -346,7 +346,7 @@ impl Viewpoint {
 /// `symbol_code` is a **code** into the tactical-object catalogue, not an id. The catalogue is
 /// reconciled at startup, so a kind may name a code the library does not carry yet: resolve it and
 /// draw a generic marker when it does not match. A read never fails over it.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct InstallationType {
     pub id: i64,
     pub name: String,
@@ -366,7 +366,7 @@ pub struct InstallationType {
 /// Not a hull: it has no hull number, class or movement domain. **The position is optional but
 /// indivisible** — both coordinates or neither — so [`Installation::coordinates`] returns the pair
 /// and nothing else. `latitude: Some(0.0)` is the Equator, not "unknown".
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Installation {
     pub id: i64,
     pub id_installation_type: i64,
@@ -401,7 +401,7 @@ impl Installation {
 /// `name` and `id_name` are display strings. `asset_url` is a time-limited URL and is **absent** when
 /// object storage has no object at the key — a restored database without its bucket is the ordinary
 /// case, not an error.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct TacticalObject {
     pub id: i64,
     pub code: String,
@@ -422,7 +422,7 @@ pub struct TacticalObject {
 }
 
 /// The category a symbol belongs to, with the domain it belongs to.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct TacticalObjectCategory {
     pub id: i64,
     pub name: String,
@@ -432,7 +432,7 @@ pub struct TacticalObjectCategory {
 }
 
 /// The domain a symbol's category belongs to.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct TacticalObjectDomain {
     pub id: i64,
     pub name: String,
@@ -454,7 +454,7 @@ pub struct TacticalObjectManifest {
 ///
 /// A signing failure **omits `asset_url`, not the entry**: the map still needs to know the symbol
 /// exists and what it is called.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct TacticalObjectManifestEntry {
     pub code: String,
     pub name: String,
@@ -468,7 +468,7 @@ pub struct TacticalObjectManifestEntry {
 }
 
 /// `GET /tactical-objects/facets` — the picker's filter vocabulary, with counts.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct TacticalObjectFacets {
     pub total: u64,
     pub domains: Vec<TacticalObjectDomainFacet>,
@@ -476,7 +476,7 @@ pub struct TacticalObjectFacets {
 }
 
 /// One domain row: `count` is the sum of its categories' counts.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct TacticalObjectDomainFacet {
     pub id: i64,
     pub name: String,
@@ -486,7 +486,7 @@ pub struct TacticalObjectDomainFacet {
 }
 
 /// One category row. A category with no symbols is returned with `count: 0`, not omitted.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct TacticalObjectCategoryFacet {
     pub id: i64,
     pub id_domain: i64,
@@ -501,7 +501,7 @@ pub struct TacticalObjectCategoryFacet {
 /// **Not a vessel and not a track**: fixed furniture with no speed, course or commander. It
 /// **embeds** its whole symbol, so drawing never needs a second lookup. `label` and `rotation_deg`
 /// are absent in real responses even though the spec lists them as required, and neither defaults.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct TacticalObjectPlacement {
     pub id: i64,
     pub symbol: TacticalObject,
@@ -519,7 +519,7 @@ pub struct TacticalObjectPlacement {
 ///
 /// Not `/hierarchy` (the echelon vocabulary) and not `/games/{id}/hierarchy` (one exercise's
 /// arrangement of it).
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct UnitOrganisation {
     pub id: i64,
     pub id_service_branch: i64,
@@ -535,7 +535,7 @@ pub struct UnitOrganisation {
 }
 
 /// `GET /unit-organisations/{id}` — the structure and its forest.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct UnitOrganisationDetail {
     #[serde(flatten)]
     pub organisation: UnitOrganisation,
@@ -548,7 +548,7 @@ pub struct UnitOrganisationDetail {
 /// `echelon_name`, `echelon_rank`, `id_unit`, `id_commander`, `commander`, `position_title`, `icon`
 /// and `note` are all absent in a real response, and each absence is a real state: a post with no
 /// level, no hull, nobody appointed, no title. None may default — `echelon_rank: 0` is never sent.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct UnitOrganisationNode {
     pub id: i64,
     pub id_organisation: i64,
@@ -579,7 +579,7 @@ pub struct UnitOrganisationNode {
 }
 
 /// The holder of a node, as a tree needs them: a name and a rank beside a post, nothing else.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct NodeCommander {
     pub id_user: i64,
     pub name: String,
@@ -596,7 +596,7 @@ pub struct NodeCommander {
 ///
 /// `to_at` is **absent for the incumbent**, and `is_current` restates that fact so no client has to
 /// infer it from a nullable timestamp.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct TniCommander {
     pub id: i64,
     pub id_user: i64,
@@ -622,7 +622,7 @@ pub struct TniCommander {
 ///
 /// **`commander` is absent when the post is vacant.** That is a real state, not an error, and the
 /// same one a hull with nobody appointed to it is in.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct TniCommandPost {
     pub id: i64,
     pub id_unit_hierarchy: i64,
@@ -729,7 +729,7 @@ impl NewsQuery {
 
 /// The Negara/Lokasi column: the country the event happened in, and the share of the corpus behind
 /// it. Kept together because half of it is misleading on its own — a weak match must read as weak.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct NewsCountry {
     /// ISO 3166-1 alpha-2, resolved at ingest from GDELT's FIPS 10-4 code.
     pub code: String,
@@ -745,7 +745,7 @@ pub struct NewsCountry {
 }
 
 /// One row of the panel.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct NewsStory {
     pub id: i64,
     /// The headline as the story was first named, never rewritten as copies arrive.
@@ -767,7 +767,7 @@ pub struct NewsStory {
 }
 
 /// One document inside a story, oldest first in the detail.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct NewsArticle {
     pub id: i64,
     pub title: String,
@@ -792,7 +792,7 @@ pub struct NewsArticle {
 }
 
 /// `GET /banglinstra/stories/{id}` — the story and the documents that carried it.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct NewsStoryDetail {
     pub story: NewsStory,
     /// **Oldest first**, so the list reads as provenance: who had it first, and who repeated it.
@@ -807,7 +807,7 @@ pub struct NewsStoryDetail {
 /// server's maximum page size, which is the register's question; the newsroom asks the operator's
 /// one — page `n` of 25 stories — and a client that walked every page would make page 2
 /// unreachable. `total_records` is still carried, so the panel can say how much it is not showing.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StoryPage {
     pub rows: Vec<NewsStory>,
     pub pagination: Pagination,
