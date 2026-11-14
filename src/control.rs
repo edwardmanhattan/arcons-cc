@@ -203,6 +203,30 @@ pub struct Changed(pub bool);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Refused(pub &'static str);
 
+/// Whether this process handed `intent` to its authority instead of applying it (#204).
+///
+/// A viewer has a session and no authority of its own; everything else — a wall, a capture, the authority process
+/// itself — applies in place. Two whole blocks rather than a `cfg`-ed expression: the field exists on one platform
+/// only, and a branch would leave the rest of this function type-checked against it.
+fn asked_the_authority(state: &State, intent: &Intent) -> bool {
+    #[cfg(unix)]
+    {
+        // **True whenever this is a viewer**, whether or not the ask got through: a viewer that applied locally because
+        // the wire was busy would move a pane the authority has not agreed to, and then move it back when the scene
+        // arrives. A request that could not be queued is a press that did not happen — which the next scene shows.
+        let Some(session) = state.session.as_ref() else {
+            return false;
+        };
+        let _ = session.ask(wire::Request::Intent(intent.clone()));
+        true
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (state, intent);
+        false
+    }
+}
+
 /// **The door.** Apply one intent, or say why not.
 ///
 /// This is the only place an *input* changes the wall: the pointer's handlers, `on_key` and (from #165) the
@@ -210,6 +234,13 @@ pub struct Refused(pub &'static str);
 /// calls is the same code the wall already trusted — the point is not a new implementation of closing a pane,
 /// it is that there is one entrance to the old one.
 pub fn apply(state: &mut State, intent: Intent) -> Result<Changed, Refused> {
+    // **A viewer does not change the wall** (#204): it asks its authority, and answers `changed: false` — which is the
+    // truth, because no pixel moved. The change arrives later as a `Scene`, and until it does the pending intent is a
+    // request rather than a fact. Every handler comes through here (#170, #173), so this is the only place that has to
+    // know the difference — and a wall, a capture and the authority itself all answer `false` to it and apply in place.
+    if asked_the_authority(state, &intent) {
+        return Ok(Changed(false));
+    }
     let changed = match intent {
         Intent::FocusPane(pane) => {
             if state.pane(pane).is_none() {

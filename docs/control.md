@@ -150,6 +150,13 @@ A viewer asks for the arrangement and draws it:
 changed nothing costs one small answer. A push channel belongs to the relay (#196), where a connection is already held
 open; two ways to learn about a change would be two ways to disagree about when it happened.
 
+**A viewer's inputs are requests, never changes** (#204). Every handler in the app goes through one door —
+`control::apply` — and on a viewer that door *asks* instead of applying: the answer is `changed: false`, because no pixel
+moved, and the picture moves when the `Scene` arrives. That is the same rule the mobile note states for a phone, applied
+to a kiosk: a screen that moved a pane its authority had not agreed to would move it back on the next scene, visibly
+arguing with itself. A refusal from the authority does not end the session — it is a "no" from a wall that is still
+there, and the next request is answered.
+
 A viewer that cannot reach its authority says so once and draws its own default wall — a screen that shows nothing
 because a socket is missing is worse than one that shows its own wall and says why. Its **own inputs still apply
 locally** until #204 puts them on the wire; the role lands first, because "who owns the state" is the question a fleet
