@@ -12,7 +12,7 @@ from this file, or when a copyleft crate appears in the lockfile unnamed.
 
 | component | licence | what it is |
 | --- | --- | --- |
-| **Rune** (`rune`, `rune-kit`) | MIT, © 2026 Anomaly | The UI framework. <https://github.com/anomalyco/rune>, pinned to rev `82196923fcb43d493353455edab0113cb4493c38`. Vendored before release; the full licence text then lives at `vendor/rune/LICENSE`. |
+| **Rune** (`rune`, `rune-kit`) | MIT, © 2026 Anomaly | The UI framework. <https://github.com/anomalyco/rune>, pinned to rev `09ab92a5c83b906adb6fbf92637323b49e86d7ac`. Vendored before release; the full licence text then lives at `vendor/rune/LICENSE`. The pin carries `tiny-skia-path` (MIT, a patched copy inside that repo: Skia's conic splitting and stroker, for icon coverage) and, on `wasm32` only, `spellbook` 0.4 (MIT, Hunspell dictionaries) — neither is a separate dependency here. |
 | **MapLibre Native** (`maplibre_native` 0.9.3, vendored) | BSD-2-Clause | The map engine, vendored for two checkout-cache fixes — see `vendor/README.md`. <https://github.com/maplibre/maplibre-native>. Behind the `map` feature, which the gate does not enable. |
 | **Inter**, **IBM Plex Mono** | SIL Open Font License 1.1 | Typefaces bundled with Rune. |
 | **milsymbol** (`spatialillusions/milsymbol`) | MIT — © 2017 Mans Beckman | NATO/APP-6 icon geometry, pinned by the sister project at `f5134380…` v3.0.5. **Not linked or vendored yet**: `docs/research/sheets/wall-symbol-icons.svg` is derived from it (#33), and lifting the module needs this row to stay and the licence text to travel with the copy. |

@@ -450,3 +450,56 @@ Two sharp edges, recorded because they cost coredumps to find:
 - Verification works without a display, which is what makes `scripts/verify.sh` the gate.
 - A Rune rev bump is a `Cargo.toml` + ADR change in one commit, not a `cargo update`.
 - The map's build cost arrives in one prepared ticket instead of on every clone.
+
+### Bumped again: `8219692` → `09ab92a5` — 104 commits, and the only pixels that move are icon edges
+
+`82196923fcb43d493353455edab0113cb4493c38` → `09ab92a5c83b906adb6fbf92637323b49e86d7ac`, in both `rune` and
+`rune-kit`, in `THIRD-PARTY-NOTICES.md`, and in `Cargo.lock`, in one commit. Filed by the upstream tracker as #185 —
+the pin had drifted again, and the range is bigger than the last one: **104 commits**, of which 19 are Windows
+platform work (occlusion regions, the frame-change map's keys, D3D12) and 4 are macOS or web.
+
+**What it is made of.** Text and shaping is again the largest group (paragraph-by-paragraph field layout `#865`,
+text-system-per-window `#879`, `text-wrap-style: pretty` `#882`, a Mac browser's unsmoothed coverage `#875`), then
+paint caches (`#878` a still text re-using last frame's quads, `#872` a text drawing only the lines under its clip),
+virtual lists and wheel-gesture ownership (`#241`, `#365`, `#380`, `#383`), accessibility roles and statics
+(`#877`, `#860`, `#863`), and media, i18n, and memo work.
+
+**The five that could have moved this wall, and what each turned out to be:**
+
+- **`#828` — icon elements are covered with the op Chromium's Ganesh picks.** This is the one that moved
+  something: every `rune::Icon` on the wall is antialiased a shade differently. Measured, not guessed — after the
+  bump, 45 scenes differ from their goldens in **icons and nothing else**: two rows of each workspace chip's glyph
+  (~100 px a scene, brightest channel +45), the pane header's filter/tree/corner glyphs, and the settings glyph in a
+  pane's corner. No text, no marker, no colour, no layout moved. That is what `capture.sh --update-goldens` was run
+  for, by hand, after reading this diff.
+- **`#885` — a subtree snaps against a paint containment's rounded origin.** Our scrims and cards are clipped by a
+  rounded containment, so a snap could have moved a card by a subpixel. It does not: a rounded clip whose origin is
+  already integral snaps to itself, and every panel, card and sheet rectangle on this wall is integral by
+  `tokens.rs`'s arithmetic.
+- **`#8627f32d` — app faces answer their declared weight ranges.** A variable font's requested weight can now select
+  a different instance. The wall asks Inter and IBM Plex Mono for the weights Rune's own catalogue declares, and the
+  goldens confirm the glyphs it draws are byte-identical, so no weight on this wall lands between two instances.
+- **`#878`, `#872` — paint caches for text.** Both claim identical output under their own tests (*"the quads it drew
+  last frame"*, *"only the lines the window shows"*); our longest text is a story's headline inside a bounded clip
+  and the goldens agree to the byte.
+- **`#856` (and `#241`, `#365`, `#380`) — wheel distances and gesture ownership.** The wall's zoom is driven by wheel
+  deltas, so a change to native scroll distances would have moved every `panes-pan` capture. `#856` matches Chromium
+  for *native* scroll; the wall's wheel intents carry their own deltas, and the captures are unchanged.
+
+**Behaviour taken, not just recorded:**
+
+- **`#831` — every Rune app ends fast when it quits, and its window goes at once.** This is the other half of
+  [#174](https://github.com/edwardmanhattan/arcons-cc/issues/174): the quit path is faster, and `exit_deadline` is
+  still the thing that bounds a wedged map thread. Taken when #174 lands, not here.
+- **`#863` — an empty active descendant costs nothing.** The menu's ring (#164) sets `active_descendant` from a
+  `usize` that is `None` when no row has the ring; this makes the absent case free rather than merely correct.
+- **`#860` — `label_static` / `description_static` copy nothing.** The wall's static labels can use them where it
+  used `label`, which allocates.
+- **`#877` — more roles** (`banner`, `form`, `contentinfo`, `alertdialog`, `log`) land where the wall's header,
+  sheets and the refusal log want them.
+
+New in `Cargo.lock` with this rev: `tiny-skia-path` (a patched copy **inside the Rune repo** — Skia's conic
+splitting and stroker, for `#828`'s icon coverage; the registry copy resvg uses is untouched) and `spellbook 0.4`
+(Hunspell dictionaries for a web build's spell checker, a `wasm32`-only dependency that no native target compiles).
+Both are named in `THIRD-PARTY-NOTICES.md`.
+

@@ -3275,7 +3275,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.45.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4233,7 +4233,7 @@ dependencies = [
 [[package]]
 name = "rune"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?rev=82196923fcb43d493353455edab0113cb4493c38#82196923fcb43d493353455edab0113cb4493c38"
+source = "git+https://github.com/anomalyco/rune?rev=09ab92a5c83b906adb6fbf92637323b49e86d7ac#09ab92a5c83b906adb6fbf92637323b49e86d7ac"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -4271,6 +4271,7 @@ dependencies = [
  "opuscule",
  "parking_lot",
  "parley",
+ "parley_engine",
  "png 0.18.1",
  "pollster",
  "portable-atomic",
@@ -4285,9 +4286,11 @@ dependencies = [
  "serde",
  "serde_json",
  "skrifa",
+ "spellbook",
  "swash",
  "symphonia",
  "taffy",
+ "tiny-skia-path 0.11.4 (git+https://github.com/anomalyco/rune?rev=09ab92a5c83b906adb6fbf92637323b49e86d7ac)",
  "tokio",
  "unicode-segmentation",
  "wasm-bindgen",
@@ -4315,7 +4318,7 @@ dependencies = [
 [[package]]
 name = "rune-highlights"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?rev=82196923fcb43d493353455edab0113cb4493c38#82196923fcb43d493353455edab0113cb4493c38"
+source = "git+https://github.com/anomalyco/rune?rev=09ab92a5c83b906adb6fbf92637323b49e86d7ac#09ab92a5c83b906adb6fbf92637323b49e86d7ac"
 dependencies = [
  "unicode-ident",
  "wasmparser",
@@ -4324,7 +4327,7 @@ dependencies = [
 [[package]]
 name = "rune-kit"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?rev=82196923fcb43d493353455edab0113cb4493c38#82196923fcb43d493353455edab0113cb4493c38"
+source = "git+https://github.com/anomalyco/rune?rev=09ab92a5c83b906adb6fbf92637323b49e86d7ac#09ab92a5c83b906adb6fbf92637323b49e86d7ac"
 dependencies = [
  "icu_normalizer",
  "rune",
@@ -4336,12 +4339,12 @@ dependencies = [
 [[package]]
 name = "rune-motion"
 version = "0.1.0"
-source = "git+https://github.com/anomalyco/rune?rev=82196923fcb43d493353455edab0113cb4493c38#82196923fcb43d493353455edab0113cb4493c38"
+source = "git+https://github.com/anomalyco/rune?rev=09ab92a5c83b906adb6fbf92637323b49e86d7ac#09ab92a5c83b906adb6fbf92637323b49e86d7ac"
 
 [[package]]
 name = "rune-staging"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?rev=82196923fcb43d493353455edab0113cb4493c38#82196923fcb43d493353455edab0113cb4493c38"
+source = "git+https://github.com/anomalyco/rune?rev=09ab92a5c83b906adb6fbf92637323b49e86d7ac#09ab92a5c83b906adb6fbf92637323b49e86d7ac"
 dependencies = [
  "wgpu",
 ]
@@ -4349,7 +4352,7 @@ dependencies = [
 [[package]]
 name = "rune-taffy"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?rev=82196923fcb43d493353455edab0113cb4493c38#82196923fcb43d493353455edab0113cb4493c38"
+source = "git+https://github.com/anomalyco/rune?rev=09ab92a5c83b906adb6fbf92637323b49e86d7ac#09ab92a5c83b906adb6fbf92637323b49e86d7ac"
 dependencies = [
  "taffy",
 ]
@@ -4826,6 +4829,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "spellbook"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d204abcbdf8e88729306a8d0ca01a79d8a49969fe1f84696909d6dbc4321c1a"
+dependencies = [
+ "foldhash 0.2.0",
+ "hashbrown 0.17.1",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5143,7 +5156,7 @@ dependencies = [
  "cfg-if",
  "log",
  "png 0.17.16",
- "tiny-skia-path",
+ "tiny-skia-path 0.11.4 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -5151,6 +5164,16 @@ name = "tiny-skia-path"
 version = "0.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c9e7fc0c2e86a30b117d0462aa261b72b7a99b7ebd7deb3a14ceda95c5bdc93"
+dependencies = [
+ "arrayref",
+ "bytemuck",
+ "strict-num",
+]
+
+[[package]]
+name = "tiny-skia-path"
+version = "0.11.4"
+source = "git+https://github.com/anomalyco/rune?rev=09ab92a5c83b906adb6fbf92637323b49e86d7ac#09ab92a5c83b906adb6fbf92637323b49e86d7ac"
 dependencies = [
  "arrayref",
  "bytemuck",
@@ -5563,7 +5586,7 @@ dependencies = [
  "siphasher",
  "strict-num",
  "svgtypes",
- "tiny-skia-path",
+ "tiny-skia-path 0.11.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "xmlwriter",
 ]
 
