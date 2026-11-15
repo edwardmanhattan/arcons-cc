@@ -54,6 +54,12 @@ The table of every message and its kind is one table in `src/control.rs` (`REFUS
 `tests/scaffold.rs` reads the source for every refusal the code can make and fails when the two disagree — both
 directions. A refusal with no category does not merge.
 
+**The four actions are code, not advice** (#197): `RefusalKind::recourse` in `src/control/client.rs` maps each kind
+to the row above it — `Read`, `Fix`, `Update`, `Retry` — and the match has no catch-all (`INV-07`), so a fifth kind
+is a compile error rather than a client that guesses. The client there reads `kind` off the line and never the
+sentence; `cargo test control::client` holds the mapping, and makes a version the wall does not speak a stop rather
+than a retry.
+
 A request is refused **by name** and **on the same connection**: an unknown verb, a missing field, a wrong type or
 a rule the wall will not break all come back as `{"ok": false, "why": …}`, and the next line may be a fresh
 request. `changed` says whether anything on screen moved — a `pane.focus` on the pane that already has the keys is

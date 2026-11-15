@@ -21,7 +21,7 @@ use serde_json::{Map, Value, json};
 
 use super::projection::Wall;
 use super::snapshot::Scene;
-use super::{Changed, Intent, PROTOCOL, Paired, Refused};
+use super::{Changed, Intent, PROTOCOL, Paired, RefusalKind, Refused};
 use crate::ui::{PaneContent, RenameTarget};
 
 /// An intent as the JSON a client sends.
@@ -509,57 +509,115 @@ pub fn request(line: &str) -> Result<Request, Refused> {
 /// **A request as one line** — the reverse of [`request`], so a client builds lines with the same vocabulary the wall
 /// reads them with (#202). One encoder, one decoder, and a round-trip test between them.
 pub fn request_line(request: &Request) -> String {
+    request_line_at(PROTOCOL, request)
+}
+
+/// **The same request at another version** (#197): a client speaks the one protocol it was built against, and a
+/// test has to be able to be a client from another build. The body is [`request_line`]'s, so the two cannot
+/// disagree about anything but the number.
+pub fn request_line_at(version: u32, request: &Request) -> String {
     match request {
-        Request::Intent(intent) => json!({ "v": PROTOCOL, "intent": to_wire(intent) }).to_string(),
-        Request::Wall => json!({ "v": PROTOCOL, "read": "wall" }).to_string(),
-        Request::Scene => json!({ "v": PROTOCOL, "read": "scene" }).to_string(),
+        Request::Intent(intent) => json!({ "v": version, "intent": to_wire(intent) }).to_string(),
+        Request::Wall => json!({ "v": version, "read": "wall" }).to_string(),
+        Request::Scene => json!({ "v": version, "read": "scene" }).to_string(),
+    }
+}
+
+/// **A reply line a client cannot use** (#197): the wall's "no", with the kind it gave it, or a line that is not
+/// an answer this protocol has.
+///
+/// The words are enough for a viewer, which only logs them. A *client* decides between retrying, fixing the call and
+/// telling its user to update, so it needs the category beside the sentence (#198) — and reading prose to find it is
+/// the coupling `RefusalKind` exists to remove. The kind is read through [`RefusalKind::of_word`], the one place the
+/// wall's four words are spelled.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Unreadable {
+    /// **The wall said no by name** (`INV-07`), and said what kind of no it is (#198).
+    Refused(Refusal),
+    /// The line is not an answer this protocol has, in this client's words.
+    Malformed(String),
+}
+
+/// **A refusal as a client reads it**: the rule's name, and the category a client acts on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refusal {
+    /// The wall's own words — a name in `REFUSALS`, never a paraphrase (`INV-07`).
+    pub why: String,
+    /// What a client may do about it (#198).
+    pub kind: RefusalKind,
+}
+
+impl std::fmt::Display for Unreadable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unreadable::Refused(refusal) => write!(f, "{} ({})", refusal.why, refusal.kind.word()),
+            Unreadable::Malformed(why) => f.write_str(why),
+        }
     }
 }
 
 /// **One reply line, read back** (#202): a viewer takes the line a wall wrote and turns it into the answer, so neither
 /// side has a private spelling.
-pub fn answer(line: &str) -> Result<Answer, String> {
-    let value: Value = serde_json::from_str(line).map_err(|_| "not JSON".to_string())?;
+pub fn answer(line: &str) -> Result<Answer, Unreadable> {
+    let value: Value =
+        serde_json::from_str(line).map_err(|_| Unreadable::Malformed("not JSON".to_string()))?;
     let object = value
         .as_object()
-        .ok_or_else(|| "an answer is a JSON object".to_string())?;
+        .ok_or_else(|| Unreadable::Malformed("an answer is a JSON object".to_string()))?;
     if object.get("ok").and_then(Value::as_bool) == Some(false) {
         // A refusal the wall named is the wall's own words (`INV-07`), passed on as text: a client does not re-spell
         // it, and the reason a viewer logs is the reason the authority gave.
         let why = object
             .get("why")
             .and_then(Value::as_str)
-            .ok_or_else(|| "a refusal carries \"why\"".to_string())?;
-        return Err(why.to_string());
+            .ok_or_else(|| Unreadable::Malformed("a refusal carries \"why\"".to_string()))?;
+        // **The category travels beside the words** (#198), and a "no" without one is a wall from another protocol
+        // rather than a rule this client could guess an action for.
+        let kind = object
+            .get("kind")
+            .and_then(Value::as_str)
+            .and_then(RefusalKind::of_word)
+            .ok_or_else(|| {
+                Unreadable::Malformed(format!(
+                    "a refusal carries a kind this client knows: {why:?}"
+                ))
+            })?;
+        return Err(Unreadable::Refused(Refusal {
+            why: why.to_string(),
+            kind,
+        }));
     }
     if let Some(paired) = object.get("paired") {
-        let name = paired
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "a paired answer carries a device name".to_string())?;
+        let name = paired.get("name").and_then(Value::as_str).ok_or_else(|| {
+            Unreadable::Malformed("a paired answer carries a device name".to_string())
+        })?;
         let key = paired
             .get("key")
             .and_then(Value::as_str)
             .and_then(crate::config::devices::Key::from_hex)
-            .ok_or_else(|| "a paired answer carries a key".to_string())?;
+            .ok_or_else(|| Unreadable::Malformed("a paired answer carries a key".to_string()))?;
         return Ok(Answer::Paired(Paired {
             name: name.to_string(),
             key,
         }));
     }
     if let Some(scene) = object.get("scene") {
-        let scene: Scene = serde_json::from_value(scene.clone())
-            .map_err(|_| "the scene is not a scene this client knows".to_string())?;
+        let scene: Scene = serde_json::from_value(scene.clone()).map_err(|_| {
+            Unreadable::Malformed("the scene is not a scene this client knows".to_string())
+        })?;
         return Ok(Answer::Scene(Box::new(scene)));
     }
     if let Some(wall) = object.get("wall") {
-        let wall: Wall = serde_json::from_value(wall.clone())
-            .map_err(|_| "the wall is not a projection this client knows".to_string())?;
+        let wall: Wall = serde_json::from_value(wall.clone()).map_err(|_| {
+            Unreadable::Malformed("the wall is not a projection this client knows".to_string())
+        })?;
         return Ok(Answer::Wall(wall));
     }
     match object.get("changed").and_then(Value::as_bool) {
         Some(changed) => Ok(Answer::Changed(Ok(Changed(changed)))),
-        None => Err("an answer carries \"changed\", \"wall\", \"scene\" or \"why\"".to_string()),
+        None => Err(Unreadable::Malformed(
+            "an answer carries \"changed\", \"wall\", \"scene\" or \"why\"".to_string(),
+        )),
     }
 }
 
@@ -807,15 +865,19 @@ mod tests {
         }
     }
 
-    /// **A refusal the wall named comes back as the wall's words**, not as a default and not as a client's
-    /// paraphrase (`INV-07`).
+    /// **A refusal the wall named comes back as the wall's words and its kind**, not as a default and not as a
+    /// client's paraphrase (`INV-07`): a client that has to decide between retrying and updating reads the category,
+    /// and a person reads the sentence.
     #[test]
-    fn a_refusal_travels_with_its_reason() {
+    fn a_refusal_travels_with_its_reason_and_its_kind() {
         let line = reply(Answer::Changed(Err(Refused("the last pane on the wall"))));
         assert_eq!(
             answer(&line),
-            Err("the last pane on the wall".to_string()),
-            "a client gets the rule's own name"
+            Err(Unreadable::Refused(Refusal {
+                why: "the last pane on the wall".to_string(),
+                kind: RefusalKind::Rule,
+            })),
+            "a client gets the rule's own name and the action it may take (#198)"
         );
     }
 }

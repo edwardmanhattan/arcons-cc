@@ -40,6 +40,10 @@ use crate::ui::{self, MenuAction, PaneContent, RenameTarget, State, ViewId};
 #[cfg_attr(not(unix), allow(dead_code))]
 pub mod authority;
 pub mod carrier;
+// **A client's rules** (#197) are the phone's half of the plane, over a carrier (#195). Like the corpus, it is
+// driven through the session loop, which is a unix socket's reader: a Windows build has the vocabulary and no plane.
+#[cfg(unix)]
+pub mod client;
 // **The exchange corpus** (#224) is recorded through the session loop, which is a unix socket's reader
 // (`server`). A Windows build has the vocabulary and no plane, so it has no corpus either.
 #[cfg(unix)]
