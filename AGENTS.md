@@ -107,5 +107,5 @@ src/scene.rs     the named states a capture renders: fixture feed, no network, v
 src/verify.rs    --assert: pixel and structure questions with numbers
 scripts/         verify.sh (the gate), capture.sh <scene>, assert.sh <png>
 fixtures/scenes/ the 40-vessel feed the scenes load; golden/ the captures they must match
-docs/            verification contract, invariants, ADRs, control.md (the control plane), mobile-remote.md (the phone), runbook.md
+docs/            verification contract, invariants, ADRs, control.md (the control plane), mobile-remote.md (the phone), mobile-ui.md (its screen), runbook.md
 ```
