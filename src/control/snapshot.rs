@@ -473,4 +473,70 @@ mod tests {
             "a pane kind nothing draws must be refused by name, not quietly become a map"
         );
     }
+
+    /// **One arrangement, two spellings** (#218).
+    ///
+    /// A scene's tiling names **indices into `pane`** — a file is written and read whole — and a projection's names
+    /// **ids**, because a client holds it across a close. Both are read from the wall's one tree, so a client that
+    /// has one can translate it with the other. The day the two pane orders disagree, this fails, rather than a
+    /// phone drawing the right arrangement of the wrong panes.
+    #[test]
+    fn the_scene_and_the_projection_carry_one_arrangement() {
+        use crate::control::projection;
+        use crate::ui::State;
+        use crate::ui::view::{Dir, Layout, Shape};
+
+        let mut state = State::default();
+        let a = state.focused();
+        let camera = state.camera_of(a);
+        let b = state.split_pane(a, camera).expect("a second pane");
+        let c = state.split_pane(b, camera).expect("a third pane");
+        // Side by side, then stacked: a shape a row of three would not describe.
+        let shape = Shape::Split {
+            dir: Dir::Horizontal,
+            ratio: 0.5,
+            a: Box::new(Shape::Leaf(a)),
+            b: Box::new(Shape::Split {
+                dir: Dir::Vertical,
+                ratio: 0.5,
+                a: Box::new(Shape::Leaf(b)),
+                b: Box::new(Shape::Leaf(c)),
+            }),
+        };
+        *state.layout_mut().expect("the wall has a layout") =
+            Layout::from_shape(shape).expect("a tiling of the three panes it has");
+
+        let scene = state.scene();
+        let wall = projection::of(&state);
+        let saved = scene.workspace[0]
+            .tiling
+            .clone()
+            .expect("the scene carries the tiling");
+        assert!(
+            saved.pane.is_none(),
+            "the scene's root is a split in this wall, not a leaf"
+        );
+
+        // The translation a client makes: the scene's indices, through the projection's pane order.
+        let ids: Vec<ViewId> = wall.workspaces[0]
+            .panes
+            .iter()
+            .map(|pane| pane.id)
+            .collect();
+        assert_eq!(
+            ids,
+            scene.workspace[0]
+                .pane
+                .iter()
+                .map(|pane| pane.id)
+                .collect::<Vec<_>>(),
+            "an index in a scene counts the panes in the projection's order, or nothing translates"
+        );
+        let back = crate::ui::saved::load_shape(&saved, &ids).expect("a shape of those ids");
+        assert_eq!(
+            wall.workspaces[0].tiling,
+            Some(projection::tiling_of(&back)),
+            "the scene's tiling, read with the projection's ids, is the projection's tiling"
+        );
+    }
 }
