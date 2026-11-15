@@ -97,7 +97,7 @@ src/ui/          the view, view.rs (the pane tree), tree.rs (the chain of comman
 src/units/       the vocabulary and the view model: Unit, UnitView, Glyph, Picture, motion, card
 src/data.rs      the Minos REST client            (#3)
 src/control.rs   the control plane: the intent vocabulary, the socket's wire   (#162)
-src/control/     server.rs (the listener) · wire.rs (JSON) · ctl.rs (the CLI client)
+src/control/     server.rs (the listener) · relay.rs (the outbound carrier) · wire.rs (JSON) · ctl.rs (the CLI client)
 src/live.rs      the Centrifugo socket actor      (#4)
 src/map/         geometry (no engine, in the gate) + the MapLibre thread (#5)
 vendor/          dependencies patched for reasons recorded in vendor/README.md

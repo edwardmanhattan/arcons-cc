@@ -212,6 +212,15 @@ pub fn run(args: &Args, env: &Env, world: &dyn World, out: &mut dyn std::fmt::Wr
         crate::control::authority::Role::from_env().label()
     );
 
+    // **The wall's outbound carrier to its relay** (#196): configured, unreachable, or not now — a fact, never a
+    // verdict. A wall in a cupboard with no relay is a wall that works, and it must pass every other row here.
+    let _ = writeln!(
+        out,
+        "  {:<11} ok  {}",
+        "relay",
+        crate::control::relay::row(Some(&config), env)
+    );
+
     // **Who read the fleet** (#203): one credential and one age, or a screen that was told both. An operator asking
     // "why is this screen not updating" needs to know which machine did the reading.
     let viewer = matches!(
@@ -1000,5 +1009,97 @@ mod tests {
                 "INV-08: the canary reached the self-check output:\n{out}"
             );
         }
+    }
+
+    /// **The `relay` row is a fact, not a verdict** (#196): no relay and an unreachable relay are both a wall that
+    /// passes every other row — a cupboard wall and a wall whose relay is being redeployed are walls that draw.
+    #[test]
+    fn a_wall_with_no_relay_or_an_unreachable_one_still_passes_its_other_rows() {
+        let sandbox = Sandbox::new("relay-states");
+        let args = sandbox.args("t");
+
+        // `ARCONS_RELAY_URL` unset: the supported state, and the row says which it is.
+        let mut out = String::new();
+        let outcome = run(&args, &Env::default(), &Scripted::good(), &mut out);
+        assert_eq!(outcome, Outcome::Ok, "{out}");
+        assert!(
+            out.contains("relay       ok  not now (no relay is configured)"),
+            "a wall with no relay must say so in those words, and pass (#196):\n{out}"
+        );
+
+        // A URL this wall dials, and nothing listening on it: configured, unreachable, still no verdict.
+        let nowhere =
+            std::env::temp_dir().join(format!("arcons-cc-no-relay-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&nowhere);
+        let url = format!("unix:{}", nowhere.display());
+        let mut out = String::new();
+        let outcome = run(
+            &args,
+            &Env::new([("ARCONS_RELAY_URL", url.as_str())]),
+            &Scripted::good(),
+            &mut out,
+        );
+        assert_eq!(outcome, Outcome::Ok, "{out}");
+        assert!(
+            out.contains(&format!(
+                "configured at {url}, but the relay is not answering"
+            )),
+            "an unreachable relay is named as such and changes no exit code (#196):\n{out}"
+        );
+    }
+
+    /// **A relay that answers says so, and the wall presented its own credential** (#196, `INV-08`): the hello is
+    /// checked on the wire here, because the self-check is the one place a wall dials without a display.
+    #[cfg(unix)]
+    #[test]
+    fn a_relay_that_answers_is_reported_by_the_self_check() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::net::UnixListener;
+        use std::sync::mpsc;
+
+        let sandbox = Sandbox::new("relay-answers");
+        let dir =
+            std::env::temp_dir().join(format!("arcons-cc-self-check-relay-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a temp directory");
+        let path = dir.join("relay.sock");
+        let listener = UnixListener::bind(&path).expect("the fake relay binds");
+        let url = format!("unix:{}", path.display());
+
+        let (hello, heard) = mpsc::channel();
+        let serving = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("the self-check dials the relay");
+            let mut reader = BufReader::new(stream.try_clone().expect("one socket, two handles"));
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("the wall says hello");
+            let _ = hello.send(line.clone());
+            let mut writing = stream;
+            let _ = writing.write_all(b"{\"v\":1,\"welcome\":true}\n");
+        });
+
+        let mut out = String::new();
+        let outcome = run(
+            &sandbox.args("t"),
+            &Env::new([("ARCONS_RELAY_URL", url.as_str())]),
+            &Scripted::good(),
+            &mut out,
+        );
+        assert_eq!(outcome, Outcome::Ok, "{out}");
+        assert!(
+            out.contains(&format!("configured at {url} (the relay answers)")),
+            "the row says the relay answered (#196):\n{out}"
+        );
+        let hello = heard
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the relay was dialled");
+        let value: serde_json::Value =
+            serde_json::from_str(hello.trim()).expect("the hello is JSON");
+        assert_eq!(
+            value["hello"]["credential"]["refresh_token"],
+            serde_json::json!("t"),
+            "the wall authenticates with its own Minos credential and invents nothing (#196)"
+        );
+        serving.join().expect("the relay's half ends");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

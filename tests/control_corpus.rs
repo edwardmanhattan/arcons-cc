@@ -207,6 +207,23 @@ const NOT_PROVOKABLE: &[(&str, &str)] = &[
         "the wall has no source of chance",
         "the operating system's entropy source failing is not something a request can cause (#194)",
     ),
+    (
+        "no relay is configured",
+        "the wall has no relay to carry a line to — a configuration fact, not a request (#196)",
+    ),
+    (
+        "the relay is not answering",
+        "the outbound carrier's transport failed: nothing a socket client's request causes (#196)",
+    ),
+    (
+        "the relay refused the wall",
+        "the relay said no to the wall's own credential at the dial, before any request exists (#196)",
+    ),
+    (
+        "that device is not paired",
+        "the phone's key is checked by the relay carrier, and a socket client never sends one: the \
+         carrier's own test drives this refusal on the wire (#196)",
+    ),
 ];
 
 /// **Every refusal a client can provoke is in the corpus**, and every one the corpus records carries the
