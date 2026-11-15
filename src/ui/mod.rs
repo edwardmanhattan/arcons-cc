@@ -18,6 +18,7 @@
 //! Without `--features map` the map element is absent and the panel says so: the engine is optional
 //! so the gate stays free of C++ and of a network. `--probe-map` is the headless witness.
 
+pub mod devices;
 pub mod filter;
 pub mod icons;
 pub mod installations;
@@ -36,6 +37,7 @@ mod viewpoint;
 pub use filter::Filter;
 pub use view::{Dir, Layout, Rect, ViewId};
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use rune::{AppSpec, Cx, El, col, el, row, spacer, text};
@@ -450,6 +452,16 @@ pub struct State {
     /// writes `layout.toml`. `None` is "nothing to write", and a scene never sets it — a capture that wrote
     /// to its machine's config directory would make the next capture's goldens depend on this one.
     pub arranged_at: Option<f64>,
+    /// **The code on the wall** (#194): six digits for two minutes, drawn and never sent. `None` when no
+    /// pairing is open. Not an [`Interaction`]: a code holds neither the pointer nor the keyboard, and the
+    /// wall keeps drawing the sea behind it while two people in the room read it.
+    pub pairing: Option<crate::control::pair::Pairing>,
+    /// **The devices that may drive this wall** (#194): names and SHA-256 hashes — never a key. Loaded from
+    /// `devices.toml` at start-up, appended by `pair.claim`, and written off the UI thread.
+    pub devices: crate::config::devices::Devices,
+    /// Where `devices.toml` is. A field so a test can point it at a directory it owns, exactly as
+    /// [`State::flush_layout_at`] takes the path a test owns; a wall gets [`devices::saved_devices_path`].
+    pub devices_path: PathBuf,
     /// Device pixels per point, as the last layout pass reported it. The one number a *toggle* needs and
     /// cannot get from a layout callback: restoring a maximised pane resizes its map thread, and resizing
     /// it to the wrong scale is the blurred pane #85 exists to avoid.
@@ -742,6 +754,9 @@ impl Default for State {
             next_pane: 2,
             settings: crate::config::settings::Settings::default(),
             arranged_at: None,
+            pairing: None,
+            devices: crate::config::devices::Devices::default(),
+            devices_path: devices::saved_devices_path(),
 
             scale: 1.0,
 
@@ -1005,6 +1020,14 @@ impl State {
             Interaction::Resizing(border) => Some(border),
             _ => None,
         }
+    }
+
+    /// **The pairing code, if one is open now** (#194): six digits drawn on the wall, and a code that has
+    /// lived out its two minutes is not one any more.
+    pub fn pairing(&self) -> Option<&crate::control::pair::Pairing> {
+        self.pairing
+            .as_ref()
+            .filter(|pairing| pairing.is_live(self.logical))
     }
 
     /// The rename in progress, if one is.
@@ -2401,7 +2424,47 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
     if state.rename().is_some() {
         root = root.child(rename_sheet(state));
     }
+    // **The code on the wall** (#194): drawn while it is live, gone the frame its two minutes are up.
+    if let Some(pairing) = state.pairing() {
+        root = root.child(pairing_panel(state, pairing));
+    }
     root
+}
+
+/// **The pairing code** (#194): six digits two people in the same room read off the screen.
+///
+/// It is **not a sheet**: a code holds neither the pointer nor the keyboard, and the wall keeps drawing the sea
+/// behind it for the two minutes a phone needs. The digits are a picture — never an answer to `pair.begin` — because
+/// a client that could read its own pairing code could pair itself.
+fn pairing_panel(state: &State, pairing: &crate::control::pair::Pairing) -> El {
+    let width = state.panel.map(|(w, _)| w).unwrap_or(tokens::WINDOW_SIZE.0);
+    let height = state.panel.map(|(_, h)| h).unwrap_or(tokens::WINDOW_SIZE.1);
+    let (w, h) = tokens::SHEET_SIZE;
+    col()
+        .key("pairing-panel")
+        .absolute((width - w) / 2.0, (height - h) / 2.0)
+        .size(w, h)
+        .padding(tokens::PAD)
+        .gap(tokens::GAP)
+        .radius(tokens::PANEL_RADIUS)
+        .fill(tokens::panel())
+        .border(tokens::HAIRLINE, tokens::card_edge())
+        .child(
+            text("PAIR A PHONE")
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim()),
+        )
+        .child(
+            text(pairing.words())
+                .key("pairing-code")
+                .font(tokens::TITLE)
+                .color(tokens::accent()),
+        )
+        .child(
+            text("type it on the phone · two minutes")
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim()),
+        )
 }
 
 /// What the header's one control says. A word, because there is room for one and a word needs no catalogue
@@ -5507,7 +5570,7 @@ fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool
     // **Escape is an intent like any other** (#170): the ladder that decides which surface goes is
     // `ui::close_surfaces`, and a socket's `surface.close` walks the same one — there is no second answer to
     // "what does dismissing mean" for a client that has no key.
-    control::apply(state, Intent::CloseSurfaces).is_ok_and(|changed| changed.0)
+    control::apply(state, Intent::CloseSurfaces).is_ok_and(|changed| changed.changed())
 }
 /// Start the socket actor, once, before the first frame.
 ///
@@ -6280,7 +6343,12 @@ pub fn run(window: config::Window, passthrough: Vec<String>) -> ExitCode {
         ..AppSpec::new(
             TITLE,
             window.size,
-            || State::default().with_saved_settings().with_saved_layout(),
+            || {
+                State::default()
+                    .with_saved_settings()
+                    .with_saved_layout()
+                    .with_saved_devices()
+            },
             view,
         )
     };
@@ -6397,6 +6465,32 @@ mod tests {
         let mut state = state_with_two_hulls();
         state.link = Link::Live;
         assert!(frame_once(state).find("reconnect-banner").is_none());
+    }
+
+    /// **The pairing code is drawn on the wall while it is live, and gone the frame its two minutes are up**
+    /// (#194): the digits are a picture for the room, and the falsifier the ticket names is a code that survives
+    /// its two minutes.
+    #[test]
+    fn the_pairing_code_is_drawn_for_two_minutes_and_not_after() {
+        let mut state = State::default();
+        control::apply(&mut state, Intent::PairBegin).expect("pairing opens");
+        let words = state.pairing().expect("a code on the wall").words();
+        assert!(
+            frame_once(state).find("pairing-code").is_some(),
+            "the wall does not draw the code it is holding (`{words}`)"
+        );
+
+        let mut state = State::default();
+        control::apply(&mut state, Intent::PairBegin).expect("pairing opens");
+        state.set_frame_clock(crate::control::pair::PAIR_FOR);
+        assert!(
+            state.pairing().is_none(),
+            "a code that survives its two minutes is the ticket's falsifier"
+        );
+        assert!(
+            frame_once(state).find("pairing-code").is_none(),
+            "an expired code is still drawn, so two minutes is not a deadline"
+        );
     }
 
     /// **The header's newsroom control opens a feed pane that asks page 1** (#136) — the same path the

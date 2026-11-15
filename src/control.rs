@@ -40,6 +40,7 @@ use crate::ui::{self, MenuAction, PaneContent, RenameTarget, State, ViewId};
 #[cfg_attr(not(unix), allow(dead_code))]
 pub mod authority;
 pub mod carrier;
+pub mod pair;
 pub mod projection;
 pub mod snapshot;
 pub mod tiling;
@@ -156,6 +157,23 @@ pub enum Intent {
     /// Release. The cursor starts fading from here.
     CursorRelease { origin: Option<crate::ui::Origin> },
 
+    // ---- pairing (#194)
+    /// **Open pairing**: draw six digits on the wall for two minutes (`ui::State::pairing`). The code is a
+    /// picture for the room and is **never** in the answer — a client that could read its own pairing code
+    /// could pair itself.
+    PairBegin,
+    /// **A phone claims the code**: `devices.toml` gains the SHA-256 of a fresh 32-byte key, the name and when,
+    /// and the key itself travels back through the carrier, once.
+    PairClaim {
+        /// The six digits drawn on the wall, as a phone types them.
+        code: String,
+        /// The name the phone gives itself: what `pair.forget` removes and what a cursor's `origin` says.
+        name: String,
+    },
+    /// **Revoke a device**: remove its row from `devices.toml` by name. A name that is not there changes
+    /// nothing — a revocation is a deletion, not a rule to refuse.
+    PairForget { name: String },
+
     // ---- surfaces
     /// The settings sheet (#82).
     OpenSettings,
@@ -193,6 +211,9 @@ impl Intent {
             Intent::CursorMove { .. } => "cursor.move",
             Intent::CursorPress { .. } => "cursor.press",
             Intent::CursorRelease { .. } => "cursor.release",
+            Intent::PairBegin => "pair.begin",
+            Intent::PairClaim { .. } => "pair.claim",
+            Intent::PairForget { .. } => "pair.forget",
             Intent::OpenSettings => "surface.settings",
             Intent::CloseSurfaces => "surface.close",
         }
@@ -207,6 +228,38 @@ pub struct Changed(pub bool);
 /// Why an intent did not happen, in the words a client gets back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Refused(pub &'static str);
+
+/// **A device that has just paired** (#194): the name it chose and the key it keeps.
+///
+/// This value exists for one trip: `pair.claim` hands it back to the carrier, which writes the key into the
+/// client's answer, once. The wall keeps only the hash — so this is the **only** copy of the key, and its `Debug`
+/// redacts it, which is what makes a log line that formatted a whole answer safe (`INV-08`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Paired {
+    pub name: String,
+    pub key: crate::config::devices::Key,
+}
+
+/// **What one intent concluded.** Almost every verb changes the wall or refuses; `pair.claim` is the one verb
+/// that also answers with something the client has to keep.
+///
+/// It is an outcome rather than two doors (`INV-07`'s rule at this layer): [`apply`] stays the only place an
+/// input changes the wall, and a caller that only wants "did anything move?" asks [`Applied::changed`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum Applied {
+    Changed(Changed),
+    Paired(Paired),
+}
+
+impl Applied {
+    /// Whether a pixel moved. A pairing changed what the wall remembers, so it is a change too.
+    pub fn changed(&self) -> bool {
+        match self {
+            Applied::Changed(changed) => changed.0,
+            Applied::Paired(_) => true,
+        }
+    }
+}
 
 /// **What a client can do about a refusal** (#198): the category of a "no", beside its words.
 ///
@@ -263,7 +316,9 @@ pub const REFUSALS: &[(&str, RefusalKind)] = &[
         RefusalKind::Input,
     ),
     ("\"camera\" is {lat, lon, zoom}", RefusalKind::Input),
+    ("\"code\" is the six digits on the wall", RefusalKind::Input),
     ("\"content\" needs a \"kind\"", RefusalKind::Input),
+    ("\"name\" is a device name", RefusalKind::Input),
     ("\"name\" is a string or null", RefusalKind::Input),
     ("\"open\" is true or false", RefusalKind::Input),
     (
@@ -289,12 +344,15 @@ pub const REFUSALS: &[(&str, RefusalKind)] = &[
     ("an intent has no verb", RefusalKind::Input),
     ("an intent is a JSON object", RefusalKind::Input),
     ("no menu is open", RefusalKind::Rule),
+    ("no pairing is open", RefusalKind::Rule),
     ("no pane has the keys", RefusalKind::Rule),
     ("no row has the ring", RefusalKind::Rule),
     ("no submenu is open", RefusalKind::Rule),
     ("no such pane", RefusalKind::Rule),
     ("no such workspace", RefusalKind::Rule),
     ("not JSON", RefusalKind::Input),
+    ("that code is not the code", RefusalKind::Rule),
+    ("that device is already paired", RefusalKind::Rule),
     ("the cursor has not been placed", RefusalKind::Rule),
     ("the cursor is not pressed", RefusalKind::Rule),
     ("the hull has not reported", RefusalKind::Rule),
@@ -306,6 +364,7 @@ pub const REFUSALS: &[(&str, RefusalKind)] = &[
     ("the row opens nothing", RefusalKind::Rule),
     ("the tiling refused the pane", RefusalKind::Rule),
     ("the wall did not answer", RefusalKind::Busy),
+    ("the wall has no source of chance", RefusalKind::Busy),
     ("the wall has stopped", RefusalKind::Busy),
     ("unknown pane kind", RefusalKind::Input),
     ("unknown read", RefusalKind::Input),
@@ -351,13 +410,13 @@ fn asked_the_authority(state: &State, intent: &Intent) -> bool {
 /// socket all come here, so "the mouse can do it and the CLI cannot" stops being a category of bug. What it
 /// calls is the same code the wall already trusted — the point is not a new implementation of closing a pane,
 /// it is that there is one entrance to the old one.
-pub fn apply(state: &mut State, intent: Intent) -> Result<Changed, Refused> {
+pub fn apply(state: &mut State, intent: Intent) -> Result<Applied, Refused> {
     // **A viewer does not change the wall** (#204): it asks its authority, and answers `changed: false` — which is the
     // truth, because no pixel moved. The change arrives later as a `Scene`, and until it does the pending intent is a
     // request rather than a fact. Every handler comes through here (#170, #173), so this is the only place that has to
     // know the difference — and a wall, a capture and the authority itself all answer `false` to it and apply in place.
     if asked_the_authority(state, &intent) {
-        return Ok(Changed(false));
+        return Ok(Applied::Changed(Changed(false)));
     }
     let changed = match intent {
         Intent::FocusPane(pane) => {
@@ -566,13 +625,19 @@ pub fn apply(state: &mut State, intent: Intent) -> Result<Changed, Refused> {
             state.cursor_release(&origin);
             true
         }
+        Intent::PairBegin => pair::begin(state)?.0,
+        Intent::PairClaim { code, name } => {
+            // **The one verb whose answer is more than a flag** (#194): the key goes back to the carrier, once.
+            return Ok(Applied::Paired(pair::claim(state, &code, &name)?));
+        }
+        Intent::PairForget { name } => pair::forget(state, &name).0,
         Intent::OpenSettings => ui::open_settings(state),
         Intent::CloseSurfaces => ui::close_surfaces(state),
     };
     if changed {
         state.layout_dirty = true;
     }
-    Ok(Changed(changed))
+    Ok(Applied::Changed(Changed(changed)))
 }
 
 /// Whether the thing a rename names is on the wall.
@@ -671,6 +736,14 @@ pub fn vocabulary() -> Vec<Intent> {
         },
         Intent::CursorPress { origin: None },
         Intent::CursorRelease { origin: None },
+        Intent::PairBegin,
+        Intent::PairClaim {
+            code: "481902".to_string(),
+            name: "phone".to_string(),
+        },
+        Intent::PairForget {
+            name: "phone".to_string(),
+        },
         Intent::OpenSettings,
         Intent::CloseSurfaces,
     ]
@@ -771,7 +844,7 @@ mod tests {
             .expect("a second pane");
         assert_eq!(
             apply(&mut state, Intent::ClosePane(first)),
-            Ok(Changed(true))
+            Ok(Applied::Changed(Changed(true)))
         );
         assert_eq!(state.pane_count(), 1);
     }
@@ -784,7 +857,7 @@ mod tests {
         let before = state.pane_count();
         assert_eq!(
             apply(&mut state, Intent::OpenPane(PaneContent::Newsroom)),
-            Ok(Changed(true))
+            Ok(Applied::Changed(Changed(true)))
         );
         assert_eq!(state.pane_count(), before + 1);
         assert!(
@@ -810,7 +883,7 @@ mod tests {
                     workspace: 1
                 }
             ),
-            Ok(Changed(true))
+            Ok(Applied::Changed(Changed(true)))
         );
         assert!(
             state.workspaces[0].layout.is_none(),
@@ -820,12 +893,12 @@ mod tests {
         // Back to the empty one, then open a pane there.
         assert_eq!(
             apply(&mut state, Intent::FocusWorkspace(0)),
-            Ok(Changed(true))
+            Ok(Applied::Changed(Changed(true)))
         );
         assert!(state.layout().is_none());
         assert_eq!(
             apply(&mut state, Intent::OpenPane(PaneContent::Newsroom)),
-            Ok(Changed(true)),
+            Ok(Applied::Changed(Changed(true))),
             "opening a pane in an empty workspace is a change, not a no-op"
         );
         assert_eq!(
@@ -862,13 +935,13 @@ mod tests {
         assert_eq!(state.pane_count(), 3);
         assert_eq!(
             apply(&mut state, Intent::CloseOtherPanes),
-            Ok(Changed(true))
+            Ok(Applied::Changed(Changed(true)))
         );
         assert_eq!(state.pane_count(), 1, "one pane is left");
         assert_eq!(state.focused(), keep, "and it is the one with the keys");
         assert_eq!(
             apply(&mut state, Intent::CloseOtherPanes),
-            Ok(Changed(false)),
+            Ok(Applied::Changed(Changed(false))),
             "closing nothing is not a change, and not an error"
         );
         // A wall with panes in another workspace keeps them: the intent is this workspace's.
@@ -928,7 +1001,7 @@ mod tests {
         let active_before = state.active;
         assert_eq!(
             apply(&mut state, Intent::CloseOtherWorkspaces),
-            Ok(Changed(true))
+            Ok(Applied::Changed(Changed(true)))
         );
         assert_eq!(state.workspaces.len(), 1, "one workspace is left");
         assert_eq!(state.active, 0, "and the wall is on it");
@@ -950,7 +1023,7 @@ mod tests {
         let _ = active_before;
         assert_eq!(
             apply(&mut state, Intent::CloseOtherWorkspaces),
-            Ok(Changed(false)),
+            Ok(Applied::Changed(Changed(false))),
             "one workspace is nothing to close"
         );
     }
@@ -983,7 +1056,7 @@ mod tests {
                     zoom: Some(13.0)
                 }
             ),
-            Ok(Changed(true))
+            Ok(Applied::Changed(Changed(true)))
         );
         let camera = state.camera_of(pane);
         assert!(
@@ -1047,7 +1120,7 @@ mod tests {
                     zoom: None
                 }
             ),
-            Ok(Changed(true)),
+            Ok(Applied::Changed(Changed(true))),
             "letting go is never a refusal"
         );
     }
@@ -1077,7 +1150,7 @@ mod tests {
                     origin: Some(phone.clone()),
                 }
             ),
-            Ok(Changed(true))
+            Ok(Applied::Changed(Changed(true)))
         );
         // A second and a half later — one full fade — the tablet points somewhere else.
         state.set_frame_clock(1.0 + crate::ui::Cursor::FADE);
@@ -1089,7 +1162,7 @@ mod tests {
                     origin: Some(tablet.clone()),
                 }
             ),
-            Ok(Changed(true))
+            Ok(Applied::Changed(Changed(true)))
         );
 
         assert_eq!(state.cursors.len(), 2, "two hands, two pointers");
@@ -1140,7 +1213,7 @@ mod tests {
         let camera = crate::map::geometry::Camera::new((-5.5, 105.25), 9.5);
         assert_eq!(
             apply(&mut state, Intent::Camera { pane, camera }),
-            Ok(Changed(true))
+            Ok(Applied::Changed(Changed(true)))
         );
         assert_eq!(state.camera_of(pane), camera);
         assert_eq!(
@@ -1297,7 +1370,10 @@ mod tests {
             state.interaction,
             crate::ui::Interaction::Menu { open: Some(_), .. }
         ));
-        assert_eq!(apply(&mut state, Intent::CloseSurfaces), Ok(Changed(true)));
+        assert_eq!(
+            apply(&mut state, Intent::CloseSurfaces),
+            Ok(Applied::Changed(Changed(true)))
+        );
         assert!(
             matches!(
                 state.interaction,
@@ -1305,14 +1381,17 @@ mod tests {
             ),
             "the waterfall closes first"
         );
-        assert_eq!(apply(&mut state, Intent::CloseSurfaces), Ok(Changed(true)));
+        assert_eq!(
+            apply(&mut state, Intent::CloseSurfaces),
+            Ok(Applied::Changed(Changed(true)))
+        );
         assert!(
             matches!(state.interaction, crate::ui::Interaction::Idle),
             "then the menu"
         );
         assert_eq!(
             apply(&mut state, Intent::CloseSurfaces),
-            Ok(Changed(false)),
+            Ok(Applied::Changed(Changed(false))),
             "and with nothing open, dismissing changes nothing"
         );
     }

@@ -61,10 +61,12 @@ impl std::fmt::Display for Failure {
 }
 
 /// What a client's run concluded, so `main` can exit with a code a script can branch on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
     /// The wall changed.
     Changed,
+    /// **A device paired, and this is its key** (#194): the one value a `ctl` prints that a script keeps.
+    Paired(String),
     /// The wall answered, and nothing changed (it was already so).
     Unchanged,
     /// The wall refused, for the reason printed.
@@ -75,9 +77,9 @@ pub enum Outcome {
 
 impl Outcome {
     /// The exit code, matching `docs/control.md`: `0` answered, `1` refused, `2` no socket.
-    pub fn code(self) -> u8 {
+    pub fn code(&self) -> u8 {
         match self {
-            Outcome::Changed | Outcome::Unchanged => 0,
+            Outcome::Changed | Outcome::Paired(_) | Outcome::Unchanged => 0,
             Outcome::Refused => 1,
             Outcome::NoWall => 2,
         }
@@ -250,6 +252,14 @@ pub fn parse(words: &[String]) -> Result<Intent, Failure> {
         }
         "cursor.press" => Intent::CursorPress { origin: None },
         "cursor.release" => Intent::CursorRelease { origin: None },
+        "pair.begin" => Intent::PairBegin,
+        "pair.claim" => Intent::PairClaim {
+            code: arg(0, "the six digits on the wall")?.clone(),
+            name: arg(1, "a device name")?.clone(),
+        },
+        "pair.forget" => Intent::PairForget {
+            name: arg(0, "a device name")?.clone(),
+        },
         "surface.settings" => Intent::OpenSettings,
         "surface.close" => Intent::CloseSurfaces,
         _ => {
@@ -339,13 +349,24 @@ pub fn interpret(line: &str) -> Result<Outcome, Failure> {
     let reply: serde_json::Value = serde_json::from_str(line)
         .map_err(|_| Failure::NoWall(format!("the wall's answer is not JSON: {line:?}")))?;
     match reply.get("ok").and_then(serde_json::Value::as_bool) {
-        Some(true) => Ok(
-            if reply.get("changed").and_then(serde_json::Value::as_bool) == Some(true) {
-                Outcome::Changed
-            } else {
-                Outcome::Unchanged
-            },
-        ),
+        Some(true) => {
+            // **A paired answer carries the key, once** (#194): it goes to stdout, where the operator or a script
+            // takes it. It is not a log line, and the wall keeps only the hash (`INV-08`).
+            if let Some(key) = reply
+                .get("paired")
+                .and_then(|paired| paired.get("key"))
+                .and_then(serde_json::Value::as_str)
+            {
+                return Ok(Outcome::Paired(key.to_string()));
+            }
+            Ok(
+                if reply.get("changed").and_then(serde_json::Value::as_bool) == Some(true) {
+                    Outcome::Changed
+                } else {
+                    Outcome::Unchanged
+                },
+            )
+        }
         Some(false) => Err(Failure::Refused(
             reply
                 .get("why")
@@ -390,6 +411,9 @@ arcons-cc ctl <noun> <verb> [args]
   cursor move <x> <y>        put a client's cursor at a point in the picture panel
   cursor press               the hull under it (its card), or the pane it is over
   cursor release             let go; the cursor fades from here
+  pair begin                 draw a six-digit code on the wall for two minutes
+  pair claim <code> <name>   pair a phone: prints the device key, once
+  pair forget <name>         revoke a device by name
   surface settings           open the settings sheet
   surface close              dismiss one surface (what Escape does)
 
@@ -439,6 +463,9 @@ mod tests {
             "cursor move 100 80",
             "cursor press",
             "cursor release",
+            "pair begin",
+            "pair claim 481902 phone",
+            "pair forget phone",
             "surface settings",
             "surface close",
         ];
@@ -522,9 +549,16 @@ mod tests {
             interpret(r#"{"ok":false,"v":1,"why":"the last pane on the wall"}"#),
             Err(Failure::Refused("the last pane on the wall".to_string()))
         );
+        // **A claim's answer is the key, and the client prints it as itself** (#194): no prose a script would
+        // have to strip, and no key in a log line (`INV-08`).
+        assert_eq!(
+            interpret(r#"{"ok":true,"paired":{"key":"ab","name":"phone"},"v":1}"#),
+            Ok(Outcome::Paired("ab".to_string()))
+        );
         assert_eq!(Failure::NoWall(String::new()).code(), 2);
         assert_eq!(Failure::Usage(String::new()).code(), 64);
         assert_eq!(Outcome::Changed.code(), 0);
+        assert_eq!(Outcome::Paired("00ff".to_string()).code(), 0);
         assert_eq!(Outcome::Refused.code(), 1);
         assert_eq!(Outcome::NoWall.code(), 2);
 

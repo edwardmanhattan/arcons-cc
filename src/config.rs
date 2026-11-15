@@ -16,6 +16,7 @@ use crate::ui::tokens;
 
 pub mod check;
 pub mod credential;
+pub mod devices;
 pub mod file;
 pub mod layout;
 pub mod settings;

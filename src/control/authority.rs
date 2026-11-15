@@ -21,7 +21,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::control::carrier::Carrier;
 use crate::control::wire::{Answer, Request};
-use crate::control::{Changed, Refused};
+use crate::control::{Applied, Changed, Refused};
 use crate::ui::State;
 
 /// **Whose state this is** (#202).
@@ -83,11 +83,16 @@ fn this_walls_socket() -> PathBuf {
 /// means and one place that could grow a second opinion (`INV-07`).
 pub fn answer(state: &mut State, request: &Request) -> (Answer, bool) {
     match request {
-        Request::Intent(intent) => {
-            let result = crate::control::apply(state, intent.clone());
-            let changed = result.as_ref().map(|changed| changed.0).unwrap_or(false);
-            (Answer::Changed(result), changed)
-        }
+        Request::Intent(intent) => match crate::control::apply(state, intent.clone()) {
+            Ok(Applied::Changed(changed)) => {
+                let changed_on_screen = changed.0;
+                (Answer::Changed(Ok(changed)), changed_on_screen)
+            }
+            // **A claim answers with the key** (#194): the carrier writes it back to the client that proved it was
+            // in the room, and the wall keeps only the hash.
+            Ok(Applied::Paired(paired)) => (Answer::Paired(paired), true),
+            Err(why) => (Answer::Changed(Err(why)), false),
+        },
         Request::Wall => (Answer::Wall(crate::control::projection::of(state)), false),
         // **The arrangement, not the projection** (#201): what a viewer's picture is computed from. Built on the frame
         // that asks, which is what "what is on the wall" means.
@@ -524,7 +529,7 @@ mod tests {
         let outcome = crate::control::apply(&mut viewer, crate::control::Intent::NewWorkspace);
         assert_eq!(
             outcome,
-            Ok(Changed(false)),
+            Ok(Applied::Changed(Changed(false))),
             "a viewer's intent is a request: nothing changed on this screen"
         );
         assert_eq!(

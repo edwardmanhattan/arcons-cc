@@ -302,8 +302,11 @@ mod tests {
             super::super::wire::Request::Intent(intent) => intent.clone(),
             other => panic!("a read where a change was asked for: {other:?}"),
         };
-        let result = control::apply(&mut state, intent);
-        job.answer(Answer::Changed(result));
+        let (answer, _) = crate::control::authority::answer(
+            &mut state,
+            &super::super::wire::Request::Intent(intent),
+        );
+        job.answer(answer);
 
         let mut reply = String::new();
         BufReader::new(client)
@@ -343,7 +346,10 @@ mod tests {
         };
         let result = control::apply(&mut state, intent);
         assert_eq!(result, Err(Refused(LAST_PANE)));
-        job.answer(Answer::Changed(result));
+        job.answer(match result {
+            Ok(outcome) => Answer::Changed(Ok(crate::control::Changed(outcome.changed()))),
+            Err(why) => Answer::Changed(Err(why)),
+        });
         let mut reply = String::new();
         BufReader::new(client)
             .read_line(&mut reply)

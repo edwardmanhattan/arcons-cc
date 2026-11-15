@@ -29,7 +29,7 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::config::{self, Args, Config, Env, Problem, Source, layout, settings};
+use crate::config::{self, Args, Config, Env, Problem, Source, devices, layout, settings};
 
 /// What a self-check can conclude, in the order the exit codes are numbered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,6 +183,18 @@ pub fn run(args: &Args, env: &Env, world: &dyn World, out: &mut dyn std::fmt::Wr
         "layout",
         note.trim_start_matches("layout: "),
         saved.map(|saved| saved.workspace.len()).unwrap_or(0)
+    );
+
+    // **The paired phones** (#194): which file, and how many may drive this wall. A row is a name and a hash,
+    // never a key — this line counts rows and prints none of either.
+    let devices_path = devices::devices_file();
+    let (paired, note) = devices::Devices::read(&devices_path);
+    let _ = writeln!(
+        out,
+        "  {:<11} ok  {} ({} device(s) paired)",
+        "devices",
+        note.trim_start_matches("devices: "),
+        paired.map(|paired| paired.device.len()).unwrap_or(0)
     );
 
     // **The control plane** (#165): a fact, not a verdict — a wall that is not running cannot be driven,

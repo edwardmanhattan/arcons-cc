@@ -26,6 +26,12 @@ rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 # back. Not behind the map feature: the assertion has to run where the map engine is not built.
 png = "0.18"
 
+# Pairing (#194): a device key is 32 fresh bytes, and `devices.toml` keeps only its SHA-256. Both crates
+# are the small, pure-Rust implementations — `getrandom` asks the OS for the bytes, `sha2` hashes them —
+# rather than a hand-written hash or a clock used as a source of chance.
+sha2 = "0.10"
+getrandom = "0.3"
+
 # The socket client. Vendored (see `vendor/README.md`): upstream 0.2.6 cannot set the connect
 # command's `data`, which is where Minos reads our token, and drops handshake refusal codes.
 # TLS: rustls against the SYSTEM trust store, not a bundled one. The socket is `wss://` behind the

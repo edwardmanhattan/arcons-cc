@@ -21,7 +21,7 @@ use serde_json::{Map, Value, json};
 
 use super::projection::Wall;
 use super::snapshot::Scene;
-use super::{Changed, Intent, PROTOCOL, Refused};
+use super::{Changed, Intent, PROTOCOL, Paired, Refused};
 use crate::ui::{PaneContent, RenameTarget};
 
 /// An intent as the JSON a client sends.
@@ -105,6 +105,14 @@ pub fn to_wire(intent: &Intent) -> Value {
             if let Some(origin) = origin {
                 object.insert("origin".into(), json!(origin.as_str()));
             }
+        }
+        Intent::PairBegin => {}
+        Intent::PairClaim { code, name } => {
+            object.insert("code".into(), json!(code));
+            object.insert("name".into(), json!(name));
+        }
+        Intent::PairForget { name } => {
+            object.insert("name".into(), json!(name));
         }
         Intent::OpenSettings | Intent::CloseSurfaces => {}
     }
@@ -257,6 +265,18 @@ pub fn from_wire(value: &Value) -> Result<Intent, Refused> {
         "cursor.release" => Intent::CursorRelease {
             origin: origin_of(object)?,
         },
+        "pair.begin" => Intent::PairBegin,
+        "pair.claim" => Intent::PairClaim {
+            code: match object.get("code") {
+                None => return Err(Refused("\"code\" is the six digits on the wall")),
+                Some(Value::String(code)) => code.clone(),
+                Some(_) => return Err(Refused("\"code\" is the six digits on the wall")),
+            },
+            name: device_name(object)?,
+        },
+        "pair.forget" => Intent::PairForget {
+            name: device_name(object)?,
+        },
         "surface.settings" => Intent::OpenSettings,
         "surface.close" => Intent::CloseSurfaces,
         _ => return Err(Refused("unknown verb")),
@@ -273,6 +293,15 @@ fn origin_of(object: &Map<String, Value>) -> Result<Option<crate::ui::Origin>, R
             .as_str()
             .map(|name| Some(crate::ui::Origin::named(name)))
             .ok_or(Refused("\"origin\" is a client name")),
+    }
+}
+
+/// A device's name (#194): a string that is not blank. The same words `pair.claim`'s own blank-name refusal uses,
+/// so a client that sent `{"name": 3}` and one that sent `{"name": " "}` read one sentence.
+fn device_name(object: &Map<String, Value>) -> Result<String, Refused> {
+    match object.get("name") {
+        Some(Value::String(name)) if !name.trim().is_empty() => Ok(name.clone()),
+        _ => Err(Refused("\"name\" is a device name")),
     }
 }
 
@@ -384,6 +413,8 @@ pub enum Request {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Answer {
     Changed(Result<Changed, Refused>),
+    /// **A device has paired** (#194): the row is written and the key travels back with this answer, once.
+    Paired(Paired),
     Wall(Wall),
     /// The arrangement a viewer draws (#202), with the `seq` that says how old it is.
     Scene(Box<Scene>),
@@ -445,6 +476,21 @@ pub fn answer(line: &str) -> Result<Answer, String> {
             .ok_or_else(|| "a refusal carries \"why\"".to_string())?;
         return Err(why.to_string());
     }
+    if let Some(paired) = object.get("paired") {
+        let name = paired
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "a paired answer carries a device name".to_string())?;
+        let key = paired
+            .get("key")
+            .and_then(Value::as_str)
+            .and_then(crate::config::devices::Key::from_hex)
+            .ok_or_else(|| "a paired answer carries a key".to_string())?;
+        return Ok(Answer::Paired(Paired {
+            name: name.to_string(),
+            key,
+        }));
+    }
     if let Some(scene) = object.get("scene") {
         let scene: Scene = serde_json::from_value(scene.clone())
             .map_err(|_| "the scene is not a scene this client knows".to_string())?;
@@ -477,6 +523,14 @@ pub fn reply(answer: Answer) -> String {
             }
             reply.to_string()
         }
+        // **The one time a key crosses the carrier** (#194): the row is already a hash, so this line is the only
+        // copy the client will have, and it is not written anywhere (`INV-08`).
+        Answer::Paired(paired) => json!({
+            "v": PROTOCOL,
+            "ok": true,
+            "paired": { "name": paired.name, "key": paired.key.hex() },
+        })
+        .to_string(),
         // **A read is a body, and a good one**: `wall` beside `ok`, and no `changed` — a client that asked to
         // change nothing is not told something did.
         Answer::Wall(wall) => json!({ "v": PROTOCOL, "ok": true, "wall": wall }).to_string(),
