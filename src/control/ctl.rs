@@ -172,6 +172,25 @@ pub fn parse(words: &[String]) -> Result<Intent, Failure> {
             pane: number(0, "a pane id")?,
             workspace: number(1, "a workspace index")? as usize,
         },
+        // **A slot, not a point** (#219): a client with no pointer says which pane and which of its edges, which is
+        // what a phone can know from the `tiling` it read.
+        "pane.drop" => Intent::Drop {
+            pane: number(0, "a pane id")?,
+            onto: number(1, "the pane it lands on")?,
+            edge: super::wire::edge_from_words(rest.get(2).map(String::as_str))
+                .map_err(Failure::Usage)?,
+        },
+        "pane.resize" => Intent::Resize {
+            pane: number(0, "a pane id")?,
+            other: number(1, "the pane it shares a border with")?,
+            ratio: arg(2, "a ratio")?.parse::<f32>().map_err(|_| {
+                Failure::Usage(format!(
+                    "{name}: a ratio is a number from {:.2} to {:.2}",
+                    crate::config::layout::RATIO_RANGE.0,
+                    crate::config::layout::RATIO_RANGE.1
+                ))
+            })?,
+        },
         "object.follow" => {
             let unit = match rest.get(1).map(String::as_str) {
                 None | Some("off") => None,
@@ -372,6 +391,12 @@ arcons-cc ctl <noun> <verb> [args]
   pane close_others          close every pane in this workspace but the one with the keys
   workspace close_others     close every workspace but the one on screen
   pane move <id> <index>     carry a pane into another workspace
+  pane drop <id> <onto> <edge>
+                             land a pane in another pane's slot; the edge is left, right,
+                             top, bottom (a re-tile) or centre (a swap)
+  pane resize <id> <other> <ratio>
+                             move the gutter between two neighbours to a share of the panel
+                             (0.05–0.95)
   pane select <id> [hull]    put a pane's card on a hull, or `clear`
   object follow <id> <hull>|off [zoom]
                              lock a pane's camera onto a hull every frame, or let go
@@ -424,6 +449,8 @@ mod tests {
             "pane close_others",
             "workspace close_others",
             "pane move 2 1",
+            "pane drop 2 1 top",
+            "pane resize 2 1 0.58",
             "pane select 2 512345",
             "object follow 2 512345",
             "object follow 2 off",
@@ -505,6 +532,11 @@ mod tests {
             "a focus with no pane is not a request the wall can guess"
         );
         assert!(parse(&words("pane focus two")).is_err());
+        assert!(
+            parse(&words("pane drop 2 1 north")).is_err(),
+            "an edge is one of the five words, and a sixth is a usage error rather than a guess"
+        );
+        assert!(parse(&words("pane resize 2 1 half")).is_err());
     }
 
     /// The answers a script branches on: changed, unchanged, refused, and a wall that is not there.
