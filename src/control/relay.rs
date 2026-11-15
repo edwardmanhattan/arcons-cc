@@ -250,14 +250,14 @@ use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(unix)]
-use std::sync::mpsc::{self, Receiver};
-#[cfg(unix)]
 use std::sync::{Arc, Mutex};
 
 #[cfg(unix)]
 use super::carrier::Carrier;
 #[cfg(unix)]
-use super::server::{Job, serve_session};
+use super::server::serve_session;
+#[cfg(unix)]
+use crate::ui::Origin;
 
 /// One end of a dialled connection: a unix socket beside the wall, or a TCP relay on the network.
 #[cfg(unix)]
@@ -689,15 +689,21 @@ impl Carrier for RelayCarrier {
         self.stop.store(true, Ordering::SeqCst);
         self.dropped();
     }
+
+    /// **The device behind the frame just read** (#222): the name `devices.toml` holds beside the key's hash — so a
+    /// cursor, a refusal and a log line name the same thing. Never the key, the hash or the relay's address
+    /// (`INV-08`): a name a phone chose in the room is the only thing here that is the phone's.
+    fn origin(&self) -> Option<Origin> {
+        self.to.as_deref().map(Origin::named)
+    }
 }
 
-/// **The running carrier** (#196): a thread, a queue of the wall's jobs, and a way to stop.
+/// **The running carrier** (#196): a thread, a way to stop, and an end of the **wall's** queue (#222).
 ///
-/// The shape [`super::server::Server`] has, because `poll`'s half of it is the same: `next_job` never blocks, and the
-/// UI thread answers each job through `control::authority::answer`. The difference is that this one *dials*.
+/// The shape [`super::server::Server`] has, and the same queue: a phone's request waits in the wall's one channel
+/// beside a `ctl`'s, so `poll` applies them in the order they arrived. The difference is that this one *dials*.
 #[cfg(unix)]
 pub struct Relay {
-    jobs: Receiver<Job>,
     stop: Arc<AtomicBool>,
     current: Arc<Mutex<Option<Wire>>>,
     connected: Arc<AtomicBool>,
@@ -706,10 +712,11 @@ pub struct Relay {
 
 #[cfg(unix)]
 impl Relay {
-    /// Dial in the background and serve for as long as the wall runs. Called only by a wall that is **the** wall: a
-    /// viewer draws somebody else's state, and two processes publishing one relay would be two answers to one device.
-    pub fn spawn(settings: Settings) -> std::io::Result<Relay> {
-        let (tx, jobs) = mpsc::channel();
+    /// Dial in the background and serve for as long as the wall runs, handing every request to `queue` — the wall's.
+    /// Called only by a wall that is **the** wall: a viewer draws somebody else's state, and two processes publishing
+    /// one relay would be two answers to one device.
+    pub fn spawn(settings: Settings, queue: &super::sessions::Queue) -> std::io::Result<Relay> {
+        let tx = queue.sender();
         let stop = Arc::new(AtomicBool::new(false));
         let current: Arc<Mutex<Option<Wire>>> = Arc::new(Mutex::new(None));
         let connected = Arc::new(AtomicBool::new(false));
@@ -733,18 +740,11 @@ impl Relay {
                 })?
         };
         Ok(Relay {
-            jobs,
             stop,
             current,
             connected,
             thread: Some(thread),
         })
-    }
-
-    /// **The next request, if one is waiting.** Called from `poll`, between frames, and never blocking: a wall that
-    /// waited here would freeze for a phone that has not finished a press.
-    pub fn next_job(&self) -> Option<Job> {
-        self.jobs.try_recv().ok()
     }
 
     /// Whether the relay is answering — the fact the log line and a test read, rather than a claim.
@@ -1068,6 +1068,14 @@ mod tests {
             wire::request(&line),
             Ok(Request::Intent(Intent::NewWorkspace)),
             "what the carrier carries is a `wire::Request` and nothing else (#196, INV-07)"
+        );
+        // **And whose hand it is** (#222): the device's *name*, from the row the key's hash matched — so the session
+        // stamps a cursor, a refusal and a log line with the same thing, and never with the key, the hash or the
+        // relay's address (`INV-08`).
+        assert_eq!(
+            carrier.origin(),
+            Some(crate::ui::Origin::named("phone")),
+            "a relay's carrier names its client by the device name in devices.toml (#222 rule 4)"
         );
         drop(relay.join().expect("the relay's half ends"));
     }
@@ -1395,11 +1403,13 @@ mod tests {
             end.answer()
         });
 
-        let relay = Relay::spawn(settings).expect("the carrier thread starts");
+        // **The wall's queue** (#222): the relay is handed an end of it, exactly as the socket's listener is.
+        let queue = crate::control::sessions::Queue::new();
+        let relay = Relay::spawn(settings, &queue).expect("the carrier thread starts");
         let job = {
             let deadline = Instant::now() + PATIENCE;
             loop {
-                if let Some(job) = relay.next_job() {
+                if let Some(job) = queue.next() {
                     break job;
                 }
                 assert!(
@@ -1410,8 +1420,8 @@ mod tests {
             }
         };
         assert_eq!(
-            job.request,
-            Request::Intent(Intent::NewWorkspace),
+            job.request(),
+            Some(&Request::Intent(Intent::NewWorkspace)),
             "the job is the wire's request, unchanged (#196)"
         );
         assert!(
@@ -1422,8 +1432,10 @@ mod tests {
         );
         // The UI thread, played by this test: apply, then answer, through the one door.
         let mut state = crate::ui::State::default();
-        let (answer, _) = crate::control::authority::answer(&mut state, &job.request);
-        job.answer(answer);
+        assert!(
+            crate::control::authority::serve(&mut state, job),
+            "a new workspace is a change"
+        );
         assert_eq!(
             state.workspaces.len(),
             4,

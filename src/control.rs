@@ -55,6 +55,10 @@ pub mod projection;
 // has the vocabulary and no carrier, exactly as it does for a viewer's session.
 #[cfg_attr(not(unix), allow(dead_code))]
 pub mod relay;
+// **The wall's queue, and the rules between two carriers** (#222). Unix only, with the listener and the carrier the
+// queue is fed by: a Windows build has the vocabulary and no plane.
+#[cfg(unix)]
+pub mod sessions;
 pub mod snapshot;
 pub mod tiling;
 pub mod wire;
@@ -563,6 +567,23 @@ fn asked_the_authority(state: &State, intent: &Intent) -> bool {
 /// calls is the same code the wall already trusted — the point is not a new implementation of closing a pane,
 /// it is that there is one entrance to the old one.
 pub fn apply(state: &mut State, intent: Intent) -> Result<Applied, Refused> {
+    apply_by(state, intent, None)
+}
+
+/// **The door, and whose hand knocked** (#222).
+///
+/// A request that arrived on a carrier with a name is that client's, whatever the frame said: the relay knows a phone
+/// by the device name in `devices.toml`, the socket knows its client as `ctl`, and the origin the carrier reports wins
+/// over an `origin` an intent carries. That is the ticket's rule made mechanical — a cursor is named by the hand that
+/// moved it, so one remote cannot move another's pointer by typing its name.
+///
+/// `None` is a caller with no carrier: the pointer's own handlers, a scene's script, a test. Those may say which
+/// origin they mean, which is what #205's per-client cursors are.
+pub fn apply_by(
+    state: &mut State,
+    intent: Intent,
+    hand: Option<crate::ui::Origin>,
+) -> Result<Applied, Refused> {
     // **A viewer does not change the wall** (#204): it asks its authority, and answers `changed: false` — which is the
     // truth, because no pixel moved. The change arrives later as a `Scene`, and until it does the pending intent is a
     // request rather than a fact. Every handler comes through here (#170, #173), so this is the only place that has to
@@ -798,11 +819,11 @@ pub fn apply(state: &mut State, intent: Intent) -> Result<Applied, Refused> {
             ui::menu_choose(state)
         }
         Intent::CursorMove { at, origin } => {
-            state.cursor_move(origin.unwrap_or_default(), at);
+            state.cursor_move(hand.or(origin).unwrap_or_default(), at);
             true
         }
         Intent::CursorPress { origin } => {
-            let origin = origin.unwrap_or_default();
+            let origin = hand.or(origin).unwrap_or_default();
             if !state.cursors.contains_key(&origin) {
                 // Nothing to press with: a client must point before it can press, and guessing a point would be
                 // the wall inventing input nobody gave it.
@@ -812,7 +833,7 @@ pub fn apply(state: &mut State, intent: Intent) -> Result<Applied, Refused> {
             true
         }
         Intent::CursorRelease { origin } => {
-            let origin = origin.unwrap_or_default();
+            let origin = hand.or(origin).unwrap_or_default();
             let Some(cursor) = state.cursors.get(&origin).copied() else {
                 return Err(Refused("the cursor has not been placed"));
             };

@@ -126,7 +126,10 @@ apart retries the wrong one forever.
 - **The phone's framework, design and identity provider** — not this repository's business, and not decided here.
 - **Whether the relay is Minos or a separate deployment service.** The wall's side of the contract is the same either
   way, which is why it can be built first.
-- **Whether two remotes may be paired at once.** The cursor question is answered by ADR-0006 (per-`origin`); the one
-  that remains is who wins a refusal when two clients ask for contradictory things at once — the authority applies them
-  in order, and the second is refused or wins, which a fleet makes a rule rather than a coincidence.
+- **Whether two remotes may be paired at once.** The cursor question is answered by ADR-0006 (per-`origin`), and the
+  one that remained — who wins when two clients ask for contradictory things at once — is answered by #222 and written
+  in [`control.md`](control.md#two-remotes-at-one-wall-222): the wall's one queue applies them in **arrival order**, a
+  premise another client has already taken away is a `rule` and not a `busy`, a carrier that hangs up takes its cursor
+  with it, and a cursor's origin is the device's name. What is still open is the phone's own screen for two devices,
+  which is [#193](https://github.com/edwardmanhattan/arcons-cc/issues/193)'s.
 - **Anything about the picture.** If that changes it is a different epic, and it starts with a codec.
