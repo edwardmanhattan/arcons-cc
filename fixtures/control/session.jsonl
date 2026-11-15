@@ -80,3 +80,9 @@
 {"send":{"intent":{"pane":1,"verb":"pane.teleport"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"unknown verb"}}
 {"send":[],"expect":{"kind":"input","ok":false,"v":1,"why":"a request is a JSON object"}}
 {"send":"not json","expect":{"kind":"input","ok":false,"v":1,"why":"not JSON"}}
+{"send":{"intent":{"code":"481902","name":"phone","verb":"pair.claim"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"no pairing is open"}}
+{"send":{"intent":{"verb":"pair.begin"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"code":"000000","name":"phone","verb":"pair.claim"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"that code is not the code"}}
+{"send":{"intent":{"code":481902,"name":"phone","verb":"pair.claim"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"code\" is the six digits on the wall"}}
+{"send":{"intent":{"code":"481902","name":"   ","verb":"pair.claim"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"name\" is a device name"}}
+{"send":{"intent":{"name":"nobody","verb":"pair.forget"},"v":1},"expect":{"changed":false,"ok":true,"v":1}}

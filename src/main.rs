@@ -342,6 +342,11 @@ fn main() -> ExitCode {
                 if outcome == arcons_cc::control::ctl::Outcome::Unchanged {
                     println!("unchanged");
                 }
+                // **A device key is the one thing a `ctl` prints for a script to keep** (#194): the socket is the
+                // local credential, so the caller is the operator at the wall. Nothing else goes to stdout.
+                if let arcons_cc::control::ctl::Outcome::Paired(key) = &outcome {
+                    println!("{key}");
+                }
                 ExitCode::from(outcome.code())
             }
             // A refused intent and a wall that is not there are both failures a caller acts on; the reason

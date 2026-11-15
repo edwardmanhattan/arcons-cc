@@ -197,6 +197,16 @@ const NOT_PROVOKABLE: &[(&str, &str)] = &[
         "the wall has stopped",
         "the wall went away — a transport failure is not a request a client sends",
     ),
+    (
+        "that device is already paired",
+        "the only way to reach it is a second claim against a name the first claim added, and a successful \
+         claim's answer carries the device key (`INV-08`): a corpus that recorded one would put a key in the \
+         tree. The unit test drives it instead (#194)",
+    ),
+    (
+        "the wall has no source of chance",
+        "the operating system's entropy source failing is not something a request can cause (#194)",
+    ),
 ];
 
 /// **Every refusal a client can provoke is in the corpus**, and every one the corpus records carries the

@@ -29,6 +29,9 @@ a verb.
 
 {"v": 1, "read": "wall"}
 {"v": 1, "ok": true, "wall": { … }}
+
+{"v": 1, "intent": {"verb": "pair.claim", "code": "481902", "name": "phone"}}
+{"v": 1, "ok": true, "paired": {"name": "phone", "key": "…64 hex…"}}
 ```
 
 **One or the other, never both**: a line that changed the wall and read it at once could not say which answer the
@@ -88,6 +91,9 @@ field marked **required** is a refusal when it is missing.
 | `cursor.move` | `at` | puts the **client's cursor** at `[x, y]` in the picture panel's points, and starts its fade (#167) |
 | `cursor.press` | — | presses where the cursor is: the hull under it (its card, and that pane's keys), or the pane it is over (the keys and a cleared card). A press outside every pane, or before `cursor.move`, is refused |
 | `cursor.release` | — | releases; the cursor fades from here |
+| `pair.begin` | — | **draws six digits on the wall for two minutes** (#194), replacing any open code. The digits are a picture for the room and are **never in the answer**: a client that could read its own pairing code could pair itself. A capture draws a code without writing anything, and a wall's digits are a function of its frame clock there (`INV-11`) |
+| `pair.claim` | `code`, `name` | **a phone pairs**: `devices.toml` gains the **SHA-256 of a fresh 32-byte key**, the name and when, and the key travels back in `paired`, once. The code is spent, so a second claim needs its own `pair.begin`. `no pairing is open` (nothing begun, the two minutes ran out, or the code was spent), `that code is not the code`, `that device is already paired` |
+| `pair.forget` | `name` | **revokes a device**: its row goes. A name that is not there changes nothing — a revocation is a deletion, not a rule to refuse |
 | `surface.settings` | — | opens the settings sheet (#82) |
 | `surface.close` | — | dismisses **one** surface, in the ladder Escape walks: the waterfall, then the menu, then the interaction, then the maximised pane, then the newsroom's detail, then the selection (#140) |
 
@@ -99,7 +105,8 @@ field marked **required** is a refusal when it is missing.
 | `workspace`, `index` | a workspace index, from 0, in chip order | `1` |
 | `unit` | a hull's id, or `null` | `512345` |
 | `target` | `{"pane": 2}` or `{"workspace": 1}` | |
-| `name` | a string, or `null` to clear | `"Straits watch"` |
+| `name` | a string, or `null` to clear. For `pair.claim` and `pair.forget` it is a **device name**, which is not blank | `"Straits watch"` |
+| `code` | the six digits `pair.begin` drew, as a string | `"481902"` |
 | `at` | `[x, y]`. For `pane.split_at`, the pane's **frame** pixels; for `cursor.move`, the **picture panel's** points | `[420.0, 260.0]` |
 | `onto`, `other` | a pane id, the other end of a drop or of a border | `3` |
 | `edge` | which slot of `onto` a drop means: `left`, `right`, `top`, `bottom` (a re-tile) or `centre` (a swap) | `"top"` |
@@ -391,6 +398,26 @@ Two things this is not: it is not the OS pointer (a hand and a remote can point 
 fine), and it is not a renderer's cursor (it lives in the picture panel's space, which is where panes and markers
 are drawn, not over the header).
 
+## Pairing
+
+A phone is paired the way a device is paired by people standing in the same room (`docs/mobile-remote.md`, decision 3).
+The **code lives on the wall, not on the wire**: `pair.begin` answers `{"ok": true, "changed": true}` and the six digits
+are drawn on the screen for **two minutes**; the phone sends them back with a name in `pair.claim`.
+
+```sh
+arcons-cc ctl pair begin                    # the wall draws PAIR 481 902
+arcons-cc ctl pair claim 481902 phone       # prints the device key, once
+arcons-cc ctl pair forget phone             # the row goes
+```
+
+What the wall keeps is `$XDG_CONFIG_HOME/arcons-cc/devices.toml` — **a name, the SHA-256 of the key, and when** —
+mode 0600, written by the same atomic rename `layout.toml` uses, on a thread (`INV-05`). The key itself is never in
+that file, never in a log line and never in the wall's state (`INV-08`): it is made at the claim, handed to the client
+that proved it was in the room, and that is the only copy. A leaked `devices.toml` is a list of names.
+
+A capture never pairs: `pair.begin` is an intent a scene may send (so the code is a picture a test can take), and a
+headless run reads no `devices.toml` and writes none (`INV-11`, the `layout.toml` rule applied to its sibling).
+
 ## The CLI
 
 `arcons-cc ctl` is the second client: it builds one intent, sends it, prints the answer, and exits with a code a
@@ -405,6 +432,7 @@ arcons-cc ctl pane drop 3 2 left            # land pane 3 on pane 2's left half
 arcons-cc ctl pane resize 2 3 0.58          # move the gutter between them to 58%
 arcons-cc ctl map camera 2 -6.108,106.91,11
 arcons-cc ctl surface close
+arcons-cc ctl pair claim 481902 phone  # prints the device key, once, for a script to keep
 arcons-cc ctl wall                    # the projection, as JSON
 arcons-cc ctl pane close              # the pane that has the keys, read from `wall` first
 ```

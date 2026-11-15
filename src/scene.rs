@@ -1559,7 +1559,7 @@ pub fn apply_due_intents(state: &mut State, now: f64) -> bool {
         let result = crate::control::apply(state, intent);
         state.set_frame_clock(clock);
         match result {
-            Ok(applied) => changed |= applied.0,
+            Ok(applied) => changed |= applied.changed(),
             // A refused step is printed and the script goes on: a capture whose wall did not reach the state the
             // script meant differs from its golden, and the log says which step refused and why.
             Err(why) => eprintln!(

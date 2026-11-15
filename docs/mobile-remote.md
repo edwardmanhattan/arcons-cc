@@ -28,6 +28,7 @@ the last one is deliberate:
 | walks a menu and picks a row | `menu.focus`, `menu.submenu`, `menu.choose` (#164) | yes |
 | presses a thing it can name but not see | `cursor.move`, `cursor.press`, `cursor.release` (#167) | yes |
 | learns *what* a pane is looking at | the projection: a pane's `title`, `kind`, `camera`, `selected` | yes |
+| is paired in the room | `pair.begin`, `pair.claim`, `pair.forget` (#194) — a code on the wall, a hashed key in `devices.toml` | yes, over the local socket |
 | reaches the wall from another machine | **a network transport** | **no, on purpose** |
 
 The wire is one JSON object per line, in and out: a request is a verb with its fields, and the answer is either

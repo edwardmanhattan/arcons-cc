@@ -126,6 +126,11 @@ pub fn wall() -> Result<State, String> {
     let steps: Vec<Value> = serde_json::from_str(&text)
         .map_err(|error| format!("{} is not a list of steps: {error}", path.display()))?;
     let mut state = State::default();
+    // **A recording is headless** (`INV-11`): it binds no socket, writes no `devices.toml`, and draws its
+    // pairing code from the frame clock instead of the OS — so `pair.begin`'s answer, and a wrong code's,
+    // are the same bytes on every machine (#194, #224). A random code would make the corpus flake one run
+    // in a million, and the *right* guess would write a device key into the tree.
+    state.headless = true;
     for (index, step) in steps.iter().enumerate() {
         if step.get("at").and_then(Value::as_f64).is_none() {
             return Err(format!(
@@ -305,6 +310,25 @@ pub fn exchanges() -> Vec<Request> {
         send(json!({ "v": 1, "intent": { "verb": "pane.teleport", "pane": 1 } })),
         send(json!([])),
         send(json!("not json")),
+        // ---- pairing (#194): the code, the claim, and the three refusals a client can earn without a key
+        //
+        // The order is the wall's: a claim before anything is open, then the code on the wall, then a wrong
+        // guess, then two malformed claims, then a forget that removes nothing. **A successful claim is not
+        // recorded**: its answer carries the device key, and a key never enters the tree (`INV-08`).
+        send(
+            json!({ "v": 1, "intent": { "verb": "pair.claim", "code": "481902", "name": "phone" } }),
+        ),
+        send(json!({ "v": 1, "intent": { "verb": "pair.begin" } })),
+        send(
+            json!({ "v": 1, "intent": { "verb": "pair.claim", "code": "000000", "name": "phone" } }),
+        ),
+        send(
+            json!({ "v": 1, "intent": { "verb": "pair.claim", "code": 481902, "name": "phone" } }),
+        ),
+        send(
+            json!({ "v": 1, "intent": { "verb": "pair.claim", "code": "481902", "name": "   " } }),
+        ),
+        send(json!({ "v": 1, "intent": { "verb": "pair.forget", "name": "nobody" } })),
     ]
 }
 
