@@ -698,7 +698,15 @@ impl Layout {
                 target,
                 side,
             } => {
-                if dragged == target || self.len() < 2 || !self.contains(dragged) {
+                // **A refused drop moves nothing** (#219): the target is checked before the dragged
+                // pane is collapsed out, because a target in another workspace (or no pane at all) would
+                // otherwise close the dragged pane and then fail to land it — half a gesture applied,
+                // which is the one outcome the rule forbids. Found by the exchange corpus (#224).
+                if dragged == target
+                    || self.len() < 2
+                    || !self.contains(dragged)
+                    || !self.contains(target)
+                {
                     return false;
                 }
                 // Collapse the dragged pane out first, then split the target it lands on. The other
@@ -1750,6 +1758,17 @@ mod tests {
             side: Side::Left
         }));
         assert_eq!(layout, untouched);
+        // A target this tiling does not hold — a pane in another workspace — is the same refusal, and
+        // must not collapse the dragged pane on its way to failing.
+        assert!(!layout.apply(Drop::Retile {
+            dragged: a,
+            target: b + 100,
+            side: Side::Left
+        }));
+        assert_eq!(
+            layout, untouched,
+            "a drop onto a pane this tiling does not hold must leave every pane where it was (#219)"
+        );
     }
 
     #[test]

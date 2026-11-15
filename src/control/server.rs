@@ -24,7 +24,7 @@ use super::{Refused, SOCKET_MODE};
 ///
 /// A wall mid-frame is a wall that will answer in a frame; a wall that took five seconds is a wall with a
 /// problem, and a client hanging on a socket for ever cannot tell that from a slow one.
-const ANSWER_WITHIN: Duration = Duration::from_secs(5);
+pub(super) const ANSWER_WITHIN: Duration = Duration::from_secs(5);
 
 /// **One parsed request, waiting for the UI thread.** The reply channel is how the listener says the answer
 /// back to the client without ever touching the wall itself.
@@ -198,7 +198,7 @@ fn serve_one(stream: UnixStream, tx: &Sender<Job>, stop: &AtomicBool) -> std::io
 /// This is the whole of the plane's behaviour — read a line, hand it to the UI thread, write the answer back — and it
 /// knows the transport only as [`super::carrier::Carrier`]. A relay (#196) and a viewer's connection (#202) reuse it,
 /// so there is one vocabulary, one refusal path and one place that could break `INV-05`.
-fn serve_session(
+pub(super) fn serve_session(
     mut carrier: impl super::carrier::Carrier,
     tx: &Sender<Job>,
     stop: &AtomicBool,

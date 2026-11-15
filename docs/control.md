@@ -270,6 +270,27 @@ is one vocabulary, one refusal path and one place that could break `INV-05`.
 The unix socket stays what it is: the local credential, one client at a time, no token. A carrier adds a way to reach the
 same loop; it does not add a second way to change the wall.
 
+## The corpus a client replays (#224)
+
+This document is checked against the code, and it cannot see a client written in another language. So the
+answers themselves are **recorded**: `fixtures/control/session.jsonl` is one exchange per line,
+`{"send": {…}, "expect": {…}}`, where `send` is the request as a client sends it and `expect` is the wall's
+answer **verbatim**. It carries every verb below at least once, every refusal a client can provoke, a
+`read: "wall"` before a change and after one, and one request at a version the wall does not speak.
+
+```sh
+cargo run -- --record                              # rewrite the corpus from this wall
+scripts/conformance.sh fixtures/control/session.jsonl   # replay it: print every answer, exit 1 on the first difference
+cargo test --test control_corpus                   # the gate's half: every pair is what the wall answers today
+```
+
+The file is **recorded, never written by hand**: a setup script in `fixtures/intents/` builds the wall
+through `control::apply`, and the exchanges go through the wall's own session loop over an in-memory
+carrier — the door the socket uses. A client that replays the file and gets the same lines agrees with the
+wall about the protocol; a change to a verb or a refusal leaves the corpus red until a human re-records it
+and reads the diff. A `watch` stream is deliberately not in it: a coalesced publish is a race, and a race is
+not a fixture.
+
 ## The scene: the whole arrangement (#201)
 
 `{"v": 1, "read": "wall"}` is the projection — small, for a client that needs to know what the wall is doing. A

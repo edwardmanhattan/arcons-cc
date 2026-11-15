@@ -131,6 +131,13 @@ impl Peer {
         self.from_wall.recv().ok()
     }
 
+    /// Take a line the wall has already written, without waiting. The corpus driver needs it because the
+    /// session loop answers a line it cannot parse **itself** and hands the wall only the ones it can, so a
+    /// driver waiting on one channel or the other has to look at both.
+    pub fn try_recv(&self) -> Option<String> {
+        self.from_wall.try_recv().ok()
+    }
+
     /// Take the next line, waiting at most `within`.
     pub fn recv_within(&self, within: std::time::Duration) -> Option<String> {
         self.from_wall.recv_timeout(within).ok()

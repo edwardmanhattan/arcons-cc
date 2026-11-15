@@ -49,8 +49,9 @@ cargo run -- --self-check       # what is configured, what is missing (exit 2 if
 cargo run -- --window-size 1920x1080
 cargo run -- --fullscreen
 cargo run -- --snap out/frame.png   # Rune's headless snapshot; #9 wraps this in scripts/capture.sh
-cargo run -- --record               # rewrite fixtures/control/tiling/: the geometry a client mirrors (#220)
+cargo run -- --record               # rewrite fixtures/control/: the geometry and the answers a client mirrors (#220, #224)
 cargo run -- ctl pane focus 2      # drive a running wall from another terminal (docs/control.md)
+scripts/conformance.sh fixtures/control/session.jsonl   # replay the recorded exchanges (#224)
 ```
 
 ## Rules that are not preferences

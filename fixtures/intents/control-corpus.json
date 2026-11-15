@@ -1,0 +1,6 @@
+[
+  {"at": 0.1, "intent": {"verb": "pane.split", "pane": 1, "content": {"kind": "map"}}},
+  {"at": 0.2, "intent": {"verb": "pane.split", "pane": 2, "content": {"kind": "newsroom"}}},
+  {"at": 0.3, "intent": {"verb": "workspace.from_pane", "pane": 1}},
+  {"at": 0.4, "intent": {"verb": "workspace.focus", "index": 0}}
+]
