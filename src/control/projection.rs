@@ -19,6 +19,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::layout::Axis;
+use crate::ui::view::{Dir, Shape};
 use crate::ui::{PaneContent, State, ViewId};
 
 /// The wall, as a controller sees it.
@@ -45,6 +47,9 @@ pub struct WorkspaceView {
     pub focused: Option<ViewId>,
     /// Whether it holds no tiling at all — #141's legal, empty workspace.
     pub empty: bool,
+    /// **The arrangement** (#218): how this workspace's panes tile, with **pane ids** for leaves. `null` for a
+    /// workspace the wall cannot tile — an empty one, which a client draws as a row, exactly as the wall does.
+    pub tiling: Option<Tiling>,
     pub panes: Vec<PaneView>,
 }
 
@@ -83,6 +88,51 @@ pub struct CameraView {
     pub zoom: f64,
 }
 
+/// **The arrangement**, a workspace's tiling (#218).
+///
+/// The **same spelling** `layout.toml` and the `Scene` use — `split`, `ratio`, `a`, `b`, `pane` — so a reader that
+/// parses one parses the other, with one deliberate difference: a leaf is a **pane id**, the integer every intent
+/// names, and not an index into the workspace's pane list.
+///
+/// The difference is the whole type. A file is written and read whole, so an index is a shorthand; a client holds a
+/// projection across changes, and after a `pane.close` every index past the gap names a different pane — a phone
+/// would draw the right arrangement of the wrong panes. Indices never travel.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Tiling {
+    /// One pane, by the id every intent about a pane names.
+    Leaf { pane: ViewId },
+    /// Two nodes beside each other (`side`: `a` left, `b` right) or one above the other (`stack`: `a` on top).
+    ///
+    /// `ratio` is **`a`'s share of the split** and it is always present: a file may omit it and mean one half, a
+    /// projection always says what it means (`INV-01`'s rule, where an absence would be a guess).
+    Split {
+        split: Axis,
+        ratio: f32,
+        a: Box<Tiling>,
+        b: Box<Tiling>,
+    },
+}
+
+/// A layout's shape, in the wire's terms: leaves stay **ids**.
+///
+/// The wall's own tree is the truth — `Layout::shape` — and this is the one spelling of it a client may see. It
+/// cannot invent an arrangement `layout.toml` would not write, because both are read from the same tree.
+pub(crate) fn tiling_of(shape: &Shape) -> Tiling {
+    match shape {
+        Shape::Leaf(id) => Tiling::Leaf { pane: *id },
+        Shape::Split { dir, ratio, a, b } => Tiling::Split {
+            split: match dir {
+                Dir::Horizontal => Axis::Side,
+                Dir::Vertical => Axis::Stack,
+            },
+            ratio: *ratio,
+            a: Box::new(tiling_of(a)),
+            b: Box::new(tiling_of(b)),
+        },
+    }
+}
+
 /// **The wall as a projection**, from the state that draws it.
 ///
 /// One function, reading `State` and nothing else: no clock, no picture, no thread. That is what makes it safe to
@@ -102,6 +152,14 @@ pub fn of(state: &State) -> Wall {
                 name: workspace.name.clone(),
                 focused: workspace.layout.as_ref().map(|layout| layout.focused()),
                 empty: workspace.layout.is_none(),
+                // **The arrangement, from the wall's own tree** (#218): a workspace holds no layout when it is
+                // empty (#141), and that is `null` — never an empty tree, which would be a wall claiming to tile
+                // nothing.
+                tiling: workspace
+                    .layout
+                    .as_ref()
+                    .and_then(|layout| layout.shape())
+                    .map(|shape| tiling_of(&shape)),
                 panes: workspace
                     .panes
                     .iter()
@@ -136,6 +194,7 @@ pub fn of(state: &State) -> Wall {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::view;
 
     /// **A pane that draws no map has no camera**, and says so — not a zero, and not a missing field (`INV-01`).
     #[test]
@@ -250,6 +309,97 @@ mod tests {
             keys,
             ["active", "focused", "maximised", "workspaces"],
             "the top-level shape is the document's shape"
+        );
+    }
+
+    /// **The arrangement travels by pane id** (#218).
+    ///
+    /// A client holds a projection across changes. After a `pane.close`, an index into the pane list names a
+    /// different pane — so a phone drawing from indices would show the right arrangement of the wrong panes. The
+    /// leaves are the ids every intent names, and the axes are the file's own words, so one reader parses both.
+    #[test]
+    fn the_arrangement_names_panes_and_not_their_slots() {
+        let mut state = State::default();
+        let a = state.focused();
+        let camera = state.camera_of(a);
+        let b = state.split_pane(a, camera).expect("a second pane");
+        let c = state
+            .split_pane_as(b, camera, PaneContent::Newsroom)
+            .expect("a third pane");
+        // **The shape is set here, not inherited** from whichever edge a split happens to take: the axes are the
+        // claim, and a test that hopes for them fails on another window size.
+        let shape = view::Shape::Split {
+            dir: view::Dir::Horizontal,
+            ratio: 0.6,
+            a: Box::new(view::Shape::Leaf(a)),
+            b: Box::new(view::Shape::Split {
+                dir: view::Dir::Vertical,
+                ratio: 0.5,
+                a: Box::new(view::Shape::Leaf(b)),
+                b: Box::new(view::Shape::Leaf(c)),
+            }),
+        };
+        *state.layout_mut().expect("the wall has a layout") =
+            view::Layout::from_shape(shape).expect("a tiling of the three panes it has");
+
+        let wall = of(&state);
+        assert_eq!(
+            wall.workspaces[0].tiling,
+            Some(Tiling::Split {
+                split: Axis::Side,
+                ratio: 0.6,
+                a: Box::new(Tiling::Leaf { pane: a }),
+                b: Box::new(Tiling::Split {
+                    split: Axis::Stack,
+                    ratio: 0.5,
+                    a: Box::new(Tiling::Leaf { pane: b }),
+                    b: Box::new(Tiling::Leaf { pane: c }),
+                }),
+            }),
+            "the tree the wall tiles by, with the ids a client's intents name"
+        );
+
+        // Every pane appears exactly once: a tiling is a partition of the panes the workspace has.
+        assert_eq!(
+            wall.workspaces[0]
+                .panes
+                .iter()
+                .map(|pane| pane.id)
+                .collect::<Vec<_>>(),
+            vec![a, b, c],
+            "a leaf that named a pane twice, or not at all, would not be this workspace's tiling"
+        );
+
+        // And on the wire it is the file's own spelling, so a scene's reader parses a projection.
+        let json = serde_json::to_value(wall.workspaces[0].tiling.as_ref().expect("the tiling"))
+            .expect("serializable");
+        assert_eq!(
+            json["split"],
+            serde_json::json!("side"),
+            "`side` is `a` then `b`, left to right"
+        );
+        assert_eq!(
+            json["a"],
+            serde_json::json!({ "pane": a }),
+            "a leaf is an id and nothing else"
+        );
+        assert_eq!(json["b"]["split"], serde_json::json!("stack"));
+        assert_eq!(json["b"]["ratio"], serde_json::json!(0.5));
+        assert!(
+            json["ratio"].is_number(),
+            "a split always says its share: there is no default on the wire (INV-01)"
+        );
+
+        // An empty workspace is #141's legal one — no tiling to draw, said as `null` and not as an empty tree.
+        assert!(
+            wall.workspaces[1].empty,
+            "workspace 2 holds no pane and is still on the wall"
+        );
+        assert_eq!(wall.workspaces[1].tiling, None);
+        assert_eq!(
+            serde_json::to_value(&wall).expect("serializable")["workspaces"][1]["tiling"],
+            serde_json::Value::Null,
+            "a client draws a row for a workspace with no tiling: null, not an empty tree"
         );
     }
 }

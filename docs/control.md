@@ -112,7 +112,11 @@ It is the read half of the plane, and the first thing a client should ask for.
 | `active` | the workspace on screen, as an index into `workspaces` |
 | `focused` | the pane with the keys, or `null` when the workspace on screen holds none |
 | `maximised` | the pane drawn over the wall (#85), or `null` |
-| `workspaces[]` | in chip order: `name`, `focused` (the pane it would come back to), `empty`, `panes[]` |
+| `workspaces[].name` | what the chip draws: the operator's name, or `Workspace N` |
+| `workspaces[].focused` | the pane it would come back to, or `null` |
+| `workspaces[].empty` | whether it holds no tiling at all — #141's legal, empty workspace |
+| `workspaces[].tiling` | **the arrangement** (#218): the tree below, or `null` |
+| `workspaces[].panes` | its panes, described by the rows below |
 | `panes[].id` | the pane's id — the thing every intent about a pane names |
 | `panes[].kind` | `map`, `tree` or `newsroom` (#116, #136) |
 | `panes[].title` | what the name plate draws: the operator's name, or the pane's number |
@@ -123,6 +127,28 @@ It is the read half of the plane, and the first thing a client should ask for.
 **Absence is not zero here too** (`INV-01`): a newsroom pane's camera is `null` rather than `0, 0, 0`; a workspace
 that holds no pane is `empty: true` and still in the list with its name, because closing a workspace's last pane
 leaves it on the wall (#141); a pane with no card says `selected: null`.
+
+### The arrangement, as a tree of pane ids (#218)
+
+`workspaces[].tiling` is **how the panes tile** — what a client needs to draw the wall's shape instead of a list of
+it. The spelling is `layout.toml`'s and the `Scene`'s (`split`, `ratio`, `a`, `b`, `pane`), with one deliberate
+difference: **a leaf is a pane id**, the integer every intent above names, and not an index into `panes`. A client
+holds a projection across changes; after a `pane.close` an index would name a different pane, and a phone would draw
+the right arrangement of the wrong panes.
+
+```json
+"tiling": { "split": "side", "ratio": 0.55,
+            "a": { "pane": 3 },
+            "b": { "split": "stack", "ratio": 0.5,
+                   "a": { "pane": 4 }, "b": { "pane": 7 } } }
+```
+
+`split` is `side` (`a` left, `b` right) or `stack` (`a` on top); `ratio` is **`a`'s share** and is always present —
+a file may omit it and mean one half, a projection always says what it means. Every pane appears exactly once: a
+tiling is a partition of the panes the workspace has.
+
+`null` is a workspace the wall cannot tile — an empty one — and a client draws it as a **row**, exactly as the wall
+does. Not an empty tree, and not an error.
 
 **What it does not carry, on purpose** (`ADR-0005` decision 7): the fleet, the fixes, the ages, the cards, the
 story text, the chain of command, the frames or the pixels. A client that could read where the hulls are would have

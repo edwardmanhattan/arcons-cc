@@ -690,6 +690,41 @@ fn the_projection_in_the_document_is_the_projection_the_code_sends() {
             "docs/control.md does not document `panes[].{key}`, which the projection sends (#181)"
         );
     }
+    // And the workspace's own fields: a client asks what is in a workspace before it asks what is in a pane, and the
+    // arrangement (#218) is one of them.
+    let workspace = &wall["workspaces"][0];
+    for key in keys(workspace) {
+        assert!(
+            doc.contains(&format!("`workspaces[].{key}`")),
+            "docs/control.md does not document `workspaces[].{key}`, which the projection sends (#218)"
+        );
+    }
+    // **And back**: a field the document spells as a projection field, which the code does not send. Only the table's
+    // own rows are read, so a shell example that mentions `.panes[].kind` is not mistaken for a claim about the wire.
+    let mut documented = 0;
+    for line in doc.lines().filter(|line| line.starts_with("| `")) {
+        for (prefix, sent) in [("workspaces[].", keys(workspace)), ("panes[].", keys(pane))] {
+            let Some(at) = line.find(prefix) else {
+                continue;
+            };
+            let spelled: String = line[at + prefix.len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if spelled.is_empty() {
+                continue;
+            }
+            documented += 1;
+            assert!(
+                sent.contains(&spelled),
+                "docs/control.md documents `{prefix}{spelled}`, which the projection does not send (#218)"
+            );
+        }
+    }
+    assert!(
+        documented >= 11,
+        "the projection's fields are documented as a table, one row each — {documented} rows found"
+    );
     // And the read itself, so a reader finds the verb and not only its fields.
     assert!(
         doc.contains(r#"{"v": 1, "read": "wall"}"#),
