@@ -674,6 +674,29 @@ fn panes_drag(state: &mut State) {
     }
 }
 
+/// The `panes-drop` scene (#219): **a pane carried to another pane's edge**, and landed there.
+///
+/// The wall is `panes`'s; the gesture is `fixtures/scripts/panes-drop.json`, which presses the left pane's handle and
+/// drags it into the top band of the top-right pane. So the picture is `Layout::apply`'s landing reached the way an
+/// operator reaches it — the release handler's own `drop_for` → `apply_drop` — and not a layout written by hand.
+///
+/// Its twin is `panes-drop-remote`, which reaches the same wall through `pane.drop` alone; the two goldens are one
+/// file (`fixtures/golden/panes-drop-remote.png` is `panes-drop.png`, and a test compares the bytes), so a drop intent
+/// that computed its own layout is red here rather than two pictures quietly drifting apart.
+fn panes_drop(state: &mut State) {
+    panes(state);
+}
+
+/// The `panes-drop-remote` scene (#219): **the pointer's twin, driven only by intents**.
+///
+/// `load`'s panes and nothing else, then `fixtures/intents/panes-drop-remote.json` — one `pane.drop` between two
+/// frames, through `control::apply`. It is the same wall `panes-drop` reaches with a hand on the handle, and the
+/// golden is the same file, which is the claim: a slot a client can name and a drag a hand makes are one landing.
+fn panes_drop_remote(state: &mut State) {
+    panes(state);
+    state.pending_intents = load_intents("panes-drop-remote");
+}
+
 /// One scene: a name and the function that builds its state.
 pub type Scene = (&'static str, fn(&mut State));
 
@@ -1622,6 +1645,10 @@ pub const SCENES: &[Scene] = &[
     ("panes-chrome", panes_chrome),
     ("panes-drag", panes_drag),
     ("panes-pan", panes_pan),
+    // **A drop, by a pointer and by an intent** (#219): the released pane lands where `Layout::apply` puts it, and the
+    // client-driven twin's golden is that same file.
+    ("panes-drop", panes_drop),
+    ("panes-drop-remote", panes_drop_remote),
     ("panes-menu", panes_menu),
     ("panes-gaps", panes_gaps),
     ("panes-gap-resize", panes_gap_resize),
@@ -1836,6 +1863,62 @@ mod tests {
         );
     }
 
+    /// **A drop the script asks for is the landing the picture shows** (#219): `panes-drop-remote` is the `panes` wall
+    /// with pane 1 landed on pane 2's top edge, so the three panes stand one above another and the pane that was
+    /// dropped has the keys. The pixel half of the claim is the golden, which is `panes-drop`'s — the wall a hand
+    /// reaches with the same gesture.
+    #[test]
+    fn the_drop_twin_lands_the_pane_on_the_edge_its_script_names() {
+        let before = state_for("panes");
+        let after = state_for("panes-drop-remote");
+        assert_eq!(
+            after.pane_ids(),
+            before.pane_ids(),
+            "a drop moves the panes it names; it mints none and drops none"
+        );
+        // The ids are the script's: `fixtures/intents/panes-drop-remote.json` says 1 and 2, so the wall has them.
+        for id in [1_u32, 2] {
+            assert!(
+                after.pane(id).is_some(),
+                "the intent script names pane {id} and the scene's wall has no such pane"
+            );
+        }
+        let rect = |id: u32| {
+            after
+                .pane_rect(id)
+                .unwrap_or_else(|| panic!("pane {id} has a rectangle"))
+        };
+        let (dropped, target) = (rect(1), rect(2));
+        assert!(
+            dropped.bottom() <= target.y,
+            "pane 1 is at {dropped:?} and pane 2 at {target:?}: the script drops on the **top** edge, so the dropped \
+             pane is above the one it landed on — a `Layout::apply` that split the wrong way is red here"
+        );
+        assert!(
+            (dropped.w - target.w).abs() < 0.5,
+            "the two panes are the same width ({} against {}): a re-tile splits the target's cell rather than \
+             making a new column",
+            dropped.w,
+            target.w
+        );
+        assert_eq!(
+            after.focused(),
+            1,
+            "the pane that was dropped has the keys, as it does when a hand lifts it"
+        );
+        assert!(
+            !after.pending_intents.is_empty(),
+            "the twin's script loaded no steps: `fixtures/intents/panes-drop-remote.json` is the drop this scene is"
+        );
+        assert!(
+            after.pending_intents.len() == after.intents_applied,
+            "the script did not run to its end: {} of {} steps — a step that does not parse is a capture of a wall \
+             that never dropped anything",
+            after.intents_applied,
+            after.pending_intents.len()
+        );
+    }
+
     #[test]
     fn the_fixture_is_the_wire_shape_and_says_what_the_scenes_need() {
         let entries = fixture().expect("the fixture parses as the positions envelope");
@@ -2044,6 +2127,10 @@ mod tests {
                 // (`fixtures/scripts/panes-pan.json`), so it is also the only witness a dropped
                 // gesture has (#80).
                 "panes-pan",
+                // A pane dropped on another pane's edge (#219): the pointer's landing, and the same wall reached by
+                // `pane.drop` alone — two scenes, one golden.
+                "panes-drop",
+                "panes-drop-remote",
                 "panes-menu",
                 "panes-gaps",
                 // The gapped wall moved by a **pointer in the gutter**, so the gap is the handle and

@@ -46,7 +46,10 @@ OPTIONS:
     --self-check        check config, credential, login, REST, socket and map seed, and exit
                         with 0 ok · 1 config · 2 credential · 3 login · 4 REST · 5 socket · 6 seed
     --scenes            list the scenes a capture can render, one per line
-    --record            write fixtures/control/tiling/: the geometry another client must mirror (#220)
+    --record            write fixtures/control/: the geometry and the exchange corpus another client
+                        must mirror (#220, #224)
+    --conformance FILE  replay a recorded control corpus through this wall's session loop, and exit 1
+                        on the first answer that differs (scripts/conformance.sh calls this)
     --probe-map         render one map frame to a PNG with no window (needs --features map)
     --out PATH          where --probe-map writes (default out/probe.png)
     --probe-at L,L,Z    the camera to probe (default the wall's start camera)
@@ -73,10 +76,15 @@ pub enum Command {
     /// reads this rather than keeping its own list: a scene the gate does not render is a scene nothing
     /// checks, which is how `photo` spent ten days drawing the wrong thing behind a green gate (`#54`).
     Scenes,
-    /// **Record the tiling's geometry** (#220): the numbers and rectangles a client that is not this wall
-    /// has to reproduce, written to `fixtures/control/tiling/`. It is a `--record` run and not a capture:
-    /// nothing here reads the wall's arrangement, so the files are the same on every machine.
+    /// **Record the control plane's contract** (#220, #224): the tiling's numbers and rectangles, and the
+    /// exchange corpus a client that is not this wall has to reproduce, written to `fixtures/control/`. It is
+    /// a `--record` run and not a capture: nothing here reads the wall's arrangement, so the files are the
+    /// same on every machine.
     Record,
+    /// **Replay a recorded exchange corpus** (#224) through the wall's own session loop, printing what the
+    /// wall answered. `scripts/conformance.sh` wraps it so a client in another language has the same check
+    /// outside the gate.
+    Conformance(PathBuf),
     /// Check a capture: pixels with numbers, and the element tree for structure.
     Assert,
     /// Compare two captures within a stated tolerance, and exit 1 if the difference is a change rather
@@ -239,6 +247,12 @@ impl Args {
                 "--self-check" => args.command = Command::SelfCheck,
                 "--scenes" => args.command = Command::Scenes,
                 "--record" => args.command = Command::Record,
+                "--conformance" => {
+                    let value = argv
+                        .next()
+                        .ok_or("--conformance needs a corpus file, for example fixtures/control/session.jsonl")?;
+                    args.command = Command::Conformance(PathBuf::from(value));
+                }
                 "--probe-map" => args.command = Command::ProbeMap,
                 "--out" => {
                     let value = argv

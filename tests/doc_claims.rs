@@ -418,6 +418,45 @@ fn the_interaction_table_names_every_state() {
     );
 }
 
+/// The verbs a document's table rows name: the backticked `noun.verb` a row starts with.
+///
+/// A row may also start with a *value* — an environment variable (`ARCONS_AUTHORITY=/path`), a field
+/// (`panes[].id`) — and those are not things a client sends. One rule, so the reference and the notes that
+/// quote it are read the same way.
+fn verbs_in_table(doc: &str) -> Vec<String> {
+    let mut verbs: Vec<String> = Vec::new();
+    for line in doc.lines() {
+        // Only the table: prose may name a verb in passing, and a mention is not a promise.
+        if !line.starts_with("| `") {
+            continue;
+        }
+        // A verb is `noun.verb`. The projection's table (#181) also starts its rows with a backticked field,
+        // and `panes[].id` is a dotted field name, not a verb — the brackets are what tells them apart.
+        let Some(verb) = line.split('`').nth(1).filter(|verb| {
+            verb.contains('.')
+                && !verb.contains(' ')
+                && !verb.contains('[')
+                && !verb.contains(']')
+                && !verb.contains('=')
+                && !verb.contains('/')
+        }) else {
+            continue;
+        };
+        verbs.push(verb.to_string());
+    }
+    verbs
+}
+
+/// The section of `doc` under `heading`, up to the next `## `: the table a claim is about, and not the
+/// prose around it.
+fn section<'a>(doc: &'a str, heading: &str) -> &'a str {
+    let start = doc
+        .find(heading)
+        .unwrap_or_else(|| panic!("{heading:?} is not a heading of this document"));
+    let rest = &doc[start..];
+    &rest[..rest.find("\n## ").unwrap_or(rest.len())]
+}
+
 /// **`docs/control.md` is the vocabulary** (#165): every verb in `Intent::verb()` is documented, and the
 /// document names no verb the code does not answer to.
 ///
@@ -430,29 +469,7 @@ fn the_control_document_names_exactly_the_vocabulary() {
 
     let doc = read("docs/control.md");
     // The documented verbs are the backticked `noun.verb` names in the intents table.
-    let mut documented: Vec<String> = Vec::new();
-    for (index, line) in doc.lines().enumerate() {
-        // Only the table: prose may name a verb in passing, and a mention is not a promise.
-        if !line.starts_with("| `") {
-            continue;
-        }
-        // A verb is `noun.verb`. The projection's table (#181) also starts its rows with a backticked field, and
-        // `panes[].id` is a dotted field name, not a verb — the brackets are what tells them apart.
-        let Some(verb) = line.split('`').nth(1).filter(|verb| {
-            // A verb is `noun.verb`. A row may also start with a *value* — an environment variable
-            // (`ARCONS_AUTHORITY=/path`), a field (`panes[].id`) — and those are not things a client sends.
-            verb.contains('.')
-                && !verb.contains(' ')
-                && !verb.contains('[')
-                && !verb.contains(']')
-                && !verb.contains('=')
-                && !verb.contains('/')
-        }) else {
-            continue;
-        };
-        let _ = index;
-        documented.push(verb.to_string());
-    }
+    let documented = verbs_in_table(&doc);
 
     let code: Vec<&'static str> = arcons_cc::control::vocabulary()
         .iter()
@@ -534,6 +551,73 @@ fn the_mobile_note_names_only_verbs_the_wall_answers_to() {
         "docs/mobile-remote.md's table names {named} verbs, which is too few to be the table this claim is \
          about — did the table change shape? (#168)"
     );
+}
+
+/// **`docs/mobile-ui.md`'s verb table is a subset of `docs/control.md`'s** (#225): a note may not invent one.
+///
+/// The UI note is written *for* the screen, and a screen is where a verb nobody answers is easiest to introduce —
+/// a gesture that reads well and has no intent behind it. So the table is checked against the **reference** and
+/// against the **code**, and the two verbs its drag sends are the two #219 landed, not a spelling of them.
+///
+/// The reverse direction is not checked: the note deliberately does not name the verbs its screen never sends, and
+/// a note that had to list two dozen verbs to say one thing would be a second reference to keep true.
+#[test]
+fn the_mobile_ui_note_names_only_verbs_the_wall_answers_to() {
+    use arcons_cc::control::Intent;
+
+    let note = read("docs/mobile-ui.md");
+    let named = verbs_in_table(section(&note, "## The verbs it uses"));
+    assert!(
+        named.len() >= 7,
+        "docs/mobile-ui.md's verb table names {} verbs, which is too few to be a table — did it change shape? \
+         (#225)",
+        named.len()
+    );
+
+    let documented = verbs_in_table(&read("docs/control.md"));
+    let code: Vec<&'static str> = arcons_cc::control::vocabulary()
+        .iter()
+        .map(Intent::verb)
+        .collect();
+    for verb in &named {
+        assert!(
+            documented.contains(verb),
+            "docs/mobile-ui.md tells a phone's author to send `{verb}`, which docs/control.md does not document \
+             (#225): a note is not a second vocabulary, and a verb the reference never heard of is one the wall \
+             refuses. Documented: {documented:?}"
+        );
+        assert!(
+            code.contains(&verb.as_str()),
+            "docs/mobile-ui.md tells a phone's author to send `{verb}`, which no intent answers (#225): the \
+             vocabulary is {code:?}"
+        );
+    }
+
+    // **The gesture's verb is a verb that exists** — the point of #219, and the thing a note written before it
+    // would have had to invent.
+    for verb in ["pane.drop", "pane.resize"] {
+        assert!(
+            named.iter().any(|named| named == verb),
+            "docs/mobile-ui.md's verb table does not name `{verb}`: the drag and the gutter settle into those \
+             two, and a note that leaves the gesture without a verb is a note a client cannot build (#219, #225)"
+        );
+    }
+
+    // And the two the phone deliberately does not send, spelled out rather than left to be discovered: a note
+    // that is silent about what it refuses leaves the next author to try it.
+    for verb in [
+        "pane.split_at",
+        "cursor.move",
+        "cursor.press",
+        "cursor.release",
+    ] {
+        assert!(
+            named.iter().any(|named| named == verb),
+            "docs/mobile-ui.md does not name `{verb}` among the verbs it does not send (#225): a point in a \
+             pane's frame and a point in the picture are the two things a diagram cannot honestly make, and a \
+             note that omits them leaves a phone's author to discover it from a refusal"
+        );
+    }
 }
 
 /// **A viewer's read is documented** (#202): `read: "scene"` is what a second screen asks for, and the document says

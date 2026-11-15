@@ -10,7 +10,8 @@ records is the **state of the ground**: what the epic (#162) actually delivered,
 and what is still open. The mobile client's own epic is
 [#193](https://github.com/edwardmanhattan/arcons-cc/issues/193).
 
-The note is [issue #168](https://github.com/edwardmanhattan/arcons-cc/issues/168).
+The note is [issue #168](https://github.com/edwardmanhattan/arcons-cc/issues/168). **The screen is the next note**:
+[`mobile-ui.md`](mobile-ui.md) says what the phone draws, and what it refuses to draw (#225).
 
 ## What the wall already answers
 
@@ -23,6 +24,7 @@ the last one is deliberate:
 | switches workspace, picks a pane, closes one, closes all but one | `workspace.focus`, `pane.focus`, `pane.close`, `pane.close_others`, `workspace.close_others` | yes |
 | zooms, moves a camera, locks onto a hull | `map.camera`, `object.follow` (#169) | yes |
 | opens the chain of command, the newsroom, settings; makes a pane | `pane.open`, `surface.settings`, `pane.split` | yes |
+| lands a pane where another one is, and moves the gutter between two | `pane.drop`, `pane.resize` (#219) | yes |
 | walks a menu and picks a row | `menu.focus`, `menu.submenu`, `menu.choose` (#164) | yes |
 | presses a thing it can name but not see | `cursor.move`, `cursor.press`, `cursor.release` (#167) | yes |
 | learns *what* a pane is looking at | the projection: a pane's `title`, `kind`, `camera`, `selected` | yes |

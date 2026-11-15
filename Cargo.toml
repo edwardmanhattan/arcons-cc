@@ -49,7 +49,9 @@ tokio = { version = "1", features = ["rt", "time", "macros", "sync"] }
 toml = "0.8"
 
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `raw_value` keeps a recorded answer's bytes: a corpus line is compared **verbatim**, and a `Value`
+# round trip can move a float by one unit in the last place (#224).
+serde_json = { version = "1", features = ["raw_value"] }
 thiserror = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 tracing = "0.1"

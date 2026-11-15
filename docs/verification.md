@@ -131,7 +131,8 @@ into the cache: a capture then covers bytes → cache → marker, which is the r
 
 ```sh
 cargo run -- --scenes            # empty · picture · stale · card-open · photo · panes · panes-chrome
-                                 # panes-drag · panes-pan · panes-menu · panes-gaps · panes-gap-resize
+                                 # panes-drag · panes-pan · panes-drop · panes-drop-remote
+                                 # panes-menu · panes-gaps · panes-gap-resize
                                  # panes-named · panes-max · panes-cards · panes-range · objects
                                  # panes-filter · installations · settings · settings-dismiss
                                  # pane-menu · pane-tree · pane-tree-narrow · pane-tree-zoom
@@ -427,7 +428,20 @@ default tab and page — rather than copying the source's selection, filter or r
 never drawn on, and the only wall that needs it, because "Focus on new pane" is the only route to a second
 pane. The assertion checks the menu's box against `ui::menu_origin` and that it stays inside the picture.
 
-`panes-pan` is the only capture **driven by a pointer** (#80). `fixtures/scripts/panes-pan.json` presses
+`panes-drop` and `panes-drop-remote` are **one drop, two paths** (#219). The first is a wall reached by a hand:
+`fixtures/scripts/panes-drop.json` presses a pane's **handle** and drags it into the top band of the pane beside it, so
+the picture is the release handler's own `drop_for` → `apply_drop` → `Layout::apply` and not a layout written by hand.
+The second builds the same wall and reaches the same landing with one `pane.drop` from
+`fixtures/intents/panes-drop-remote.json`, applied between frames through `control::apply`. **Their goldens are one
+file, byte for byte** (`tests/scaffold.rs` compares the two), because the two paths must produce one picture: a drop
+intent that computed its own layout, or a script that missed the handle and left the wall undropped, is red there
+rather than two goldens drifting apart one `--update-goldens` at a time. `panes-drop-remote` is also in the tiled
+wall's marker arm, so the new tiling is asked for a marker per hull in **every** pane — a pane still drawing at a
+slot it no longer holds is a line here. Its picture is asserted against the **intent** half's state — as `panes-pan`
+is asserted against `panes` — because `state_for` does not replay a script: the wall the drag must reach is the wall
+`pane.drop` reaches, and a script that missed the handle draws the old tiling where the assertion expects the new one.
+
+`panes-pan` and `panes-drop` are the captures **driven by a pointer** (#80, #219). `fixtures/scripts/panes-pan.json` presses
 the border at 50% of the panel and drags it to 58% — the share `panes` sets in code — and the two captures
 are then the same picture to within a hair of a point. That matters because a whole class of bug is
 invisible to every other kind of test: a gesture that reaches no handler, a press landing on the wrong

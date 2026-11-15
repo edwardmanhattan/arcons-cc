@@ -75,6 +75,8 @@ field marked **required** is a refusal when it is missing.
 | `pane.split_at` | `pane`, `at` | the same, at a point in **that pane's frame** pixels — what the pane menu's `Focus on new pane` does, so the new pane shows the water that was clicked (#77). `the pane has no frame yet` (a map that has not drawn once) |
 | `workspace.from_pane` | `pane` | a workspace of its own holding a new pane of that kind and camera (#140). `no such pane` |
 | `pane.move` | `pane`, `workspace` | carries the pane — camera, thread, view, name, filter, frame — into that workspace (#140). `no such pane`, `no such workspace`, `the pane is already in that workspace`, `the tiling refused the pane` |
+| `pane.drop` | `pane`, `onto`, `edge` | **lands `pane` in `onto`'s slot** (#219): a side (`left`, `right`, `top`, `bottom`) re-tiles the target and the pane takes that half, `centre` swaps the two. Exactly the drop a pointer's release makes — `Layout::apply` through `State::apply_drop` — so the preview a client draws from the `tiling` it read is the wall's landing. `no such pane`, `the pane cannot be swapped with itself`, `the tiling refused the pane` (the two are in different workspaces, or the workspace on screen holds one pane), `"edge" is left, right, top, bottom or centre` |
+| `pane.resize` | `pane`, `other`, `ratio` | **moves the gutter between two neighbours to `ratio`** (#219) — the share the border's first side takes, the number `tiling` and `layout.toml` already carry — clamped to the tiling's range. The pair names the border, in either order. `no such pane`, `those panes are not neighbours` (no border separates them), `"ratio" is a share from 0.05 to 0.95` |
 | `pane.close_others` | — | closes every pane in the **workspace on screen** but the one with the keys (#166), one at a time through the close a menu row uses. Never a workspace the client cannot see. `no pane has the keys` (an empty workspace) |
 | `workspace.close_others` | — | closes every workspace but the one on screen (#166): the chips go, their panes go with them and join their map threads, and **the active workspace is never closed and never emptied** |
 | `pane.open` | `content` | a pane of that kind beside the focused one — the header's tree and newsroom controls (#116, #136), asking their first reads |
@@ -106,6 +108,9 @@ field marked **required** is a refusal when it is missing.
 | `name` | a string, or `null` to clear. For `pair.claim` and `pair.forget` it is a **device name**, which is not blank | `"Straits watch"` |
 | `code` | the six digits `pair.begin` drew, as a string | `"481902"` |
 | `at` | `[x, y]`. For `pane.split_at`, the pane's **frame** pixels; for `cursor.move`, the **picture panel's** points | `[420.0, 260.0]` |
+| `onto`, `other` | a pane id, the other end of a drop or of a border | `3` |
+| `edge` | which slot of `onto` a drop means: `left`, `right`, `top`, `bottom` (a re-tile) or `centre` (a swap) | `"top"` |
+| `ratio` | the share a split's first side takes, from `0.05` to `0.95` | `0.58` |
 | `camera` | `{"lat": …, "lon": …, "zoom": …}` | `{"lat": -6.108, "lon": 106.91, "zoom": 11}` |
 | `content` | `{"kind": "map"}`, `{"kind": "newsroom"}`, `{"kind": "tree", "organisation": null}` or a structure id in place of `null` | |
 
@@ -186,6 +191,34 @@ each field is and why the band's rule is stated once.
 - **It is not saved.** `layout.toml` remembers where a pane is looking (#153); a follow is a live mode, and a hull that
   went quiet is not a place to come back to.
 
+## A drag, settled (#219)
+
+A drag is the pointer's: a pane lifted out of its slot, a gutter held. What the drag **settles into** is an intent, and
+there are two of them, because there are two things a hand can land:
+
+```sh
+arcons-cc ctl pane drop 3 2 top     # pane 3 takes pane 2's top half (a re-tile)
+arcons-cc ctl pane drop 3 2 centre  # pane 3 and pane 2 trade places (a swap)
+arcons-cc ctl pane resize 2 3 0.58  # the gutter between them moves to 58%
+```
+
+Three rules, and each is a test:
+
+- **The preview is the landing.** `pane.drop` builds the same `view::Drop` a release builds and hands it to
+  `Layout::apply` — `State::apply_drop`, the call the release handler makes — and `pane.resize` ends in `State::set_ratio`,
+  the call a border drag makes. A client that wants to draw the gap before it sends the request computes it with
+  `Layout::preview` over the `tiling` it read, and the two cannot disagree, because they are one function. A client that
+  re-derives the layout itself is the bug the verb exists to prevent.
+- **Within one workspace.** A drop names the slot it lands in, and the slot is a place in the workspace on screen.
+  Crossing is two settled changes — `pane.move`, then `pane.drop` — because a cross-workspace drop with no landing
+  place is a rule nobody has written.
+- **A refused drop moves nothing.** Every rule is checked before the tiling is touched, so a `no such pane`, a
+  `pane cannot be swapped with itself` or a pair that is `not neighbours` leaves the wall exactly as it was: half a
+  gesture applied is worse than a refusal, because nothing on screen says which half.
+
+A drop is **not** a drag: no hold, no preview on the wall, no sixty intents a second. The picture on the glass is the
+wall's, and a client's preview is its own.
+
 ## A second screen: the authority and the viewer (#202)
 
 One process owns the wall's state; every other screen draws what it is given. That is a **role**, not a second program:
@@ -243,6 +276,27 @@ is one vocabulary, one refusal path and one place that could break `INV-05`.
 
 The unix socket stays what it is: the local credential, one client at a time, no token. A carrier adds a way to reach the
 same loop; it does not add a second way to change the wall.
+
+## The corpus a client replays (#224)
+
+This document is checked against the code, and it cannot see a client written in another language. So the
+answers themselves are **recorded**: `fixtures/control/session.jsonl` is one exchange per line,
+`{"send": {…}, "expect": {…}}`, where `send` is the request as a client sends it and `expect` is the wall's
+answer **verbatim**. It carries every verb below at least once, every refusal a client can provoke, a
+`read: "wall"` before a change and after one, and one request at a version the wall does not speak.
+
+```sh
+cargo run -- --record                              # rewrite the corpus from this wall
+scripts/conformance.sh fixtures/control/session.jsonl   # replay it: print every answer, exit 1 on the first difference
+cargo test --test control_corpus                   # the gate's half: every pair is what the wall answers today
+```
+
+The file is **recorded, never written by hand**: a setup script in `fixtures/intents/` builds the wall
+through `control::apply`, and the exchanges go through the wall's own session loop over an in-memory
+carrier — the door the socket uses. A client that replays the file and gets the same lines agrees with the
+wall about the protocol; a change to a verb or a refusal leaves the corpus red until a human re-records it
+and reads the diff. A `watch` stream is deliberately not in it: a coalesced publish is a race, and a race is
+not a fixture.
 
 ## The scene: the whole arrangement (#201)
 
@@ -374,6 +428,8 @@ arcons-cc ctl pane focus 2
 arcons-cc ctl pane close 4          # refused on the wall's last pane, reason on stderr, exit 1
 arcons-cc ctl workspace new
 arcons-cc ctl rename set workspace 1 "Straits watch"
+arcons-cc ctl pane drop 3 2 left            # land pane 3 on pane 2's left half
+arcons-cc ctl pane resize 2 3 0.58          # move the gutter between them to 58%
 arcons-cc ctl map camera 2 -6.108,106.91,11
 arcons-cc ctl surface close
 arcons-cc ctl pair claim 481902 phone  # prints the device key, once, for a script to keep
@@ -395,12 +451,13 @@ of the two gains a name the other does not have.
 - **Read** — beyond the projection. `read: "wall"` describes the control state (#181); a client still cannot ask
   *what is on the wall's glass* (the hulls, the cards, the counts), and by `ADR-0005` decision 7 it should not be
   able to: that is the picture.
-- **Point.** There is no cursor on the wall and no pointer vocabulary in this file: a client with no hand gets one
-  in #167, and the menu's arrow keys in #164. `pane.split_at` is the one request that takes a point, and a client
-  that has not been told the frame cannot honestly send one.
+- **Point.** `pane.split_at` is the one request that takes a point in a pane's **frame**, and a client that has not
+  been told the frame cannot honestly send one. A drag does not need one: `pane.drop` says a **slot** — that pane, on
+  this edge of that one — and `pane.resize` names the two panes a gutter separates, so a client with no pointer reaches
+  the settled end of both gestures. The cursor vocabulary (#167) is how a phone *points* at what it can name.
 - **Hold.** A drag — a pane in the air, a border being resized, a camera panned — is a held gesture and is the
-  viewer's; the settled result of each is the intent above (`pane.move`, `map.camera`). A continuous gesture over
-  a socket is a later decision, not an omission.
+  viewer's; the settled result of each is the intent above (`pane.drop`, `pane.resize`, `map.camera`). A continuous
+  gesture over a socket is a later decision, not an omission.
 
 ## A client, worked through
 

@@ -60,6 +60,18 @@ pub fn to_wire(intent: &Intent) -> Value {
             object.insert("pane".into(), json!(pane));
             object.insert("workspace".into(), json!(workspace));
         }
+        Intent::Drop { pane, onto, edge } => {
+            object.insert("pane".into(), json!(pane));
+            object.insert("onto".into(), json!(onto));
+            // **The edge is a word, never a number** (#219): a client says `top`, not `2` — a slot is a place in the
+            // tiling, and an index would be a second spelling of it that drifts the moment the enum grows.
+            object.insert("edge".into(), json!(edge.word()));
+        }
+        Intent::Resize { pane, other, ratio } => {
+            object.insert("pane".into(), json!(pane));
+            object.insert("other".into(), json!(other));
+            object.insert("ratio".into(), ratio_json(*ratio));
+        }
         Intent::CloseOtherPanes | Intent::CloseOtherWorkspaces => {}
         Intent::OpenPane(content) => {
             object.insert("content".into(), content_json(content));
@@ -170,6 +182,25 @@ pub fn from_wire(value: &Value) -> Result<Intent, Refused> {
         "pane.move" => Intent::MovePane {
             pane: pane(object)?,
             workspace: integer(object, "workspace")? as usize,
+        },
+        "pane.drop" => Intent::Drop {
+            pane: pane(object)?,
+            onto: integer(object, "onto")? as crate::ui::ViewId,
+            // **A word this wall does not use is a refusal, not a default** (#219, `INV-07`): guessing `centre` for
+            // an edge a newer wall added would land a pane somewhere the client did not ask for.
+            edge: object
+                .get("edge")
+                .and_then(Value::as_str)
+                .and_then(super::Edge::of_word)
+                .ok_or(Refused(super::EDGE_WORDS))?,
+        },
+        "pane.resize" => Intent::Resize {
+            pane: pane(object)?,
+            other: integer(object, "other")? as crate::ui::ViewId,
+            ratio: object
+                .get("ratio")
+                .and_then(Value::as_f64)
+                .ok_or(Refused(super::RATIO_WORDS))? as f32,
         },
         "pane.close_others" => Intent::CloseOtherPanes,
         "workspace.close_others" => Intent::CloseOtherWorkspaces,
@@ -313,6 +344,8 @@ fn integer(object: &Map<String, Value>, key: &str) -> Result<i64, Refused> {
     match object.get(key) {
         None => Err(Refused(match key {
             "pane" => "\"pane\" is a pane id",
+            "onto" => "\"onto\" is a pane id",
+            "other" => "\"other\" is a pane id",
             "workspace" => "\"workspace\" is an index",
             "index" => "\"index\" is an index",
             _ => "a field is missing",
@@ -347,6 +380,29 @@ fn target(object: &Map<String, Value>) -> Result<RenameTarget, Refused> {
     } else {
         Err(Refused("\"target\" is {\"pane\": n} or {\"workspace\": n}"))
     }
+}
+
+/// A share as a client reads it: **six places**, the same rule `config::layout` keeps for a file.
+///
+/// An `f32` widened to `f64` prints as `0.5799999833106995`, and a client that reads that back into an `f32` gets
+/// exactly the share that was meant — so the rounding costs nothing and the line says what an operator typed. The
+/// value is unchanged on the way in: [`from_wire`] reads whatever decimal the client sent and keeps the `f32`.
+fn ratio_json(ratio: f32) -> Value {
+    json!((f64::from(ratio) * 1e6).round() / 1e6)
+}
+
+/// An edge as the word a CLI types (#219): `left`, `right`, `top`, `bottom` or `centre`.
+///
+/// `None` is a refusal rather than a default: an edge is the one field of `pane.drop` that says **where**, and a
+/// guessed one would land a pane in a slot nobody named.
+pub fn edge_from_words(word: Option<&str>) -> Result<super::Edge, String> {
+    word.and_then(super::Edge::of_word).ok_or_else(|| {
+        format!(
+            "an edge is left, right, top, bottom or centre, got {}",
+            word.map(|word| format!("{word:?}"))
+                .unwrap_or_else(|| "nothing".to_string())
+        )
+    })
 }
 
 /// A pane kind as the words a CLI types (#165): `map`, `tree`, `newsroom`, and nothing else.
@@ -593,6 +649,80 @@ mod tests {
                 &json!({ "verb": "pane.split", "pane": 1, "content": { "kind": "hologram" } })
             ),
             Err(Refused("unknown pane kind"))
+        );
+    }
+
+    /// **The two verbs a drag settles into have field shapes of their own** (#219), and a shape is what a client is
+    /// told: a slot is a word from a closed list and a share is a number, so an edge this wall does not know is a
+    /// mistake in the call — `input`, not a rule to wait out — and a missing field says which one is missing.
+    #[test]
+    fn a_drop_and_a_resize_say_what_a_client_sent() {
+        // Round-trips, in both directions, through the shapes `docs/control.md` prints.
+        let drop = json!({ "verb": "pane.drop", "pane": 2, "onto": 1, "edge": "top" });
+        assert_eq!(
+            from_wire(&drop),
+            Ok(Intent::Drop {
+                pane: 2,
+                onto: 1,
+                edge: super::super::Edge::Top,
+            })
+        );
+        assert_eq!(
+            to_wire(&Intent::Drop {
+                pane: 2,
+                onto: 1,
+                edge: super::super::Edge::Top
+            }),
+            drop
+        );
+        let resize = json!({ "verb": "pane.resize", "pane": 1, "other": 2, "ratio": 0.58 });
+        assert_eq!(
+            from_wire(&resize),
+            Ok(Intent::Resize {
+                pane: 1,
+                other: 2,
+                ratio: 0.58,
+            })
+        );
+        assert_eq!(
+            to_wire(&Intent::Resize {
+                pane: 1,
+                other: 2,
+                ratio: 0.58,
+            }),
+            resize,
+            "a ratio is a number a client reads back as the one it sent"
+        );
+
+        // **An unknown edge is `input`, not `rule`** (#219): the client fixes the word and retries; nothing on the
+        // wall has to change first.
+        let unknown =
+            from_wire(&json!({ "verb": "pane.drop", "pane": 1, "onto": 2, "edge": "north" }))
+                .expect_err("north is not an edge");
+        assert_eq!(unknown, Refused(super::super::EDGE_WORDS));
+        assert_eq!(
+            super::super::refusal_kind(unknown.0),
+            Some(super::super::RefusalKind::Input),
+            "an edge this wall does not use is a call to fix, and a client decides from `kind`"
+        );
+        // A ratio that is not a number is the same kind of mistake, and the words name the range.
+        let bad_ratio =
+            from_wire(&json!({ "verb": "pane.resize", "pane": 1, "other": 2, "ratio": "half" }))
+                .expect_err("half is not a share");
+        assert_eq!(bad_ratio, Refused(super::super::RATIO_WORDS));
+
+        // A missing field names itself, as `pane` does — a client is told which one, not that something was wrong.
+        assert_eq!(
+            from_wire(&json!({ "verb": "pane.drop", "pane": 1, "edge": "top" })),
+            Err(Refused("\"onto\" is a pane id"))
+        );
+        assert_eq!(
+            from_wire(&json!({ "verb": "pane.resize", "pane": 1, "ratio": 0.5 })),
+            Err(Refused("\"other\" is a pane id"))
+        );
+        assert_eq!(
+            from_wire(&json!({ "verb": "pane.drop", "pane": 1, "onto": 2 })),
+            Err(Refused("\"edge\" is left, right, top, bottom or centre"))
         );
     }
 
