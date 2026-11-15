@@ -15,6 +15,8 @@
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
+use crate::ui::Origin;
+
 /// One line in, one line out, and a way to hang up.
 ///
 /// `read_line` returns `Ok(None)` at end of file, which is a client that hung up rather than a wall failure.
@@ -43,6 +45,17 @@ pub trait Carrier: Send {
     /// treats it as "nothing has happened yet". Every carrier can be told how long to wait — the one that carries no
     /// watch is simply never asked.
     fn read_line_within(&mut self, within: Duration) -> std::io::Result<Option<String>>;
+
+    /// **Whose hand the line just read came in on** (#222) — the name this carrier knows its client by.
+    ///
+    /// The session loop stamps it on the request, so a cursor cannot be moved under somebody else's name, and it is
+    /// the origin the wall drops when this carrier hangs up. A unix socket answers [`Origin::ctl`] (its credential is
+    /// the file's mode, so it has no name of its own), a relay answers the **device's name** from `devices.toml` — never
+    /// its key and never its address (`INV-08`) — and a carrier that carries anybody, as a loopback pair in a test
+    /// does, answers `None` and renounces nothing.
+    fn origin(&self) -> Option<Origin> {
+        None
+    }
 }
 
 /// The unix socket the wall has always used (#165) — 0600 inside a 0700 directory, one client at a time.
@@ -97,6 +110,13 @@ impl Carrier for Unix {
     fn hang_up(&mut self) {
         let _ = self.writer.shutdown(std::net::Shutdown::Both);
     }
+
+    /// **The client with no identity of its own**: the socket's credential is its file's mode (`INV-08`), so `ctl` is
+    /// the honest name for whoever is on the other end, and it is the origin its cursor is drawn and dropped under
+    /// (#222).
+    fn origin(&self) -> Option<Origin> {
+        Some(Origin::ctl())
+    }
 }
 
 /// **Two ends of one wire, in memory** — the carrier a test uses to drive the session loop without a socket.
@@ -106,6 +126,8 @@ impl Carrier for Unix {
 pub struct Loopback {
     from_peer: Receiver<String>,
     to_peer: Sender<String>,
+    /// Who this end says is speaking, when a test needs a carrier that knows its client — a phone on a relay (#222).
+    origin: Option<Origin>,
 }
 
 /// The other end of a [`Loopback`]: what a client holds in a test.
@@ -115,11 +137,29 @@ pub struct Peer {
 }
 
 impl Loopback {
-    /// Two ends, each of which reads what the other writes.
+    /// Two ends, each of which reads what the other writes. **Nameless**: a carrier that carries anybody, which is what
+    /// a test's wire is until the test says otherwise.
     pub fn pair() -> (Loopback, Peer) {
+        Loopback::of(None)
+    }
+
+    /// The same two ends, with the wall's end knowing whose hand this is: a phone's session, or a `ctl`'s, so a test
+    /// can drive the per-client rules of #222 — a cursor named by its carrier, and dropped when the carrier hangs up.
+    pub fn named(name: &str) -> (Loopback, Peer) {
+        Loopback::of(Some(Origin::named(name)))
+    }
+
+    fn of(origin: Option<Origin>) -> (Loopback, Peer) {
         let (to_peer, from_wall) = mpsc::channel();
         let (to_wall, from_peer) = mpsc::channel();
-        (Loopback { from_peer, to_peer }, Peer { from_wall, to_wall })
+        (
+            Loopback {
+                from_peer,
+                to_peer,
+                origin,
+            },
+            Peer { from_wall, to_wall },
+        )
     }
 }
 
@@ -141,6 +181,10 @@ impl Carrier for Loopback {
         self.to_peer
             .send(line.to_string())
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "the peer hung up"))
+    }
+
+    fn origin(&self) -> Option<Origin> {
+        self.origin.clone()
     }
 }
 

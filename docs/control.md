@@ -15,7 +15,7 @@ a verb.
 | path | `$XDG_RUNTIME_DIR/arcons-cc/control.sock`, or `$XDG_CONFIG_HOME/arcons-cc/control.sock` when the run directory is missing or not absolute |
 | mode | `0600`, inside a `0700` directory |
 | credential | **the file's permissions.** There is no token, no handshake and no secret on the wire (`INV-08`) |
-| clients | **one at a time.** A second client waits for the first to finish; the wall is one display |
+| clients | **one at a time on this carrier.** A second client on the socket waits for the first to finish; the wall is one display. A second *carrier* (the relay, #222) does not wait — its requests and the socket's are applied in arrival order |
 | framing | one JSON object per line, in both directions |
 | protocol | `1`, on every message. Another number is refused, never negotiated |
 | off switch | `ARCONS_CONTROL=0` turns the plane off and says so in one log line |
@@ -331,6 +331,43 @@ is one vocabulary, one refusal path and one place that could break `INV-05`.
 
 The unix socket stays what it is: the local credential, one client at a time, no token. A carrier adds a way to reach the
 same loop; it does not add a second way to change the wall.
+
+## Two remotes at one wall (#222)
+
+A relay makes a wall with more than one client reachable rather than theoretical: a unix `ctl`, a phone and a viewer
+at once. Each is a **carrier** over one session loop (#195), and the rules between them are the wall's, not any
+carrier's. Five of them, and each is a test (`cargo test control::sessions`, `cargo test control::authority`).
+
+**1. Arrival order is the order.** The queue is the wall's: `control::sessions::Queue` is one channel, every carrier
+holds an end of it, and `poll` — the only thread that changes `State` (`INV-05`) — drains it between frames. So an
+intent waits behind whatever arrived before it, and no carrier is privileged: two queues drained by two `while` loops
+in turn would be a wall where the socket always wins, which is a rule nobody wrote and nobody can see. A viewer's own
+input goes through the same door and is a request (#204).
+
+**2. Stale is a rule, not a busy.** A `pane.close` on a pane another client already closed is `no such pane`, kind
+`rule`: the premise is gone, and retrying will not bring it back. `busy` stays reserved for a wall that is not
+answering: `the wall did not answer`, `the wall has stopped`, `the relay is not answering`, `the wall has no source of
+chance` (#198) — and no premise among them. A client that reads `busy` into a lost premise retries a request that
+cannot succeed, on a wall that is perfectly well. That is what a phone shows its user, so the two must not be the same
+word.
+
+**3. A cursor with no client is dropped.** A pointer fades after four seconds anyway (#167), but a carrier that hangs
+up takes its origin with it: when a session ends it tells the wall which hands came in on it, on the same queue, and
+the wall drops those cursors on the next frame — and redraws that frame, because a ring vanishing changes nothing
+else. A ring that outlives its hand is a ghost on a wall at three in the morning, and a button that was down stays
+down for ever. A relay connection carrying several phones reports each of them.
+
+**4. The origin is the device's name.** For a relay carrier the origin is the name in `devices.toml`: the carrier
+reports whose hand a line came in on, and the door (`control::apply_by`) prefers that over an `origin` the frame
+carries — so a frame cannot choose it, and a phone that types somebody else's name is still itself. A refusal, a
+cursor and a log line then name the same thing — never an address, a key or a hostname (`INV-08`). The unix socket's
+client is `ctl`, which is the credential's own description (#165), and a carrier that carries anybody (a loopback in
+a test) leaves the field alone.
+
+**5. Two clients that agree are not a special case.** Identical intents are applied twice and the second answers
+`changed: false`, because an intent says what a client wants and the wall's own answer says whether a pixel moved.
+Nothing coalesces them, and nothing refuses the second as a duplicate: "did my press land?" is a question a client
+answers by reading the answer, not by guessing.
 
 ## The relay (#196)
 

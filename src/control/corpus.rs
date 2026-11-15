@@ -385,9 +385,8 @@ fn through_the_session(state: &mut State, lines: Vec<String>) -> Result<Vec<Stri
             std::thread::sleep(Duration::from_millis(1));
         };
         // A malformed line was answered above (the `continue`); a parsed one is the UI thread's, and this
-        // is that thread.
-        let (answer, _) = super::authority::answer(state, &job.request);
-        job.answer(answer);
+        // is that thread — through the same door `poll` uses, so the recording is the wall's own answer (#222).
+        super::authority::serve(state, job);
         match peer.recv_within(WITHIN) {
             Some(answer) => answers.push(answer),
             None => {

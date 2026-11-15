@@ -1,344 +1,448 @@
-//! **A session with a watch** (#221): the client's two rules for the one thing on the plane that is not
-//! request/answer.
+//! **Two remotes at one wall** (#222): the wall's queue, and the rules between the carriers that feed it.
 //!
-//! [`crate::control::watch`] is the wall's half — the beat, the coalescing, the frames. This is the half a phone keeps,
-//! and it is two rules that `docs/mobile-remote.md` decision 1 already implies:
+//! A relay makes something reachable that was only theoretical before it (`docs/mobile-remote.md` listed "who wins a
+//! refusal when two clients ask for contradictory things at once" as open): the wall can hold a unix `ctl`, a phone and
+//! a viewer at once. Each is a **carrier** over one session loop (#195) — a line in, a `Job` for the wall, a line out —
+//! and what this module holds is the part that is the *wall's* rather than any carrier's: one queue.
 //!
-//! 1. **A watch does not resume.** It belongs to a connection, and a connection that comes back knows nothing: the
-//!    client reads first and asks for the watch again ([`Session::is_open`] is false until both have happened). A
-//!    watch that resumed on its own would be a client believing what it remembered.
-//! 2. **A `seq` it did not expect is a read.** A publish is one version further on than the projection the client
-//!    holds; a number that skips or goes back is a line this client cannot place in the wall's history, and the one
-//!    thing it may not do is reconstruct one. It reads.
+//! **Arrival order is the order.** A carrier does not apply anything (that is `INV-05`), and it does not own a queue
+//! either: every carrier holds an end of [`Queue`], the same one, so a phone's intent waits behind a `ctl`'s if it
+//! arrived after it. Two queues drained in turn would be a wall where one carrier is privileged by the order of two
+//! `while` loops in `poll` — a rule nobody wrote and nobody could see.
 //!
-//! Driven over the wall's own session loop by `cargo test control::sessions`, because a client is a client whether the
-//! wire is a pair of channels in this process or a relay to a device in another room (#197).
+//! The other four rules of the ticket are held where they belong, and named here because they are what the queue is
+//! for: a stale premise is a `rule` and not a `busy` (`control::REFUSALS`), a carrier that hangs up takes its origin
+//! with it (`control::authority::serve`), the origin of a cursor is the **device's name** the carrier knows
+//! (`control::carrier::Carrier::origin`), and two clients that agree are applied twice with the second answering
+//! `changed: false`. `docs/control.md` is the prose; `cargo test control::sessions` and `cargo test control::authority`
+//! are the proof.
 
-/// **What a client does with a projection the wall published** (#221).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Publish {
-    /// **The version after the one this client holds**: it is the wall now.
-    Take,
-    /// **A number it did not expect** — one that skipped ahead, or one behind it. The numbers and the client's history
-    /// disagree (a version it never saw, or a wall that went backwards), so it **reads** and takes the read's
-    /// projection. It never reconstructs a difference from what it holds.
-    Read,
-}
+use std::sync::mpsc::{self, Receiver, Sender};
 
-/// **A client's watch on one connection** (#221): the version it holds, and whether it is watching at all.
+use super::server::Job;
+
+/// **The wall's queue** (#222): one channel, every carrier feeding it, one thread draining it.
 ///
-/// Not carried across a connection. [`Session::shut`] is what a drop, a hang-up or a read that failed all end in, and
-/// the client asks again only after a read has landed — the whole of rule 1, in one place.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Session {
-    /// The `seq` of the projection this client holds: from the read that landed, or from the last publish it took.
-    held: u64,
-    /// Whether the wall has granted a watch on this connection.
-    open: bool,
+/// The type exists so "the queue is the wall's" is a shape rather than a habit. A carrier is handed a
+/// [`Queue::sender`] — an end of *this* channel — and the thread that owns the state drains [`Queue::next`] between
+/// frames, so the order the wall applies in is the order the carriers read in.
+pub struct Queue {
+    to: Sender<Job>,
+    from: Receiver<Job>,
 }
 
-impl Session {
-    /// A session that holds nothing and is watching nothing: what a client has before its first read.
-    pub fn new() -> Session {
-        Session::default()
+impl Queue {
+    /// A queue with no carrier yet: a wall that never opens a plane still has one, empty.
+    pub fn new() -> Queue {
+        let (to, from) = mpsc::channel();
+        Queue { to, from }
     }
 
-    /// **A read landed** (#221): this is the version the client holds. A read does not open a watch — the frame does,
-    /// and only after the read (`docs/mobile-remote.md` decision 1).
-    pub fn read(&mut self, seq: u64) {
-        self.held = seq;
+    /// The end one carrier holds. Cloned per carrier — the socket's listener, the relay's dial — and every clone feeds
+    /// the same channel.
+    pub fn sender(&self) -> Sender<Job> {
+        self.to.clone()
     }
 
-    /// **The wall granted a watch**: what follows is the same projection, published.
-    pub fn opened(&mut self) {
-        self.open = true;
-    }
-
-    /// **The connection is gone** — a drop, a hang-up, a read that did not land. Everything about the watch goes with
-    /// it, because nothing on the far side of a new connection is a fact about this one.
-    pub fn shut(&mut self) {
-        *self = Session::default();
-    }
-
-    /// Whether a watch is open on this connection.
-    pub fn is_open(&self) -> bool {
-        self.open
-    }
-
-    /// The version the client holds.
-    pub fn held(&self) -> u64 {
-        self.held
-    }
-
-    /// **The rule for a publish** (#221): the version after this one is taken; anything else is a read.
-    ///
-    /// A publish is coalesced to the wall's beat, so versions can be skipped by *the wall's own doing* — and the wall
-    /// numbers the projection it hands out, so the number a watcher sees is one further on than the last one it was
-    /// handed. A number that is not is a line this client cannot place, and it reads rather than guesses.
-    pub fn publish(&mut self, seq: u64) -> Publish {
-        if self.held.checked_add(1) == Some(seq) {
-            self.held = seq;
-            Publish::Take
-        } else {
-            Publish::Read
-        }
+    /// **The next thing a carrier has left for the wall**, if any. Never blocks: `poll` calls this between frames, and
+    /// a wall that waited here would freeze for a client that has not finished typing (`INV-05`).
+    pub fn next(&self) -> Option<Job> {
+        self.from.try_recv().ok()
     }
 }
 
-// **Unix only, because a client is** (#197): the rules are driven through `control::client`, which a Windows build
-// has no plane for (`src/control.rs` says the same where it gates the module). The rules themselves — `Session` and
-// `Publish` — compile everywhere, so the type a client keeps is not a platform's.
-#[cfg(all(test, unix))]
+impl Default for Queue {
+    fn default() -> Queue {
+        Queue::new()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control::carrier::{Carrier, Loopback, Peer};
-    use crate::control::client::{Client, Denied};
-    use crate::control::projection::Wall as Projection;
-    use crate::control::watch::Watch;
-    use crate::control::wire::{self, Answer, Request};
-    use std::sync::mpsc::{self, Receiver};
-    use std::time::Duration;
+    use crate::control::carrier::{Loopback, Peer};
+    use crate::control::wire::{self, Answer};
+    use crate::control::{self, Changed, Intent, REFUSALS, RefusalKind, refusal_kind};
+    use crate::ui::{Origin, PaneContent, State};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, Instant};
 
-    /// **A projection at a version, saying where it came from** (#221). The label is what makes the candidates a test
-    /// can tell apart: the one the wall published, and the one the client read instead.
-    fn projection(seq: u64, label: &str) -> Projection {
-        let mut wall = crate::control::projection::of(&crate::ui::State::default());
-        wall.seq = seq;
-        wall.workspaces[0].name = label.to_string();
-        wall
+    /// Long enough for two threads and a channel on a slow machine, short enough that a wedged test fails rather than
+    /// hangs a gate.
+    const PATIENCE: Duration = Duration::from_secs(5);
+
+    /// **One client on one carrier**, served by the wall's own session loop on its own thread — the door the socket's
+    /// listener and the relay's dial both use (`server::serve_session`, #195). `name` is whose hand it is: a relay's
+    /// carrier knows it from `devices.toml`, and a test's has to be told (#222).
+    struct Client {
+        /// The client's end. An `Option` so `Drop` can hang up *before* joining: a loop blocked in a read is woken by
+        /// its peer going away, and joining first would wait for a line nobody is going to type.
+        peer: Option<Peer>,
+        thread: Option<std::thread::JoinHandle<()>>,
     }
 
-    /// The label a projection carries, so a test compares what the client **holds** and not what it was told.
-    fn label(wall: &Projection) -> &str {
-        &wall.workspaces[0].name
-    }
+    impl Client {
+        fn connect(queue: &Queue, name: &str) -> Client {
+            let (wall_end, peer) = Loopback::named(name);
+            Client::serve(queue, wall_end, peer)
+        }
 
-    /// **A wall whose answers are this test's** (#221): the client's end, and every request the client wrote.
-    ///
-    /// A scripted wire rather than `control::client`'s real-wall harness, because one of the claims here is about a
-    /// line **no wall would publish**: a `seq` that skipped. A wall that could do that is a wall with a bug; the client
-    /// that survives it is what this module is for.
-    fn script(
-        mut answers: impl FnMut(&Request) -> Vec<Answer> + Send + 'static,
-    ) -> (Peer, Receiver<String>) {
-        let (wall_end, peer) = Loopback::pair();
-        let (sent, requests) = mpsc::channel();
-        std::thread::Builder::new()
-            .name("sessions-test-wall".into())
-            .spawn(move || {
-                let mut wall_end = wall_end;
-                while let Ok(Some(line)) = wall_end.read_line() {
-                    let _ = sent.send(line.clone());
-                    // A line the script cannot read is a test bug; silence would hang the client and say less than a
-                    // test that fails.
-                    let Ok(request) = wire::request(&line) else {
-                        continue;
-                    };
-                    for answer in answers(&request) {
-                        if wall_end.write_line(&wire::reply(answer)).is_err() {
-                            return;
-                        }
-                    }
-                }
-            })
-            .expect("the scripted wall's thread starts");
-        (peer, requests)
-    }
+        /// A carrier with no name — the local `ctl`'s honest state on a loopback, where nothing authenticated the
+        /// connection and nothing had to.
+        fn anonymous(queue: &Queue) -> Client {
+            let (wall_end, peer) = Loopback::pair();
+            Client::serve(queue, wall_end, peer)
+        }
 
-    /// **Poll the way a phone does**, bounded: the scripted wall writes its publish from its own thread, so a test
-    /// that looked once would be racing it. `Ok(None)` is "nothing yet", which is what most frames of a watch are.
-    fn published(client: &mut Client<Peer>) -> Projection {
-        for _ in 0..1_000 {
-            match client.published() {
-                Ok(Some(wall)) => return wall,
-                Ok(None) => std::thread::sleep(Duration::from_millis(2)),
-                Err(error) => {
-                    panic!("the client's wire failed where a publish was expected: {error:?}")
-                }
+        fn serve(queue: &Queue, wall_end: Loopback, peer: Peer) -> Client {
+            let tx = queue.sender();
+            let stop = Arc::new(AtomicBool::new(false));
+            let thread = std::thread::Builder::new()
+                .name("sessions-test-carrier".to_string())
+                .spawn(move || {
+                    let _ = crate::control::server::serve_session(wall_end, &tx, &stop);
+                })
+                .expect("the session loop starts");
+            Client {
+                peer: Some(peer),
+                thread: Some(thread),
             }
         }
-        panic!("the wall's publish never arrived (#221)");
+
+        fn send(&self, line: &str) {
+            self.peer.as_ref().expect("a live connection").send(line);
+        }
+
+        /// The next line the wall wrote, read with the client's own decoder — so a refusal arrives with the `kind`
+        /// the wall sent rather than with this test's reading of it.
+        fn answer(&self, what: &str) -> Result<wire::Answer, wire::Unreadable> {
+            let line = self
+                .peer
+                .as_ref()
+                .expect("a live connection")
+                .recv_within(PATIENCE)
+                .unwrap_or_else(|| panic!("{what}: the wall never answered"));
+            wire::answer(&line)
+        }
     }
 
-    /// Every request a client has sent since the last look, waiting for the first one so a test never races the wire.
-    fn next(sent: &Receiver<String>) -> String {
-        sent.recv_timeout(Duration::from_secs(2))
-            .expect("the client sent nothing, where a request was expected (#221)")
-    }
-
-    /// **A `seq` it did not expect makes the client read** (#221): the wall publishes version 6 while the client holds
-    /// 4, so the numbers cannot be placed — the client sends a read and holds the projection the read answers with,
-    /// never the one the publish carried.
-    ///
-    /// The falsifier is the obvious implementation: take every publish, which draws a wall from a history the client
-    /// cannot account for and leaves its next intent composed from a number it cannot trust.
-    #[test]
-    fn a_missed_seq_re_reads() {
-        let mut reads = 0;
-        let (peer, sent) = script(move |request| match request {
-            Request::Wall => {
-                reads += 1;
-                vec![Answer::Wall(if reads == 1 {
-                    projection(4, "the wall it read")
-                } else {
-                    projection(6, "the wall it read again")
-                })]
+    impl Drop for Client {
+        fn drop(&mut self) {
+            // End of file, exactly as a client closing its socket: the loop's read returns `None`, the loop says which
+            // hands came in on it, and its thread ends (#222).
+            self.peer = None;
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
             }
-            // **The grant, and a publish that skipped a version**: the beat coalesced 5 into 6, which a watcher
-            // holding 4 cannot place.
-            Request::Watch(_) => vec![
-                Answer::Watching(Watch::Wall),
-                Answer::Published(Watch::Wall, projection(6, "a version it never saw")),
-            ],
-            _ => Vec::new(),
-        });
-        let mut client = Client::new();
-        client.connect(peer);
-        assert_eq!(label(&client.read().expect("a read")), "the wall it read");
-        assert_eq!(next(&sent), wire::request_line(&Request::Wall));
-        client.watch().expect("a client that has read may watch");
-        assert_eq!(
-            next(&sent),
-            wire::request_line(&Request::Watch(Watch::Wall))
-        );
-
-        let published = published(&mut client);
-        assert_eq!(
-            label(&published),
-            "the wall it read again",
-            "the client took the version it could not place: a missed seq must be read again, never reconstructed \
-             (#221)"
-        );
-        assert_eq!(
-            client.wall().map(label),
-            Some("the wall it read again"),
-            "and the projection it holds is the read's, not the skipped publish's"
-        );
-        assert_eq!(
-            next(&sent),
-            wire::request_line(&Request::Wall),
-            "the read the skipped version earned is the next line on the wire"
-        );
-        assert_eq!(
-            client.session().held(),
-            6,
-            "the read's version is the one it holds now, so the next publish is expected again"
-        );
-        assert!(
-            sent.try_recv().is_err(),
-            "the client wrote more than one read: a version it could not place costs one read, not a loop (#221)"
-        );
+        }
     }
 
-    /// **A watch resumes only after a read** (#221, `docs/mobile-remote.md` decision 1): a client that loses its
-    /// connection holds no watch, may not take a publish on the new one, and is refused by its own rule when it asks to
-    /// watch before reading — nothing is written on the new wire until it has read.
-    #[test]
-    fn a_watch_resumes_only_after_a_read() {
-        let (peer, sent) = script(|request| match request {
-            Request::Wall => vec![Answer::Wall(projection(1, "the wall"))],
-            Request::Watch(_) => vec![Answer::Watching(Watch::Wall)],
-            _ => Vec::new(),
-        });
-        let mut client = Client::new();
-        client.connect(peer);
-        client.read().expect("the first read");
-        client
-            .watch()
-            .expect("a watch on the connection it read on");
-        assert!(client.session().is_open());
-        let _ = (next(&sent), next(&sent));
-
-        // The connection goes — a drop, a sleep, a network that changed underneath.
-        client.disconnect();
-        assert_eq!(
-            client
-                .published()
-                .expect_err("a dropped client watches nothing"),
-            Denied::NoConnection,
-        );
-
-        // It comes back. **Nothing is known on a new connection**, whatever the last one held.
-        let (peer, sent) = script(|request| match request {
-            Request::Wall => vec![Answer::Wall(projection(9, "the wall it came back to"))],
-            Request::Watch(_) => vec![Answer::Watching(Watch::Wall)],
-            _ => Vec::new(),
-        });
-        client.connect(peer);
-        assert_eq!(
-            client.watch(),
-            Err(Denied::NotRead),
-            "a watch was granted before a read: a client that resumes a watch believes what it remembered (#221)"
-        );
-        assert_eq!(
-            client
-                .published()
-                .expect_err("and nothing is published to it"),
-            Denied::NotWatching,
-        );
-        assert!(
-            sent.try_recv().is_err(),
-            "the client wrote on the new connection before reading it: a watch that resumes without a read is the \
-             falsifier (#221)"
-        );
-
-        // Read, then ask: the order decision 1 states, and the only order that works.
-        client.read().expect("the read on resume");
-        client
-            .watch()
-            .expect("a watch after the read is the rule working");
-        assert_eq!(
-            vec![next(&sent), next(&sent)],
-            vec![
-                wire::request_line(&Request::Wall),
-                wire::request_line(&Request::Watch(Watch::Wall))
-            ],
-            "the first line after a resume is the read and only the read, and the watch follows it (#221)"
-        );
+    /// The next job the wall has been handed, waited for within [`PATIENCE`]: a queue that never delivers fails with
+    /// the sentence the test wrote rather than hanging.
+    fn next(queue: &Queue, what: &str) -> Job {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            if let Some(job) = queue.next() {
+                return job;
+            }
+            assert!(Instant::now() < deadline, "{what}");
+            std::thread::sleep(Duration::from_millis(2));
+        }
     }
 
-    /// **The rule itself** (#221): every version but the next one is a read, including the one the client already
-    /// holds and the one behind it — and a taken version becomes the one it holds.
+    /// One request line, in the wire's own shape.
+    fn line(intent: &str) -> String {
+        format!(r#"{{"v":{},"intent":{intent}}}"#, control::PROTOCOL)
+    }
+
+    /// A wall with two panes in its first workspace (the default wall has one), so "the next thing" can be about a
+    /// pane that another client is about to close.
+    fn two_panes() -> State {
+        let mut state = State::default();
+        let outcome = control::apply(
+            &mut state,
+            Intent::SplitPane {
+                pane: 1,
+                content: PaneContent::Map,
+            },
+        );
+        assert!(
+            outcome.is_ok(),
+            "the wall this test drives must have two panes: {outcome:?}"
+        );
+        state
+    }
+
+    /// **A second carrier is not waited for by the first** (#222 rule 1).
+    ///
+    /// The falsifier is the ticket's own: *a second carrier waited for by the first* — a phone holds a watch, so a
+    /// wall that served one connection at a time would be silent for as long as the first client stayed connected.
+    /// Here the first carrier is connected and says nothing, and the second is answered anyway, on the wall's own
+    /// queue and the thread that owns the state.
     #[test]
-    fn the_next_version_is_taken_and_nothing_else_is() {
-        let mut session = Session::new();
-        session.read(41);
-        assert_eq!(session.publish(42), Publish::Take);
-        assert_eq!(session.held(), 42, "a taken publish is the version held");
-        for unplaceable in [42, 41, 7, u64::MAX] {
+    fn a_second_carrier_is_not_waited_for_by_the_first() {
+        let queue = Queue::new();
+        let mut state = State::default();
+        let silent = Client::anonymous(&queue);
+        let phone = Client::connect(&queue, "phone");
+
+        phone.send(&line(r#"{"verb":"workspace.new"}"#));
+        let job = next(
+            &queue,
+            "the phone's request never reached the wall's queue: a carrier is holding the wall (#222)",
+        );
+        assert!(
+            control::authority::serve(&mut state, job),
+            "a new workspace is a change"
+        );
+        assert_eq!(
+            phone.answer("the phone's answer").expect("an answer"),
+            Answer::Changed(Ok(Changed(true))),
+            "the phone was answered while another carrier was still connected and silent"
+        );
+        assert_eq!(
+            state.workspaces.len(),
+            4,
+            "and the change is the wall's, applied once on the thread that owns it"
+        );
+        drop(silent);
+    }
+
+    /// **Arrival order is the order, and no carrier is privileged** (#222 rule 1) — the queue is the wall's, so the
+    /// intent that arrived first is applied first whatever carrier it came in on.
+    ///
+    /// The pair is contradictory on purpose: one client closes pane 2 and the other asks for pane 2's keys, and the
+    /// request that arrives second **loses**. The test is run twice with the carriers' roles swapped, so a wall that
+    /// favoured the socket, or the relay, would answer differently the second time — which is the only way a
+    /// privilege can be seen.
+    #[test]
+    fn arrival_order_is_the_order_whoever_the_carrier_is() {
+        let close = line(r#"{"verb":"pane.close","pane":2}"#);
+        let focus = line(r#"{"verb":"pane.focus","pane":2}"#);
+
+        for (first, second) in [("ctl", "phone"), ("phone", "ctl")] {
+            let queue = Queue::new();
+            let mut state = two_panes();
+            let a = Client::connect(&queue, first);
+            let b = Client::connect(&queue, second);
+
+            // The close arrives first, and the wall applies it before the second request is even typed.
+            a.send(&close);
+            let job = next(&queue, "the first request never reached the wall's queue");
+            assert!(
+                control::authority::serve(&mut state, job),
+                "closing a pane of two is a change"
+            );
             assert_eq!(
-                session.publish(unplaceable),
-                Publish::Read,
-                "{unplaceable} was taken as the next version after 42: only 43 is (#221)"
+                a.answer("the first answer").expect("an answer"),
+                Answer::Changed(Ok(Changed(true))),
+                "the first arrival changed the wall"
+            );
+
+            // The focus arrives second, on the other carrier, and it is the loser: the premise is in the past.
+            b.send(&focus);
+            let job = next(&queue, "the second request never reached the wall's queue");
+            assert!(
+                !control::authority::serve(&mut state, job),
+                "a refusal must not dirty the layout"
+            );
+            let refusal = match b.answer("the second answer") {
+                Err(wire::Unreadable::Refused(refusal)) => refusal,
+                other => panic!(
+                    "the loser of the race must be refused by name, not {other:?} ({first} first, {second} \
+                     second)"
+                ),
+            };
+            assert_eq!(
+                refusal.why, "no such pane",
+                "the pane is gone because the intent that arrived first closed it ({first} first)"
+            );
+            assert_eq!(
+                refusal.kind,
+                RefusalKind::Rule,
+                "a premise the wall has lost is a rule, not a wall that is busy (#222 rule 2, #198)"
+            );
+            assert_eq!(
+                state.focused(),
+                1,
+                "the focus stayed where the wall left it: the later request was refused, and an arrival order is not \
+                 a race (`{first}` first)"
+            );
+            assert!(
+                state.pane(2).is_none(),
+                "and pane 2 is closed exactly once, whichever carrier asked"
             );
         }
-        assert_eq!(
-            session.held(),
-            42,
-            "a publish the client would not take moved what it holds"
-        );
-        // The top of the range is not a client's business to overflow into.
-        let mut edge = Session::new();
-        edge.read(u64::MAX);
-        assert_eq!(edge.publish(u64::MAX), Publish::Read);
-        assert_eq!(edge.publish(0), Publish::Read);
     }
 
-    /// **A watch is a connection's** (#221): shutting a session forgets the version and the stream together, which is
-    /// the whole of what a drop may leave behind.
+    /// **A stale premise is a `rule`, and `busy` is a wall that is not answering** (#222 rule 2).
+    ///
+    /// A client that reads `busy` into a lost premise retries a request that cannot succeed, on a wall that is
+    /// perfectly well; the two words mean two different things to a phone (#198). So `busy` is only ever "the wall
+    /// did not answer in time" or "the wall has stopped" and the two names beside them, and nothing a client can
+    /// provoke by asking twice is one of them.
     #[test]
-    fn a_session_that_shuts_holds_nothing() {
-        let mut session = Session::new();
-        session.read(7);
-        session.opened();
-        assert!(session.is_open());
-        session.shut();
-        assert!(!session.is_open(), "a shut session is not watching");
-        assert_eq!(session.held(), 0, "and holds no version to compare against");
+    fn a_stale_premise_is_a_rule_and_busy_is_a_wall_that_is_not_answering() {
+        let queue = Queue::new();
+        let mut state = two_panes();
+        let ctl = Client::connect(&queue, "ctl");
+        let phone = Client::connect(&queue, "phone");
+
+        ctl.send(&line(r#"{"verb":"pane.close","pane":2}"#));
+        let job = next(&queue, "the close never reached the wall's queue");
+        assert!(control::authority::serve(&mut state, job));
+
+        phone.send(&line(r#"{"verb":"pane.close","pane":2}"#));
+        let job = next(&queue, "the second close never reached the wall's queue");
+        assert!(!control::authority::serve(&mut state, job));
+        let refusal = match phone.answer("the second close's answer") {
+            Err(wire::Unreadable::Refused(refusal)) => refusal,
+            other => panic!("a close on a pane another client closed is refused, not {other:?}"),
+        };
+        assert_eq!(refusal.why, "no such pane");
         assert_eq!(
-            Session::default(),
-            Session::new(),
-            "a session with nothing on it is the shape a client starts from"
+            refusal.kind,
+            RefusalKind::Rule,
+            "the premise is gone and retrying will not bring it back, so this is a rule and never a busy (#222)"
         );
+
+        // The claim from the other side: `busy` is the wall's silence, and it is four names, none of them a premise.
+        let busy: Vec<&str> = REFUSALS
+            .iter()
+            .filter(|(_, kind)| *kind == RefusalKind::Busy)
+            .map(|(why, _)| *why)
+            .collect();
+        assert_eq!(
+            busy,
+            [
+                "the relay is not answering",
+                "the wall did not answer",
+                "the wall has no source of chance",
+                "the wall has stopped"
+            ],
+            "`busy` is reserved for a wall that is not answering (#222): a fifth name here is a refusal a client \
+             would retry when retrying cannot help"
+        );
+        for premise in [
+            "no such pane",
+            "no such workspace",
+            "the last pane on the wall",
+            "the pane is already in that workspace",
+        ] {
+            assert_eq!(
+                refusal_kind(premise),
+                Some(RefusalKind::Rule),
+                "`{premise}` is the wall's own state and not a wall that is busy (#222)"
+            );
+        }
+        drop(ctl);
+        drop(phone);
+    }
+
+    /// **Two clients that agree are not a special case** (#222 rule 5): identical intents are applied twice, and the
+    /// second answers `changed: false` because nothing on screen moved.
+    ///
+    /// The falsifier is a wall that special-cases agreement — coalescing the second into the first, or refusing it as
+    /// a duplicate — which would make "did my press land?" a question a client answers by guessing.
+    #[test]
+    fn two_clients_that_agree_are_applied_twice_and_the_second_changed_nothing() {
+        let queue = Queue::new();
+        let mut state = two_panes();
+        // A split focuses the pane it made, so the keys are put back on the wall's first pane: both clients are then
+        // asking for a move, which is the pair of intents that agree.
+        assert!(state.focus_pane(1), "the first pane has the keys");
+        let first = Client::connect(&queue, "ctl");
+        let second = Client::connect(&queue, "phone");
+        let focus = line(r#"{"verb":"pane.focus","pane":2}"#);
+
+        first.send(&focus);
+        let job = next(&queue, "the first focus never reached the wall's queue");
+        assert!(control::authority::serve(&mut state, job));
+        assert_eq!(
+            first.answer("the first answer").expect("an answer"),
+            Answer::Changed(Ok(Changed(true))),
+            "the first client moved the keys, and the wall says so"
+        );
+
+        second.send(&focus);
+        let job = next(&queue, "the second focus never reached the wall's queue");
+        assert!(
+            !control::authority::serve(&mut state, job),
+            "the same request on the same pane moves nothing"
+        );
+        assert_eq!(
+            second.answer("the second answer").expect("an answer"),
+            Answer::Changed(Ok(Changed(false))),
+            "the second client's identical intent is applied and answers `changed: false` (#222 rule 5)"
+        );
+        assert_eq!(
+            state.focused(),
+            2,
+            "both clients asked for the same pane, and it has the keys"
+        );
+        drop(first);
+        drop(second);
+    }
+
+    /// **The origin of a cursor is the device's name, and the frame cannot choose it** (#222 rule 4).
+    ///
+    /// A relay's carrier knows which paired device a frame is from — the name `devices.toml` holds beside the hash —
+    /// and the session loop stamps it on the request. So a cursor, a refusal and a log line name the same thing, and
+    /// a phone that types somebody else's name in its frame is not that person's hand.
+    #[test]
+    fn a_cursor_is_named_by_the_carrier_that_carried_it() {
+        let queue = Queue::new();
+        let mut state = State::default();
+        let phone = Client::connect(&queue, "phone");
+
+        // The frame's own `origin` is a well-formed client name, and it is not the one the wall keeps.
+        phone.send(&line(
+            r#"{"verb":"cursor.move","at":[420.0,180.0],"origin":"the other phone"}"#,
+        ));
+        let job = next(&queue, "the cursor move never reached the wall's queue");
+        assert!(control::authority::serve(&mut state, job));
+
+        let drawn: Vec<&str> = state
+            .cursors
+            .keys()
+            .map(crate::ui::Origin::as_str)
+            .collect();
+        assert_eq!(
+            drawn,
+            ["phone"],
+            "the cursor is the carrier's client, not the name the frame typed (#222 rule 4)"
+        );
+        assert_eq!(
+            state.cursors[&Origin::named("phone")].at,
+            (420.0, 180.0),
+            "and it is where the request put it"
+        );
+        assert!(
+            !state
+                .cursors
+                .contains_key(&Origin::named("the other phone")),
+            "a frame cannot move another client's cursor by naming it"
+        );
+        drop(phone);
+    }
+
+    /// **A carrier that carries anybody renounces nothing** (#222): the socket's own client has a name (`ctl`), and a
+    /// loopback with none is the local client's default — so the fallback is the same origin `control::apply` gives an
+    /// absent one, not a third spelling of "nobody".
+    #[test]
+    fn an_unnamed_carrier_leaves_the_origin_to_the_local_client() {
+        let queue = Queue::new();
+        let mut state = State::default();
+        let ctl = Client::anonymous(&queue);
+        ctl.send(&line(r#"{"verb":"cursor.move","at":[10.0,20.0]}"#));
+        let job = next(&queue, "the cursor move never reached the wall's queue");
+        assert!(control::authority::serve(&mut state, job));
+        assert_eq!(
+            state.cursors.keys().map(Origin::as_str).collect::<Vec<_>>(),
+            [Origin::ctl().as_str()],
+            "a request with no name and a carrier with no name is the local client"
+        );
+        drop(ctl);
     }
 }

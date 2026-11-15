@@ -512,8 +512,14 @@ pub struct State {
     /// it is given.
     #[cfg(unix)]
     pub session: Option<crate::control::authority::Session>,
-    /// **The control plane's listener** (#165): the socket a client drives the wall through, and the queue of
-    /// requests this thread answers between frames. `None` in a capture (a scene opens nothing, `INV-11`) and
+    /// **The wall's queue** (#222): one channel every carrier hands its requests to — the unix socket, the relay — and
+    /// this thread is the only thing that drains it. The queue is the wall's and not a listener's, so the order a
+    /// request is applied in is the order it arrived in, whichever carrier it came in on. Empty on a capture, which
+    /// binds nothing (`INV-11`).
+    #[cfg(unix)]
+    pub queue: crate::control::sessions::Queue,
+    /// **The control plane's listener** (#165): the socket a client drives the wall through. Its requests wait in
+    /// [`State::queue`], with every other carrier's. `None` in a capture (a scene opens nothing, `INV-11`) and
     /// when the plane is turned off — so a wall with no socket is a wall nothing can be driven through, and
     /// `--self-check` says which it is.
     ///
@@ -522,8 +528,8 @@ pub struct State {
     #[cfg(unix)]
     pub control: Option<crate::control::Server>,
     /// **The wall's outbound carrier to its relay** (#196): `None` when `ARCONS_RELAY_URL` is unset, which is a wall
-    /// in a cupboard and is supported. Its requests arrive between frames through `next_job`, exactly as the socket's
-    /// do, and `poll` answers them through `control::authority::answer` — one door, one vocabulary.
+    /// in a cupboard and is supported. Its requests wait in [`State::queue`], beside the socket's, and `poll` settles
+    /// them through `control::authority::serve` — one door, one vocabulary, arrival order.
     ///
     /// Unix only, for the listener's reason: the carrier this build has is a unix socket (`src/control.rs`).
     #[cfg(unix)]
@@ -792,6 +798,8 @@ impl Default for State {
             session: None,
             pending_intents: Vec::new(),
             intents_applied: 0,
+            #[cfg(unix)]
+            queue: crate::control::sessions::Queue::new(),
             #[cfg(unix)]
             control: None,
             #[cfg(unix)]
@@ -1189,12 +1197,18 @@ impl State {
         self.layout().map(|layout| layout.focused()).unwrap_or(0)
     }
 
+    /// Give this pane the keys. **`false` when the keys did not move** (#222): two clients asking for the pane that
+    /// already has them agree, and the second is answered `changed: false` — which is the projection's own promise
+    /// (`docs/control.md`), and not a special case for agreement. `Layout::focus` answers whether the pane is in the
+    /// tiling, not whether the focus moved, so the two are compared here.
     pub fn focus_pane(&mut self, id: ViewId) -> bool {
+        let was = self.focused();
         let focused = self.layout_mut().is_some_and(|layout| layout.focus(id));
-        if focused {
+        let moved = focused && was != id;
+        if moved {
             self.arranged();
         }
-        focused
+        moved
     }
 
     pub fn pane_ids(&self) -> Vec<ViewId> {
@@ -1922,6 +1936,15 @@ impl State {
             }
         }
         self.layout_dirty = true;
+    }
+
+    /// **A hand that has let go** (#222): a carrier that hung up takes its origin with it, so the cursor it was drawing
+    /// is no longer the wall's. A pointer that outlives its hand is a ghost on a wall at three in the morning.
+    ///
+    /// `true` when a ring disappeared, because the wall must redraw the frame it vanished on: a cursor fading changes
+    /// nothing else, which is the bug `cursor-idle` found in #167.
+    pub fn let_go(&mut self, origin: &Origin) -> bool {
+        self.cursors.remove(origin).is_some()
     }
 
     /// **A client's release** (#167): the button comes up, and the cursor starts its fade from here.
@@ -5807,7 +5830,7 @@ fn setup(state: &mut State, waker: rune::Waker) {
             tracing::info!("control plane off: ARCONS_CONTROL=0");
         } else {
             let path = crate::control::socket_path();
-            match crate::control::Server::spawn(path.clone()) {
+            match crate::control::Server::spawn(path.clone(), &state.queue) {
                 Ok(server) => {
                     tracing::info!(
                         "control plane listening on {} (protocol {}, mode 0600)",
@@ -5841,7 +5864,7 @@ fn setup(state: &mut State, waker: rune::Waker) {
                 )
             }
             Err(why) => tracing::warn!("relay: {why}"),
-            Ok(settings) => match crate::control::relay::Relay::spawn(settings) {
+            Ok(settings) => match crate::control::relay::Relay::spawn(settings, &state.queue) {
                 Ok(relay) => state.relay = Some(relay),
                 // A carrier thread that will not start is a wall that draws without a relay, and says why here
                 // rather than leaving a phone waiting on a relay nobody is behind.
@@ -6006,37 +6029,18 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     #[cfg(not(unix))]
     let viewed = false;
 
-    // **The control plane's requests, applied here and nowhere else** (#165): a socket read on this thread
-    // would block the frame, and an `apply` on the listener's thread would be two threads changing one wall.
-    // The queue is drained, not waited on: a wall that waited for a client would freeze for one that has not
-    // finished typing.
+    // **The wall's queue, drained between frames** (#165, #222): every carrier's request waits here — the socket's,
+    // the relay's — in the order it arrived, and a carrier that hung up has left a `Departed` behind. `State` is this
+    // thread's, so this is the only place a job is settled (`INV-05`): a socket read on this thread would block the
+    // frame, and an `apply` on a carrier's thread would be two threads changing one wall. It is drained, never waited
+    // on — a wall that waited for a client would freeze for one that has not finished typing — and it goes through
+    // `control::authority::serve`, which is also what a test calls: one door, one vocabulary, one answer to "what does
+    // this request mean".
     #[cfg(unix)]
     let mut controlled = false;
     #[cfg(unix)]
-    while let Some(job) = state
-        .control
-        .as_ref()
-        .and_then(crate::control::Server::next_job)
-    {
-        // **A change, a look, or the arrangement** (#181, #201): all three are answered here, between frames, because
-        // `State` is this thread's — and by `control::authority::answer`, so a wall's loop and a viewer's session
-        // cannot grow two opinions about what a request means.
-        let (answer, did) = crate::control::authority::answer(state, &job.request);
-        controlled |= did;
-        job.answer(answer);
-    }
-    // **And the relay's, through the same door** (#196): the carrier owns its socket, its dial and its redial, and
-    // hands a request over between frames exactly as the listener does — so a phone's press is answered by the thread
-    // that owns the state (`INV-05`).
-    #[cfg(unix)]
-    while let Some(job) = state
-        .relay
-        .as_ref()
-        .and_then(crate::control::relay::Relay::next_job)
-    {
-        let (answer, did) = crate::control::authority::answer(state, &job.request);
-        controlled |= did;
-        job.answer(answer);
+    while let Some(job) = state.queue.next() {
+        controlled |= crate::control::authority::serve(state, job);
     }
     #[cfg(not(unix))]
     let controlled = false;

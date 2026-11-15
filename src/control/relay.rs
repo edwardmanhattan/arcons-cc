@@ -250,14 +250,14 @@ use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(unix)]
-use std::sync::mpsc::{self, Receiver};
-#[cfg(unix)]
 use std::sync::{Arc, Mutex};
 
 #[cfg(unix)]
 use super::carrier::Carrier;
 #[cfg(unix)]
-use super::server::{Job, serve_session};
+use super::server::serve_session;
+#[cfg(unix)]
+use crate::ui::Origin;
 
 /// One end of a dialled connection: a unix socket beside the wall, or a TCP relay on the network.
 #[cfg(unix)]
@@ -793,15 +793,21 @@ impl Carrier for RelayCarrier {
         self.stop.store(true, Ordering::SeqCst);
         self.dropped();
     }
+
+    /// **The device behind the frame just read** (#222): the name `devices.toml` holds beside the key's hash — so a
+    /// cursor, a refusal and a log line name the same thing. Never the key, the hash or the relay's address
+    /// (`INV-08`): a name a phone chose in the room is the only thing here that is the phone's.
+    fn origin(&self) -> Option<Origin> {
+        self.to.as_deref().map(Origin::named)
+    }
 }
 
-/// **The running carrier** (#196): a thread, a queue of the wall's jobs, and a way to stop.
+/// **The running carrier** (#196): a thread, a way to stop, and an end of the **wall's** queue (#222).
 ///
-/// The shape [`super::server::Server`] has, because `poll`'s half of it is the same: `next_job` never blocks, and the
-/// UI thread answers each job through `control::authority::answer`. The difference is that this one *dials*.
+/// The shape [`super::server::Server`] has, and the same queue: a phone's request waits in the wall's one channel
+/// beside a `ctl`'s, so `poll` applies them in the order they arrived. The difference is that this one *dials*.
 #[cfg(unix)]
 pub struct Relay {
-    jobs: Receiver<Job>,
     stop: Arc<AtomicBool>,
     current: Arc<Mutex<Option<Wire>>>,
     connected: Arc<AtomicBool>,
@@ -810,10 +816,11 @@ pub struct Relay {
 
 #[cfg(unix)]
 impl Relay {
-    /// Dial in the background and serve for as long as the wall runs. Called only by a wall that is **the** wall: a
-    /// viewer draws somebody else's state, and two processes publishing one relay would be two answers to one device.
-    pub fn spawn(settings: Settings) -> std::io::Result<Relay> {
-        let (tx, jobs) = mpsc::channel();
+    /// Dial in the background and serve for as long as the wall runs, handing every request to `queue` — the wall's.
+    /// Called only by a wall that is **the** wall: a viewer draws somebody else's state, and two processes publishing
+    /// one relay would be two answers to one device.
+    pub fn spawn(settings: Settings, queue: &super::sessions::Queue) -> std::io::Result<Relay> {
+        let tx = queue.sender();
         let stop = Arc::new(AtomicBool::new(false));
         let current: Arc<Mutex<Option<Wire>>> = Arc::new(Mutex::new(None));
         let connected = Arc::new(AtomicBool::new(false));
@@ -837,18 +844,11 @@ impl Relay {
                 })?
         };
         Ok(Relay {
-            jobs,
             stop,
             current,
             connected,
             thread: Some(thread),
         })
-    }
-
-    /// **The next request, if one is waiting.** Called from `poll`, between frames, and never blocking: a wall that
-    /// waited here would freeze for a phone that has not finished a press.
-    pub fn next_job(&self) -> Option<Job> {
-        self.jobs.try_recv().ok()
     }
 
     /// Whether the relay is answering — the fact the log line and a test read, rather than a claim.
@@ -903,11 +903,13 @@ pub fn row(_config: Option<&Config>, _env: &crate::config::Env) -> String {
 mod tests {
     use super::*;
     use crate::config::devices::{Device, Devices, Key, VERSION};
+    use crate::control::server::Job;
     use crate::control::wire::{self, Answer, Request};
     use crate::control::{Changed, Intent, RefusalKind, refusal_kind};
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::Path;
+    use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
     /// **A credential that must never be printed**: not by a `Debug`, not by a row, not by an error (`INV-08`).
@@ -1192,6 +1194,14 @@ mod tests {
             wire::request(&line),
             Ok(Request::Intent(Intent::NewWorkspace)),
             "what the carrier carries is a `wire::Request` and nothing else (#196, INV-07)"
+        );
+        // **And whose hand it is** (#222): the device's *name*, from the row the key's hash matched — so the session
+        // stamps a cursor, a refusal and a log line with the same thing, and never with the key, the hash or the
+        // relay's address (`INV-08`).
+        assert_eq!(
+            carrier.origin(),
+            Some(crate::ui::Origin::named("phone")),
+            "a relay's carrier names its client by the device name in devices.toml (#222 rule 4)"
         );
         drop(relay.join().expect("the relay's half ends"));
     }
@@ -1519,11 +1529,13 @@ mod tests {
             end.answer()
         });
 
-        let relay = Relay::spawn(settings).expect("the carrier thread starts");
+        // **The wall's queue** (#222): the relay is handed an end of it, exactly as the socket's listener is.
+        let queue = crate::control::sessions::Queue::new();
+        let relay = Relay::spawn(settings, &queue).expect("the carrier thread starts");
         let job = {
             let deadline = Instant::now() + PATIENCE;
             loop {
-                if let Some(job) = relay.next_job() {
+                if let Some(job) = queue.next() {
                     break job;
                 }
                 assert!(
@@ -1534,8 +1546,8 @@ mod tests {
             }
         };
         assert_eq!(
-            job.request,
-            Request::Intent(Intent::NewWorkspace),
+            job.request(),
+            Some(&Request::Intent(Intent::NewWorkspace)),
             "the job is the wire's request, unchanged (#196)"
         );
         assert!(
@@ -1546,8 +1558,10 @@ mod tests {
         );
         // The UI thread, played by this test: apply, then answer, through the one door.
         let mut state = crate::ui::State::default();
-        let (answer, _) = crate::control::authority::answer(&mut state, &job.request);
-        job.answer(answer);
+        assert!(
+            crate::control::authority::serve(&mut state, job),
+            "a new workspace is a change"
+        );
         assert_eq!(
             state.workspaces.len(),
             4,
@@ -1603,7 +1617,9 @@ mod tests {
 
         // **The wall**, played by this thread: it answers every beat, because the loop asks between frames exactly as
         // `poll` answers it, and a test that stopped answering would be a wall that stopped drawing (`INV-05`).
-        let relay = Relay::spawn(settings).expect("the carrier thread starts");
+        // **The wall's queue** (#222): the relay is handed an end of it, exactly as the socket's listener is.
+        let queue = crate::control::sessions::Queue::new();
+        let relay = Relay::spawn(settings, &queue).expect("the carrier thread starts");
         let mut state = crate::ui::State::default();
         let deadline = Instant::now() + PATIENCE;
         let (mut ack, mut published, mut quiet) = (None, None, None);
@@ -1613,17 +1629,15 @@ mod tests {
                 Instant::now() < deadline,
                 "the relay never carried the watch through: ack={ack:?} published={published:?} quiet={quiet:?}"
             );
-            if let Some(job) = relay.next_job() {
-                let (answer, _) = crate::control::authority::answer(&mut state, &job.request);
-                job.answer(answer);
+            if let Some(job) = queue.next() {
+                // The wall is asked between frames, exactly as a poll answers it (INV-05): the beat's read and the
+                // client's frames are the same door.
+                let _ = crate::control::authority::serve(&mut state, job);
                 // **The change, once the grant has been based on the wall as it was**: a phone that has just read is
                 // watching a wall somebody else may move.
                 if !changed {
                     changed = true;
-                    let _ = crate::control::authority::answer(
-                        &mut state,
-                        &Request::Intent(Intent::NewWorkspace),
-                    );
+                    let _ = crate::control::apply(&mut state, Intent::NewWorkspace);
                 }
                 continue;
             }
@@ -1637,11 +1651,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
         relay_half.join().expect("the relay's half ends");
-        // **The last job is answered before the carrier stops** (`INV-05`): a session blocked in `ask_the_wall`
+        // **The last job is answered before the carrier stops** (INV-05): a session blocked in `ask_the_wall`
         // outlives the wall by its own deadline, and a test that left one would spend five seconds saying nothing.
-        while let Some(job) = relay.next_job() {
-            let (answer, _) = crate::control::authority::answer(&mut state, &job.request);
-            job.answer(answer);
+        while let Some(job) = queue.next() {
+            let _ = crate::control::authority::serve(&mut state, job);
         }
         drop(relay);
 
@@ -1729,9 +1742,12 @@ mod tests {
         let job = jobs
             .recv_timeout(PATIENCE)
             .expect("the socket still answers requests after refusing a watch");
-        assert_eq!(job.request, Request::Wall);
-        let (answer, _) =
-            crate::control::authority::answer(&mut crate::ui::State::default(), &job.request);
+        assert_eq!(job.request(), Some(&Request::Wall));
+        let (answer, _) = crate::control::authority::answer(
+            &mut crate::ui::State::default(),
+            &Request::Wall,
+            None,
+        );
         job.answer(answer);
         line.clear();
         reader.read_line(&mut line).expect("the read is answered");

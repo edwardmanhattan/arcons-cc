@@ -6,19 +6,26 @@
 //! rule the rest of the crate is built on ("the UI thread never blocks"); a state change on this thread would be
 //! two threads mutating one wall.
 //!
+//! **The queue the jobs wait in is the wall's**, not the listener's (#222): [`super::sessions::Queue`] is handed *to*
+//! the server, so the socket's requests and the relay's wait in one line and are applied in the order they arrived.
+//!
 //! **The socket is the credential** (`INV-08`): mode `0600`, inside a `0700` directory, no token and no
 //! handshake. The directory is what closes the window between `bind` and `set_permissions` — nobody else can
 //! enter it to race the chmod.
 
+use std::collections::BTreeSet;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use super::carrier::Carrier;
+use super::sessions::Queue;
 use super::{Refused, SOCKET_MODE};
+use crate::ui::Origin;
 
 /// How long a client waits for the wall to answer before it is told the wall did not.
 ///
@@ -26,27 +33,53 @@ use super::{Refused, SOCKET_MODE};
 /// problem, and a client hanging on a socket for ever cannot tell that from a slow one.
 pub(super) const ANSWER_WITHIN: Duration = Duration::from_secs(5);
 
-/// **One parsed request, waiting for the UI thread.** The reply channel is how the listener says the answer
-/// back to the client without ever touching the wall itself.
-pub struct Job {
-    /// What the client asked for: a change, or a look at the wall (#181).
-    pub request: super::wire::Request,
-    answer: Sender<super::wire::Answer>,
+/// **One thing a carrier has left for the wall** (#222): a request to answer, or a hand that has let go.
+///
+/// The queue is one channel, so the two are one type: a carrier's session says what happened to it — a line to answer,
+/// or the end of it — and the thread that owns the state settles both. A second channel for "the client went away"
+/// would be a second way to reach the wall.
+pub enum Job {
+    /// **A parsed request**, waiting for the UI thread. The reply channel is how the listener says the answer back to
+    /// the client without ever touching the wall itself.
+    Request {
+        /// What the client asked for: a change, a look at the wall, or the arrangement (#181, #201).
+        request: super::wire::Request,
+        /// **Whose hand asked** (#222): the origin the carrier knows its client by — the socket's `ctl`, a relay's
+        /// device name — or `None` for a carrier that carries anybody. The door prefers it over an origin a frame typed.
+        hand: Option<Origin>,
+        answer: Sender<super::wire::Answer>,
+    },
+    /// **A carrier that hung up** (#222): the hand this origin was is gone, and its cursor goes with it. A carrier
+    /// serves several hands over its life (a relay connection carries every paired phone), so the session reports each
+    /// of them once, at the end.
+    Departed { origin: Origin },
 }
 
 impl Job {
-    /// Answer the client. Called by the UI thread after `control::apply` (or after reading the projection), and
-    /// once per job.
+    /// The request this job carries, if it carries one. A driver that has a job and wants to know what it is asks this
+    /// rather than matching twice.
+    pub fn request(&self) -> Option<&super::wire::Request> {
+        match self {
+            Job::Request { request, .. } => Some(request),
+            Job::Departed { .. } => None,
+        }
+    }
+
+    /// Answer the client. Called by the UI thread after `control::apply` (or after reading the projection), and once
+    /// per job — a departed hand has nobody to answer, and says nothing about it.
     pub fn answer(self, answer: super::wire::Answer) {
         // A client that hung up is not an error: the reply has nowhere to go, and the wall already changed.
-        let _ = self.answer.send(answer);
+        if let Job::Request { answer: to, .. } = self {
+            let _ = to.send(answer);
+        }
     }
 }
 
-/// The listening socket, the thread that accepts on it, and the queue the UI thread drains.
+/// The listening socket and the thread that accepts on it.
+///
+/// It holds no queue of its own (#222): the jobs go to the wall's, which the server is handed at [`Server::spawn`].
 pub struct Server {
     path: PathBuf,
-    jobs: Receiver<Job>,
     listening: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     /// The connection being served, so a stopping wall can hang it up rather than wait for a client that may
@@ -56,12 +89,13 @@ pub struct Server {
 }
 
 impl Server {
-    /// Bind `path` and start accepting. The bind happens **here**, before the thread, so a wall that cannot own
-    /// its socket says so at start-up rather than in a log line nobody reads.
+    /// Bind `path` and start accepting, handing every request to `queue` — **the wall's** queue (#222), so a socket's
+    /// line and a relay's are applied in one order. The bind happens **here**, before the thread, so a wall that
+    /// cannot own its socket says so at start-up rather than in a log line nobody reads.
     ///
     /// A socket left behind by a wall that was killed is removed; a socket that **answers** is another wall, and
     /// two walls driving one display is refused rather than made to share.
-    pub fn spawn(path: PathBuf) -> std::io::Result<Server> {
+    pub fn spawn(path: PathBuf, queue: &Queue) -> std::io::Result<Server> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
             // The directory is the real permission: created 0700, so the socket inside it is unreachable while
@@ -84,7 +118,7 @@ impl Server {
         let listener = UnixListener::bind(&path)?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(SOCKET_MODE))?;
 
-        let (tx, jobs) = mpsc::channel();
+        let tx = queue.sender();
         let listening = Arc::new(AtomicBool::new(true));
         let stop = Arc::new(AtomicBool::new(false));
         let current = Arc::new(Mutex::new(None));
@@ -99,7 +133,6 @@ impl Server {
         };
         Ok(Server {
             path,
-            jobs,
             listening,
             stop,
             current,
@@ -116,12 +149,6 @@ impl Server {
     /// claiming a wall is drivable when it is not.
     pub fn listening(&self) -> bool {
         self.listening.load(Ordering::Relaxed)
-    }
-
-    /// **The next request, if one is waiting.** Called from `poll`, between frames, and never blocking: a wall
-    /// that waited here would freeze for a client that has not finished typing its line.
-    pub fn next_job(&self) -> Option<Job> {
-        self.jobs.try_recv().ok()
     }
 }
 
@@ -199,14 +226,39 @@ fn serve_one(stream: UnixStream, tx: &Sender<Job>, stop: &AtomicBool) -> std::io
 /// knows the transport only as [`super::carrier::Carrier`]. A relay (#196) and a viewer's connection (#202) reuse it,
 /// so there is one vocabulary, one refusal path and one place that could break `INV-05`.
 ///
+/// Two things a session says about its client besides the line (#222): the **origin** the carrier knows it by is
+/// stamped on the request, and when the carrier hangs up every origin it served is reported to the wall as a
+/// [`Job::Departed`] — a pointer that outlives its hand is a ghost on a wall at three in the morning.
+///
 /// **A watch is the one line that is not answered once** (#221): the carrier's capability decides whether one may
 /// exist, the grant is one answer like any other, and from then on the loop wakes on the beat, asks the wall what the
 /// projection is and writes it if it moved. One watch per connection: a second ask is a new baseline, not a second
-/// stream.
+/// stream. The two compose — a watch is a deadline on the *same* read, so a watched connection still carries every
+/// hand it did before it was watched.
 pub(super) fn serve_session(
     mut carrier: impl super::carrier::Carrier,
     tx: &Sender<Job>,
     stop: &AtomicBool,
+) -> std::io::Result<()> {
+    // **Whose hands came in on this carrier.** A relay connection carries every paired phone, so the set is a set and
+    // not one name; a socket carries one `ctl`; a test's loopback may carry nobody.
+    let mut hands: BTreeSet<Origin> = BTreeSet::new();
+    let served = serve_lines(&mut carrier, tx, stop, &mut hands);
+    for origin in hands {
+        // A wall that has stopped is a wall with no cursors to draw: the report is best-effort and never fails a
+        // session that is already over.
+        let _ = tx.send(Job::Departed { origin });
+    }
+    served
+}
+
+/// The lines, and the hands they came in on, over a carrier's life. Split out so [`serve_session`] can report the
+/// hands **whatever ended the session** — end of file, a broken line, the wall stopping.
+fn serve_lines(
+    carrier: &mut impl Carrier,
+    tx: &Sender<Job>,
+    stop: &AtomicBool,
+    hands: &mut BTreeSet<Origin>,
 ) -> std::io::Result<()> {
     // **The watch that is open on this connection** (#221), if one is. It lives here and not in the wall because the
     // beat is the carrier's clock, and a watched connection is the only one read with a deadline.
@@ -223,7 +275,7 @@ pub(super) fn serve_session(
                 // client is written to only if that is not the projection it already holds.
                 Err(error) if super::watch::timed_out(&error) => {
                     if let Some(open) = watching.as_mut() {
-                        publish(&mut carrier, tx, open)?;
+                        publish(carrier, tx, open)?;
                     }
                     continue;
                 }
@@ -237,9 +289,15 @@ pub(super) fn serve_session(
         if line.trim().is_empty() {
             continue;
         }
+        // **Whose hand this is** (#222): the carrier knows, and the frame does not get to say. A request that arrived
+        // on a named carrier is that client's — a cursor cannot be moved under somebody else's name.
+        let hand = carrier.origin();
+        if let Some(hand) = &hand {
+            hands.insert(hand.clone());
+        }
         let answer = match super::wire::request(&line) {
-            Ok(super::wire::Request::Watch(wanted)) => grant(&carrier, tx, &mut watching, wanted),
-            Ok(request) => ask_the_wall(tx, request),
+            Ok(super::wire::Request::Watch(wanted)) => grant(carrier, tx, &mut watching, wanted),
+            Ok(request) => ask_the_wall(tx, request, hand),
             Err(why) => super::wire::Answer::Changed(Err(why)),
         };
         // **A refused request is a line, never a closed connection** (`INV-07`): a client that asked for
@@ -266,7 +324,7 @@ fn grant(
         // because a `ctl` script must not be able to hold the wall's one connection open for ever.
         return super::wire::Answer::Changed(Err(Refused(super::watch::NOT_CARRIED)));
     }
-    match ask_the_wall(tx, super::wire::Request::Wall) {
+    match ask_the_wall(tx, super::wire::Request::Wall, None) {
         super::wire::Answer::Wall(wall) => {
             *watching = Some(super::watch::Watching::at(
                 wanted,
@@ -288,7 +346,7 @@ fn publish(
     tx: &Sender<Job>,
     open: &mut super::watch::Watching,
 ) -> std::io::Result<()> {
-    let super::wire::Answer::Wall(wall) = ask_the_wall(tx, super::wire::Request::Wall) else {
+    let super::wire::Answer::Wall(wall) = ask_the_wall(tx, super::wire::Request::Wall, None) else {
         // The wall did not answer this beat: nothing to publish, and the next beat asks again. A session that ended
         // because a frame was slow would be a phone that went quiet for a wall's bad afternoon.
         return Ok(());
@@ -303,9 +361,20 @@ fn publish(
 }
 
 /// Hand one intent to the UI thread and wait for its answer.
-fn ask_the_wall(tx: &Sender<Job>, request: super::wire::Request) -> super::wire::Answer {
+fn ask_the_wall(
+    tx: &Sender<Job>,
+    request: super::wire::Request,
+    hand: Option<Origin>,
+) -> super::wire::Answer {
     let (answer, reply) = mpsc::channel();
-    if tx.send(Job { request, answer }).is_err() {
+    if tx
+        .send(Job::Request {
+            request,
+            hand,
+            answer,
+        })
+        .is_err()
+    {
         // The wall has stopped: the loop is gone, and saying so is better than a client waiting for ever.
         return super::wire::Answer::Changed(Err(Refused("the wall has stopped")));
     }
@@ -337,12 +406,12 @@ mod tests {
         dir.join("control.sock")
     }
 
-    /// Wait for the listener thread to hand over a request. The production path is `next_job`, which never
+    /// Wait for the listener thread to hand over a request. The production path is `Queue::next`, which never
     /// blocks (a wall that waited on a client would freeze for one that has not finished typing); a test knows
     /// the request is coming and waits for the thread instead of racing it.
-    fn wait_job(server: &Server) -> Job {
+    fn wait_job(queue: &Queue) -> Job {
         for _ in 0..1_000 {
-            if let Some(job) = server.next_job() {
+            if let Some(job) = queue.next() {
                 return job;
             }
             std::thread::sleep(Duration::from_millis(2));
@@ -355,7 +424,8 @@ mod tests {
     #[test]
     fn a_request_changes_the_wall_and_the_socket_goes_when_it_does() {
         let path = test_socket("round-trip");
-        let server = Server::spawn(path.clone()).expect("the socket binds");
+        let queue = Queue::new();
+        let server = Server::spawn(path.clone(), &queue).expect("the socket binds");
         assert!(
             server.listening(),
             "a server that bound a socket is listening"
@@ -378,16 +448,11 @@ mod tests {
             .expect("the request goes");
         // The UI answers between frames: here that is this thread, applying to a wall of its own.
         let mut state = State::default();
-        let job = wait_job(&server);
-        let intent = match &job.request {
-            super::super::wire::Request::Intent(intent) => intent.clone(),
-            other => panic!("a read where a change was asked for: {other:?}"),
-        };
-        let (answer, _) = crate::control::authority::answer(
-            &mut state,
-            &super::super::wire::Request::Intent(intent),
+        let job = wait_job(&queue);
+        assert!(
+            crate::control::authority::serve(&mut state, job),
+            "a new workspace is a change"
         );
-        job.answer(answer);
 
         let mut reply = String::new();
         BufReader::new(client)
@@ -409,23 +474,27 @@ mod tests {
     #[test]
     fn a_refusal_is_a_line_with_the_rules_name() {
         let path = test_socket("refusal");
-        let server = Server::spawn(path.clone()).expect("the socket binds");
+        let queue = Queue::new();
+        let _server = Server::spawn(path.clone(), &queue).expect("the socket binds");
         let mut client = UnixStream::connect(&path).expect("a client connects");
         client
             .write_all(b"{\"v\":1,\"intent\":{\"verb\":\"pane.close\",\"pane\":1}}\n")
             .expect("the request goes");
         let mut state = State::default();
         let only = state.focused();
-        let job = wait_job(&server);
+        let job = wait_job(&queue);
         assert_eq!(
-            job.request,
-            super::super::wire::Request::Intent(Intent::ClosePane(only))
+            job.request(),
+            Some(&super::super::wire::Request::Intent(Intent::ClosePane(
+                only
+            )))
         );
-        let intent = match &job.request {
-            super::super::wire::Request::Intent(intent) => intent.clone(),
+        let result = match job.request() {
+            Some(super::super::wire::Request::Intent(intent)) => {
+                control::apply(&mut state, intent.clone())
+            }
             other => panic!("a read where a change was asked for: {other:?}"),
         };
-        let result = control::apply(&mut state, intent);
         assert_eq!(result, Err(Refused(LAST_PANE)));
         job.answer(match result {
             Ok(outcome) => Answer::Changed(Ok(crate::control::Changed(outcome.changed()))),
@@ -447,14 +516,15 @@ mod tests {
     #[test]
     fn a_read_comes_back_as_the_walls_projection() {
         let path = test_socket("read");
-        let server = Server::spawn(path.clone()).expect("the socket binds");
+        let queue = Queue::new();
+        let _server = Server::spawn(path.clone(), &queue).expect("the socket binds");
         let mut client = UnixStream::connect(&path).expect("a client connects");
         client
             .write_all(b"{\"v\":1,\"read\":\"wall\"}\n")
             .expect("the request goes");
         let state = State::default();
-        let job = wait_job(&server);
-        assert_eq!(job.request, super::super::wire::Request::Wall);
+        let job = wait_job(&queue);
+        assert_eq!(job.request(), Some(&super::super::wire::Request::Wall));
         let answer = Answer::Wall(crate::control::projection::of(&state));
         job.answer(answer);
         let mut reply = String::new();
@@ -482,7 +552,8 @@ mod tests {
     #[test]
     fn a_bad_line_is_refused_and_the_client_can_ask_again() {
         let path = test_socket("bad-line");
-        let server = Server::spawn(path.clone()).expect("the socket binds");
+        let queue = Queue::new();
+        let _server = Server::spawn(path.clone(), &queue).expect("the socket binds");
         let mut client = UnixStream::connect(&path).expect("a client connects");
         client.write_all(b"not json\n").expect("the request goes");
         let mut reply = String::new();
@@ -497,7 +568,7 @@ mod tests {
         client
             .write_all(b"{\"v\":1,\"intent\":{\"verb\":\"surface.close\"}}\n")
             .expect("the second request goes");
-        let job = wait_job(&server);
+        let job = wait_job(&queue);
         job.answer(Answer::Changed(Ok(Changed(false))));
         let mut second = String::new();
         reader
@@ -514,7 +585,8 @@ mod tests {
     #[test]
     fn the_session_loop_serves_a_carrier_it_has_never_seen() {
         let (wall_end, peer) = crate::control::carrier::Loopback::pair();
-        let (tx, jobs) = mpsc::channel::<Job>();
+        let queue = Queue::new();
+        let tx = queue.sender();
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = Arc::clone(&stop);
         let serving = std::thread::spawn(move || serve_session(wall_end, &tx, &stopping));
@@ -522,9 +594,7 @@ mod tests {
         peer.send(r#"{"v":1,"intent":{"verb":"workspace.new"}}"#);
         // Bounded: a loop that answered for itself would never send a job, and a test that hangs tells you less than
         // one that fails with a sentence.
-        let job = jobs.recv_timeout(Duration::from_secs(2)).expect(
-            "the loop did not hand the request to the wall: something answered for the UI thread (INV-05)",
-        );
+        let job = wait_job(&queue);
         assert!(
             peer.recv_within(Duration::from_millis(50)).is_none(),
             "the loop answered before the wall did: a carrier must never apply a change itself (INV-05)"
@@ -532,8 +602,10 @@ mod tests {
 
         // The UI thread, played by this test: apply, then answer.
         let mut state = State::default();
-        let (answer, _) = crate::control::authority::answer(&mut state, &job.request);
-        job.answer(answer);
+        assert!(
+            crate::control::authority::serve(&mut state, job),
+            "a new workspace is a change"
+        );
         let line = peer
             .recv_within(Duration::from_secs(2))
             .expect("the answer came back through the carrier");

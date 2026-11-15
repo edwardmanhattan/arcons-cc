@@ -21,8 +21,8 @@
 
 use super::carrier::Carrier;
 use super::projection::Wall;
-use super::sessions::{self, Session};
 use super::watch::Watch;
+use super::watch::{Publish, Session};
 use super::wire::{self, Answer, Refusal, Request, Unreadable};
 use super::{Changed, Intent, PROTOCOL, RefusalKind};
 use crate::ui::ViewId;
@@ -374,12 +374,12 @@ impl<C: Carrier> Client<C> {
         };
         match wire::answer(&line) {
             Ok(Answer::Published(_, wall)) => match self.session.publish(wall.seq) {
-                sessions::Publish::Take => {
+                Publish::Take => {
                     self.known = Known::Wall(wall.clone());
                     Ok(Some(wall))
                 }
                 // **A version it did not expect**: read, and hold what the read answers with.
-                sessions::Publish::Read => self.read().map(Some),
+                Publish::Read => self.read().map(Some),
             },
             Ok(other) => {
                 self.known = Known::Nothing;
@@ -455,9 +455,7 @@ mod tests {
                 .spawn(move || {
                     let mut state = State::default();
                     while let Ok(job) = handed_over.recv() {
-                        let (answer, _) =
-                            crate::control::authority::answer(&mut state, &job.request);
-                        job.answer(answer);
+                        crate::control::authority::serve(&mut state, job);
                     }
                 })
                 .expect("the wall's thread starts");
