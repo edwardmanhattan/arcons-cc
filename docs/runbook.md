@@ -88,6 +88,7 @@ arcons-cc 0.1.0 self-check
   settings    ok  no /home/wall/.config/arcons-cc/settings.toml, using the defaults (pane gap 0 pt)
   layout      ok  no /home/wall/.config/arcons-cc/layout.toml, opening the default wall (0 workspace(s) remembered)
   control     ok  no wall listening at /run/user/1000/arcons-cc/control.sock (start the display)
+  relay       ok  not now (no relay is configured) — this wall works locally
   login       ok  refresh token accepted, access token valid for 900 s
   picture     ok  127 hulls, 126 never reported
   socket      ok  subscribed to live-feed
@@ -104,6 +105,13 @@ healthy — the line says which file it looked for and what it used instead.
 the display), or `off (ARCONS_CONTROL=0)` (this wall has no socket on purpose). It is a fact, not a verdict, and
 it never changes the exit code: a wall nobody is driving is a wall that is working. `docs/control.md` is the
 client's reference.
+
+`relay` is the outbound carrier a phone reaches the wall through (#196): **`not now`** when `ARCONS_RELAY_URL` is
+unset — the default, and a wall that works locally — `configured at … (the relay answers)` when the relay accepted the
+wall's credential, or `configured at …, but the relay is not answering`. It is the third fact of the same kind: no relay
+and an unreachable relay both leave a wall drawing the sea, and neither changes the exit code. The frames are pinned in
+`docs/control.md`; a relay that says no to the wall's credential says `the relay refused the wall`, and that one is worth
+reading — the wall stops retrying it.
 
 `layout` is the same kind of line about a bigger file (#153): the workspaces, the panes, their cameras and
 their names, written a second and a half after the operator stops arranging (`layout.toml`, mode 0600, and

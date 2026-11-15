@@ -620,6 +620,88 @@ fn the_mobile_ui_note_names_only_verbs_the_wall_answers_to() {
     }
 }
 
+/// **The relay's frames are the ones the code speaks** (#196), both ways — the same tripwire the verb table has,
+/// because the frames are the other vocabulary a document is tempted to invent.
+///
+/// A frame the code sends and the document does not name is one a relay's author cannot find; a frame the document
+/// names and the code never sends is a service written against a name that will not arrive. And the three states
+/// `--self-check` reports are quoted in the document by the names the code refuses with (`INV-07`).
+#[test]
+fn the_control_document_names_exactly_the_relays_frames() {
+    use arcons_cc::control::relay::{Uncarried, frame};
+
+    let doc = read("docs/control.md");
+    let table = section(&doc, "### The relay's frames");
+    // The frames table: one row per name, and the first backticked token of the row is the name.
+    let documented: Vec<String> = table
+        .lines()
+        .filter(|line| line.starts_with("| `"))
+        .filter_map(|line| line.split('`').nth(1))
+        .map(str::to_string)
+        .collect();
+    assert!(
+        documented.len() >= 5,
+        "docs/control.md's relay table names {} frames, which is too few to be the table this claim is about — did \
+         it change shape? (#196)",
+        documented.len()
+    );
+    for name in frame::NAMES {
+        assert!(
+            documented.iter().any(|named| named == name),
+            "docs/control.md does not name the relay's `{name}` frame (#196): a relay's author writes against the \
+             document, and a frame they cannot find is one the wall sends into a service that ignores it"
+        );
+    }
+    for name in &documented {
+        assert!(
+            frame::NAMES.contains(&name.as_str()),
+            "docs/control.md names the relay's `{name}`, which no frame in `control::relay` sends (#196): the names \
+             are {:?}",
+            frame::NAMES
+        );
+    }
+
+    // **One vocabulary**: the relay's request is a `wire::Request`, and its answer a `wire::Answer` — said where a
+    // client's author reads, so nobody writes a second encoder for the same fields.
+    assert!(
+        table.contains("`wire::Request`") && table.contains("`wire::Answer`"),
+        "docs/control.md's relay section must say that a relay request is a `wire::Request` and an answer a \
+         `wire::Answer` (#196): a relay's frames are the socket's frames with one field on them, and a document that \
+         does not say so invites a second vocabulary"
+    );
+
+    // The three states, in the code's own words, and the key that makes a request a request.
+    assert!(
+        doc.contains(arcons_cc::control::relay::URL_VARIABLE),
+        "docs/control.md does not name `{}`, so nobody can point a wall at its relay (#196)",
+        arcons_cc::control::relay::URL_VARIABLE
+    );
+    for uncarried in Uncarried::ALL {
+        assert!(
+            doc.contains(uncarried.words()),
+            "docs/control.md does not name `{}`, which the wall refuses with (#196, INV-07): an operator reading \
+             `--self-check` needs the reference to explain the row",
+            uncarried.words()
+        );
+    }
+    assert!(
+        doc.contains(arcons_cc::control::relay::NOT_PAIRED),
+        "docs/control.md does not name `{}` (#196): it is what a phone that was revoked, or never paired, is answered",
+        arcons_cc::control::relay::NOT_PAIRED
+    );
+
+    // The numbers a reader plans against are the code's, not remembered ones: a redial that started at two seconds
+    // would make `--self-check`'s row a lie about how fast a restarted relay comes back.
+    use arcons_cc::control::relay::{BACKOFF_MAX, BACKOFF_START};
+    assert!(
+        table.contains(&format!("{} ms", BACKOFF_START.as_millis()))
+            && table.contains(&format!("up to {} s", BACKOFF_MAX.as_secs())),
+        "docs/control.md's relay section must state the backoff the carrier uses ({} ms, up to {} s, #196)",
+        BACKOFF_START.as_millis(),
+        BACKOFF_MAX.as_secs()
+    );
+}
+
 /// **A viewer's read is documented** (#202): `read: "scene"` is what a second screen asks for, and the document says
 /// so beside the projection — a viewer's author who finds `"wall"` and not `"scene"` builds a controller instead.
 #[test]

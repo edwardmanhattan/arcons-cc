@@ -517,6 +517,25 @@ impl Minos {
         }
     }
 
+    /// **The credential this wall already holds, in the shape its own file has** (#196): what it authenticates *to
+    /// its relay* with, so no wall-side secret is invented (`docs/mobile-remote.md` decision 2).
+    ///
+    /// The relay is the deployment's own service and exchanges it the way Minos does: `{"refresh_token": …}` for a
+    /// refresh-token wall, `{"identifier": …, "password": …}` for a password one. The value is [`Secret`], which is
+    /// why this is the one function that turns it into JSON — and why a `Debug` of anything derived from it, and a
+    /// log line that names the relay, still cannot carry one (`INV-08`).
+    pub fn relay_credential(&self) -> serde_json::Value {
+        match &self.credential {
+            Credential::RefreshToken(token) => {
+                serde_json::json!({ "refresh_token": token.expose() })
+            }
+            Credential::Password {
+                identifier,
+                password,
+            } => serde_json::json!({ "identifier": identifier, "password": password.expose() }),
+        }
+    }
+
     /// Read the configuration from the environment, naming what is missing and never what is set.
     ///
     /// #8 adds the file-based credential (`$XDG_CONFIG_HOME/arcons-cc/`); the environment vars are
@@ -578,6 +597,9 @@ impl Env {
             "MINOS_REFRESH_TOKEN",
             "MINOS_IDENTIFIER",
             "MINOS_PASSWORD",
+            // **Where the wall dials its relay** (#196). Here rather than read from the process, so `--self-check`
+            // can be asked what a *described* environment would say — the rule the rest of this struct keeps.
+            "ARCONS_RELAY_URL",
         ] {
             if let Ok(value) = std::env::var(name) {
                 vars.insert(name.to_string(), value);

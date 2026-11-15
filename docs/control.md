@@ -277,6 +277,65 @@ is one vocabulary, one refusal path and one place that could break `INV-05`.
 The unix socket stays what it is: the local credential, one client at a time, no token. A carrier adds a way to reach the
 same loop; it does not add a second way to change the wall.
 
+## The relay (#196)
+
+`docs/mobile-remote.md` decision 2: **the wall does not listen.** It dials the deployment's relay, and a phone talks to
+the relay. The relay may be Minos or a separate service, so what the wall does on that wire is pinned here — the wall
+side is this repository's, the relay's own is somebody else's process, and `src/control/relay.rs` drives a fake one in
+its tests.
+
+| | |
+| --- | --- |
+| where | `ARCONS_RELAY_URL`: `unix:<path>`, a bare path (a unix socket), or `tcp://host:port`. Unset is **`no relay is configured`** — a wall in a cupboard, which is a wall that works |
+| what this build dials | a unix socket and plain TCP. A `wss://` relay needs a websocket carrier, which is not this ticket: the row says the relay is not answering *this* wall rather than guessing |
+| who the wall is | its **own Minos credential**, in the shape its file has. No wall-side secret is invented (`INV-08`) |
+| who the phone is | its **device key** (`pair.claim`), on every request. The wall hashes it and looks for the row in `devices.toml`, which holds **hashes** — a leaked file is a list of names, and a frame that presents the hash instead of the key is a stranger |
+| framing | one JSON object per line, in both directions — **`"v": 1`**, the socket's version, and the socket's own `intent`/`read` and answer shapes |
+| the loop | **the socket's session loop** (#195): a request becomes a `Job`, the UI thread answers it, and the answer is written back. Nothing about intents or answers is spelled twice |
+| `--self-check` | a `relay` row: configured, unreachable, or not now. A **fact, never a verdict** — it changes no exit code, like `control` |
+
+### The relay's frames
+
+A frame is named by the field that makes it one; `hello` and `welcome` are the handshake and the other two are the
+traffic. **A request is a `wire::Request` and an answer is a `wire::Answer`** — the relay's frame is that line with one
+field on it, so a client that can speak to the socket can read a relay frame and the wall has one encoder.
+
+| name | direction | what it is |
+| --- | --- | --- |
+| `hello` | wall → relay | **the first frame on every connection**, and nothing else is sent until the relay answers. `credential` is the wall's own Minos credential, in the shape its file has: `{"refresh_token": …}`, or `{"identifier": …, "password": …}` |
+| `credential` | inside `hello` | what the wall authenticates with. It reaches the socket and never a log line, a panic or this repository (`INV-08`) |
+| `welcome` | relay → wall | the answer to `hello`. **`true` is what "connected" means**: dialled, authenticated and accepted. `false` is `the relay refused the wall`, and it is **not retried** — the same credential is the same answer |
+| `device` | relay → wall | the phone's key, lowercase hex, on every request. A frame carrying it **is** a request: `{"v": 1, "device": "…", "intent": {…}}` or `{"v": 1, "device": "…", "read": "wall"}` |
+| `to` | wall → relay | the **device name** an answer is for, so the relay can route it back: `{"v": 1, "to": "phone", "ok": true, "changed": true}`. Absent on a refusal for a device the wall cannot name |
+
+```json
+{"v": 1, "hello": {"credential": {"refresh_token": "…"}}}
+{"v": 1, "welcome": true}
+
+{"v": 1, "device": "9a2db2e2…", "intent": {"verb": "pane.focus", "pane": 2}}
+{"v": 1, "to": "phone", "ok": true, "changed": true}
+
+{"v": 1, "device": "…an unknown key…", "intent": {"verb": "pane.focus", "pane": 2}}
+{"v": 1, "ok": false, "why": "that device is not paired", "kind": "rule"}
+```
+
+**Connected is the relay's answer, not the dial** — the two are different fixes, so they are different names. A socket
+that opened and said nothing, or one that went away, is **`the relay is not answering`**: the wall redials with backoff,
+from 200 ms up to 5 s, and keeps drawing while it waits. A `welcome: false` is **`the relay refused the wall`**: the
+carrier stops, because a wall that looped on a credential its relay had said no to would be a lockout.
+
+**A request from a key no row of `devices.toml` holds is refused on the connection it arrived on** — `that device is not
+paired`, `kind: rule`, with no `to` — and the wall never sees it. That is also what a **revoked** phone meets: `pair.forget`
+deletes its row, and the next frame it sends is a stranger's. The file is read **per request**, so a phone paired a second
+ago drives the wall without a restart, and one revoked a second ago stops without one.
+
+The three names above, and `that device is not paired`, are rows of `control::REFUSALS` with their kinds (`INV-07`):
+`rule` for a wall that will not, `busy` for a relay that is not answering now.
+
+**`INV-05` holds here too.** The carrier owns its thread: the dial, the read, the backoff and the redial all happen on it,
+never in `view`. A line the carrier cannot carry — an answer for a relay that went away mid-write — is **dropped**, not
+waited on: a wall that blocked for its relay would stop drawing the sea.
+
 ## The corpus a client replays (#224)
 
 This document is checked against the code, and it cannot see a client written in another language. So the

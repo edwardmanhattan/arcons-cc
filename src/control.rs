@@ -46,6 +46,11 @@ pub mod carrier;
 pub mod corpus;
 pub mod pair;
 pub mod projection;
+// **The relay** (#196) is the wall's one outbound carrier. Its frames compile everywhere — `tests/doc_claims.rs`
+// compares them with `docs/control.md` on every platform — and the socket it dials is a unix one, so a Windows build
+// has the vocabulary and no carrier, exactly as it does for a viewer's session.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub mod relay;
 pub mod snapshot;
 pub mod tiling;
 pub mod wire;
@@ -483,6 +488,7 @@ pub const REFUSALS: &[(&str, RefusalKind)] = &[
     ("no menu is open", RefusalKind::Rule),
     ("no pairing is open", RefusalKind::Rule),
     ("no pane has the keys", RefusalKind::Rule),
+    ("no relay is configured", RefusalKind::Rule),
     ("no row has the ring", RefusalKind::Rule),
     ("no submenu is open", RefusalKind::Rule),
     ("no such pane", RefusalKind::Rule),
@@ -490,6 +496,7 @@ pub const REFUSALS: &[(&str, RefusalKind)] = &[
     ("not JSON", RefusalKind::Input),
     ("that code is not the code", RefusalKind::Rule),
     ("that device is already paired", RefusalKind::Rule),
+    ("that device is not paired", RefusalKind::Rule),
     ("the cursor has not been placed", RefusalKind::Rule),
     ("the cursor is not pressed", RefusalKind::Rule),
     ("the hull has not reported", RefusalKind::Rule),
@@ -498,6 +505,8 @@ pub const REFUSALS: &[(&str, RefusalKind)] = &[
     ("the pane draws no map", RefusalKind::Rule),
     ("the pane has no frame yet", RefusalKind::Rule),
     ("the pane is already in that workspace", RefusalKind::Rule),
+    ("the relay is not answering", RefusalKind::Busy),
+    ("the relay refused the wall", RefusalKind::Rule),
     ("the ring is on no row", RefusalKind::Rule),
     ("the row opens nothing", RefusalKind::Rule),
     ("the tiling refused the pane", RefusalKind::Rule),

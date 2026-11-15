@@ -513,6 +513,13 @@ pub struct State {
     /// named pipe (`src/control.rs` says the same where the modules are gated).
     #[cfg(unix)]
     pub control: Option<crate::control::Server>,
+    /// **The wall's outbound carrier to its relay** (#196): `None` when `ARCONS_RELAY_URL` is unset, which is a wall
+    /// in a cupboard and is supported. Its requests arrive between frames through `next_job`, exactly as the socket's
+    /// do, and `poll` answers them through `control::authority::answer` — one door, one vocabulary.
+    ///
+    /// Unix only, for the listener's reason: the carrier this build has is a unix socket (`src/control.rs`).
+    #[cfg(unix)]
+    pub relay: Option<crate::control::relay::Relay>,
     /// The socket actor, when a credential was configured. `None` means the wall is read-only.
     pub live: Option<LiveThread>,
     /// The reads thread: the card asks it for identity, commander and specification.
@@ -777,6 +784,8 @@ impl Default for State {
             intents_applied: 0,
             #[cfg(unix)]
             control: None,
+            #[cfg(unix)]
+            relay: None,
             live: None,
             backend: None,
             viewpoint_pane: None,
@@ -5805,6 +5814,31 @@ fn setup(state: &mut State, waker: rune::Waker) {
             }
         }
     }
+    // **The wall dials out to its relay** (#196, `docs/mobile-remote.md` decision 2): one outbound carrier, on its
+    // own thread, and a wall with no relay configured is the supported default. **A viewer does not dial**: it draws
+    // somebody else's wall, and two processes publishing one relay would be two answers to one phone.
+    #[cfg(unix)]
+    if matches!(
+        crate::control::authority::Role::from_env(),
+        crate::control::authority::Role::Local
+    ) {
+        match crate::control::relay::Settings::from_process() {
+            // A wall in a cupboard: one line, and every other row of `--self-check` still passes.
+            Err(crate::control::relay::Uncarried::NoRelay) => {
+                tracing::info!(
+                    "relay: {} — this wall works locally",
+                    crate::control::relay::NO_RELAY
+                )
+            }
+            Err(why) => tracing::warn!("relay: {why}"),
+            Ok(settings) => match crate::control::relay::Relay::spawn(settings) {
+                Ok(relay) => state.relay = Some(relay),
+                // A carrier thread that will not start is a wall that draws without a relay, and says why here
+                // rather than leaving a phone waiting on a relay nobody is behind.
+                Err(problem) => tracing::warn!("relay: could not start the carrier: {problem}"),
+            },
+        }
+    }
     // A stop has to reach the loop even when nothing is drawing (`#43`): the flag alone is unread while
     // the event loop waits for an event no compositor is going to send.
     let stopping = waker.clone();
@@ -5977,6 +6011,19 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
         // **A change, a look, or the arrangement** (#181, #201): all three are answered here, between frames, because
         // `State` is this thread's — and by `control::authority::answer`, so a wall's loop and a viewer's session
         // cannot grow two opinions about what a request means.
+        let (answer, did) = crate::control::authority::answer(state, &job.request);
+        controlled |= did;
+        job.answer(answer);
+    }
+    // **And the relay's, through the same door** (#196): the carrier owns its socket, its dial and its redial, and
+    // hands a request over between frames exactly as the listener does — so a phone's press is answered by the thread
+    // that owns the state (`INV-05`).
+    #[cfg(unix)]
+    while let Some(job) = state
+        .relay
+        .as_ref()
+        .and_then(crate::control::relay::Relay::next_job)
+    {
         let (answer, did) = crate::control::authority::answer(state, &job.request);
         controlled |= did;
         job.answer(answer);

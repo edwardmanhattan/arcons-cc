@@ -29,7 +29,7 @@ the last one is deliberate:
 | presses a thing it can name but not see | `cursor.move`, `cursor.press`, `cursor.release` (#167) | yes |
 | learns *what* a pane is looking at | the projection: a pane's `title`, `kind`, `camera`, `selected` | yes |
 | is paired in the room | `pair.begin`, `pair.claim`, `pair.forget` (#194) — a code on the wall, a hashed key in `devices.toml` | yes, over the local socket |
-| reaches the wall from another machine | **a network transport** | **no, on purpose** |
+| reaches the wall from another machine | the relay's frames — the wall dials out and a phone talks to the relay (#196) | **the wall's half**; the relay's own service is not this repository's |
 
 The wire is one JSON object per line, in and out: a request is a verb with its fields, and the answer is either
 `{"ok": true, "changed": true}` or `{"ok": false, "why": "…"}` or `{"read": "wall", "wall": {…}}` — one or the other,
