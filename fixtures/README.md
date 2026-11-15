@@ -34,6 +34,57 @@ steps on the frame clock through `control::apply` — the same door the pointer 
 Curated, not recorded: an intent script is input (like `scripts/`), not wire data. What it must never become is a
 second description of the wall — the twin's golden is what decides whether it is right.
 
+## `control/` — the geometry a client mirrors (#220)
+
+Not input, and not wire data: a **contract recording**. `control/tiling/` holds one JSON file per tiling,
+written by `cargo run -- --record` from the wall's own functions (`Layout::cells`, `ui::view::panes_on`,
+`Layout::drop_for`) — never by hand, and never read from this machine's `layout.toml`, so the files are the
+same bytes on every machine. A client in another language (the phone of #217) reproduces them and thereby
+knows it agrees with the wall about where a pane is.
+
+Why a file and not a paragraph: three numbers decide where a drop lands and where an edge is, and none of them
+is on the wire — `tokens::MIN_PANE_PT` (160), `tokens::PANE_EDGE_BAND` (0.3) and
+`config::layout::RATIO_RANGE` (0.05…0.95), plus `tokens::GAP` (8) for the drawn rectangles. A client that
+guessed 20% for the band would send `centre` where the wall's own hand sends `left`, so the file carries the
+numbers **and** the rectangles they produce.
+
+| field | what it is |
+| --- | --- |
+| `viewport` | the panel's own points: the rectangle the tiling lands in |
+| `numbers` | the four numbers above, as the wall's tokens say them today |
+| `panes` | the pane **ids**, in the order the tiling's leaves refer to them |
+| `tiling` | the arrangement in `layout.toml`'s spelling (`split`, `ratio`, `a`, `b`, `pane`); a leaf is an index into `panes` |
+| `cells` | `Layout::cells`: the tiling, which is what a point is hit-tested against |
+| `rects` | `ui::view::panes_on` at `numbers.gap`: the rectangles the operator sees |
+| `drops` | a hand holding `dragged` released at `at`: a `retile` on an edge, a `swap`, or `null` for nothing |
+
+**The band's rule, stated once** (`Layout::drop_for`): a release belongs to the pane under it; each of that
+pane's four edges is `|point − edge| / span` deep, an edge counts only below `edge_band`, the nearest that
+counts wins, and **no edge in band is a swap**. The `drops` in every file are that rule's answers — 0.25 of a
+pane's span is that edge, 0.35 is a swap — so a client replays them instead of discovering the difference by
+dragging a pane on somebody's wall.
+
+| file | the wall it records |
+| --- | --- |
+| `one-pane.json` | one pane, where none of the four numbers has anything to say |
+| `side-by-side.json` | two panes, an even split |
+| `side-by-side-dragged.json` | the same two at 58%, the share `panes` sets in code |
+| `stacked.json` | two panes, split on the other axis |
+| `dragged-to-nothing.json` | the border dragged to 0: the clamp stops the pane at `MIN_PANE_PT` |
+| `narrowest-share.json` | the tightest ratio a resize may send (0.05) — 64 pt, which the clamp lifts to 160 |
+| `three.json` | three panes: the right half split again |
+| `four-nested.json` | four panes, nested two deep on both sides |
+| `window-too-small.json` | a 300 × 200 viewport, too small for two panes: the split halves |
+
+Two rules for this directory:
+
+1. **Re-record, never edit.** `cargo run -- --record` writes every file from the wall; the gate fails on a
+   file that differs, a case with no file, and a file no case produces. Editing one so a test passes is a
+   client and a wall that agree about nothing.
+2. **A case is a wall.** Every tiling is built through the gestures (`Layout::split_with`, `Layout::set_ratio`),
+   and a test refuses a case whose cells do not cover its viewport, overlap, leave a pane below
+   `MIN_PANE_PT`, or carry a split outside the ratio range.
+
 ## `rest/` — recorded 2026-11-06
 
 From the dev Minos at the commit pinned in `docs/spec/`, with the wall's read-only account. The

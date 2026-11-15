@@ -204,6 +204,23 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
+        // **The tiling's geometry, recorded** (#220). One file per case, from the wall's own functions,
+        // so a client in another language reads numbers instead of guessing them.
+        config::Command::Record => {
+            let dir = arcons_cc::control::tiling::directory();
+            match arcons_cc::control::tiling::record(&dir) {
+                Ok(written) => {
+                    for path in written {
+                        println!("recorded {}", path.display());
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("arcons-cc: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         config::Command::Assert => assert_capture(&args),
         config::Command::Compare => compare_captures(&args),
         config::Command::ProbeMap => probe_map(

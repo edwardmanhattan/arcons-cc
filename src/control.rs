@@ -42,6 +42,7 @@ pub mod authority;
 pub mod carrier;
 pub mod projection;
 pub mod snapshot;
+pub mod tiling;
 pub mod wire;
 
 #[cfg(unix)]

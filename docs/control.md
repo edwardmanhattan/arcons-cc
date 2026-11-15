@@ -158,6 +158,15 @@ the picture, which is the one thing this protocol decided not to send.
 arcons-cc ctl wall | jq '.workspaces[] | {name, panes: [.panes[].kind]}'
 ```
 
+**Where a pane is** is not in the projection yet (#218). The wall's own answer to it is one function,
+`view::Layout::cells`, and that answer is **recorded**: `fixtures/control/tiling/` holds one file per tiling,
+written by `cargo run -- --record`. Each carries the viewport, the pane ids, the arrangement, the cells, the
+drawn rectangles, **the three numbers a client must otherwise guess** — `MIN_PANE_PT`, `PANE_EDGE_BAND`,
+`RATIO_RANGE`, plus the gap the drawn rectangle is inset by — and what a release at a point does. A client
+that reproduces those files draws the wall's shape and lands a drag where the wall's own hand does; one that
+guesses `20%` for the edge band sends `centre` where the wall sends `left`. `fixtures/README.md` says what
+each field is and why the band's rule is stated once.
+
 ## Following a hull
 
 `object.follow` makes a pane's camera track a hull: every frame the camera centres that hull's fix, so a remote can say
