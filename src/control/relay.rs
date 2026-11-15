@@ -28,11 +28,14 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::{PROTOCOL, Refused};
+use super::Refused;
 use crate::config::Config;
 
-// The frame builder is the carrier's, and the carrier is a unix one: a Windows build has the vocabulary, the row and
-// nothing to dial (`src/control.rs` says the same where it gates the module).
+// The version and the frame builder are the carrier's, and the carrier is a unix one: a Windows build has the
+// vocabulary, the row and nothing to dial (`src/control.rs` says the same where it gates the module). Both imports
+// are gated with it, or the gate's Windows job reports them as dead (#236).
+#[cfg(unix)]
+use super::PROTOCOL;
 #[cfg(unix)]
 use serde_json::json;
 
