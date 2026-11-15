@@ -81,9 +81,15 @@ fn this_walls_socket() -> PathBuf {
 ///
 /// A wall's control loop and a viewer's session both come here, so there is one place that decides what a request
 /// means and one place that could grow a second opinion (`INV-07`).
-pub fn answer(state: &mut State, request: &Request) -> (Answer, bool) {
+pub fn answer(
+    state: &mut State,
+    request: &Request,
+    hand: Option<crate::ui::Origin>,
+) -> (Answer, bool) {
     match request {
-        Request::Intent(intent) => match crate::control::apply(state, intent.clone()) {
+        // **Whose hand asked** (#222): a request that arrived on a carrier with a name is that client's, whatever the
+        // frame said, and the door prefers the carrier's answer.
+        Request::Intent(intent) => match crate::control::apply_by(state, intent.clone(), hand) {
             Ok(Applied::Changed(changed)) => {
                 let changed_on_screen = changed.0;
                 (Answer::Changed(Ok(changed)), changed_on_screen)
@@ -97,6 +103,25 @@ pub fn answer(state: &mut State, request: &Request) -> (Answer, bool) {
         // **The arrangement, not the projection** (#201): what a viewer's picture is computed from. Built on the frame
         // that asks, which is what "what is on the wall" means.
         Request::Scene => (Answer::Scene(Box::new(state.scene())), false),
+    }
+}
+
+/// **One job, settled on the thread that owns the state** (#222).
+///
+/// A carrier's request is answered here, and a carrier that hung up takes its origin with it here; the wall's `poll`
+/// calls this between frames and a test calls it directly, so "what a job means" is one function rather than a habit
+/// repeated wherever a queue is drained. `true` when a pixel moved — the caller's cue to redraw.
+#[cfg(unix)]
+pub fn serve(state: &mut State, job: crate::control::Job) -> bool {
+    match &job {
+        crate::control::Job::Request { request, hand, .. } => {
+            let (reply, changed) = answer(state, request, hand.clone());
+            job.answer(reply);
+            changed
+        }
+        // **A cursor with no client is dropped** (#222): the ring is gone, so the frame it was drawn on is redrawn —
+        // the lesson of the fade (#167) is that a cursor vanishing changes nothing else.
+        crate::control::Job::Departed { origin } => state.let_go(origin),
     }
 }
 
@@ -263,11 +288,12 @@ mod tests {
         let (reply, changed) = answer(
             &mut state,
             &Request::Intent(crate::control::Intent::NewWorkspace),
+            None,
         );
         assert_eq!(reply, Answer::Changed(Ok(Changed(true))));
         assert!(changed, "a new workspace is a change");
 
-        let (reply, changed) = answer(&mut state, &Request::Scene);
+        let (reply, changed) = answer(&mut state, &Request::Scene, None);
         let Answer::Scene(scene) = reply else {
             panic!("a scene request is answered with a scene");
         };
@@ -329,6 +355,7 @@ mod tests {
             let _ = answer(
                 &mut wall_state,
                 &Request::Intent(crate::control::Intent::NewWorkspace),
+                None,
             );
         }
         assert_eq!(wall_state.workspaces.len(), start + 2);
@@ -341,7 +368,7 @@ mod tests {
                 let Ok(request) = crate::control::wire::request(&line) else {
                     break;
                 };
-                let (answer, _) = answer(&mut wall_state, &request);
+                let (answer, _) = answer(&mut wall_state, &request, None);
                 if carrier
                     .write_line(&crate::control::wire::reply(answer))
                     .is_err()
@@ -511,7 +538,7 @@ mod tests {
                 let Ok(request) = crate::control::wire::request(&line) else {
                     break;
                 };
-                let (answer, _) = answer(&mut wall_state, &request);
+                let (answer, _) = answer(&mut wall_state, &request, None);
                 if carrier
                     .write_line(&crate::control::wire::reply(answer))
                     .is_err()
@@ -624,5 +651,83 @@ mod tests {
             drop(session);
         }
         let _ = serving.join();
+    }
+
+    /// **A cursor whose client hung up is no longer drawn** (#222 rule 3): a carrier that goes away takes its origin
+    /// with it.
+    ///
+    /// A pointer fades after four seconds anyway (#167), but a ring that outlives its hand is a ghost on a wall at
+    /// three in the morning — and a client that pressed and vanished would leave its button down for ever. The
+    /// session says which hands came in on it when it ends, on the wall's own queue; the click is `let_go`.
+    #[cfg(unix)]
+    #[test]
+    fn a_cursor_whose_client_hung_up_is_no_longer_drawn() {
+        use crate::control::carrier::Loopback;
+        use crate::control::sessions::Queue;
+        use crate::ui::Origin;
+
+        let queue = Queue::new();
+        let (wall_end, peer) = Loopback::named("phone");
+        let tx = queue.sender();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = Arc::clone(&stop);
+        let serving = std::thread::spawn(move || {
+            let _ = crate::control::server::serve_session(wall_end, &tx, &stopping);
+        });
+
+        // The phone points, and holds the button down: the ring is the wall's while the hand is there.
+        peer.send(r#"{"v":1,"intent":{"verb":"cursor.move","at":[420.0,180.0]}}"#);
+        let placed = handed_over(&queue, "the cursor move never reached the wall's queue");
+        let mut state = State::default();
+        assert!(serve(&mut state, placed), "a cursor appearing is a change");
+        peer.send(r#"{"v":1,"intent":{"verb":"cursor.press"}}"#);
+        let pressed = handed_over(&queue, "the press never reached the wall's queue");
+        assert!(
+            serve(&mut state, pressed),
+            "a pressed cursor is drawn filled"
+        );
+        assert_eq!(
+            state.cursors.keys().map(Origin::as_str).collect::<Vec<_>>(),
+            ["phone"],
+            "one client, one cursor (#205)"
+        );
+        assert!(
+            state.cursors[&Origin::named("phone")].down,
+            "the button is down"
+        );
+
+        // The phone goes away: the carrier's read is end of file, so its session ends and says whose hands came in on
+        // it — the same queue the requests used, because there is one queue (#222).
+        drop(peer);
+        let departed = handed_over(&queue, "the carrier's end never reached the wall's queue");
+        assert_eq!(
+            departed.request(),
+            None,
+            "a hanging-up carrier sends no request: it sends the origin it is letting go"
+        );
+        assert!(
+            serve(&mut state, departed),
+            "the ring vanished, so the wall must redraw the frame it went on (#167)"
+        );
+        assert!(
+            state.cursors.is_empty(),
+            "a cursor that outlives its hand is a ghost: the carrier's origin went with it (#222)"
+        );
+        stop.store(true, Ordering::SeqCst);
+        let _ = serving.join();
+    }
+
+    /// The next job the wall has been handed, waited for within `PATIENCE` — a queue that never delivers fails with the
+    /// sentence the test wrote instead of hanging a gate.
+    #[cfg(unix)]
+    fn handed_over(queue: &crate::control::sessions::Queue, what: &str) -> crate::control::Job {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Some(job) = queue.next() {
+                return job;
+            }
+            assert!(std::time::Instant::now() < deadline, "{what}");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
     }
 }

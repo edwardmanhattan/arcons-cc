@@ -318,9 +318,7 @@ mod tests {
                 .spawn(move || {
                     let mut state = State::default();
                     while let Ok(job) = handed_over.recv() {
-                        let (answer, _) =
-                            crate::control::authority::answer(&mut state, &job.request);
-                        job.answer(answer);
+                        crate::control::authority::serve(&mut state, job);
                     }
                 })
                 .expect("the wall's thread starts");
