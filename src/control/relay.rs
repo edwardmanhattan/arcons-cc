@@ -383,6 +383,26 @@ impl Connection {
         self.writer.flush()
     }
 
+    /// **The same read with a deadline** (#221), for a watch's beat. A deadline with **half a frame in hand** is not a
+    /// deadline — the frame is on its way — so the read keeps going until the line ends or the deadline catches an
+    /// empty one.
+    fn read_line_within(&mut self, within: std::time::Duration) -> std::io::Result<Option<String>> {
+        self.reader.get_ref().set_read_timeout(Some(within))?;
+        let mut line = String::new();
+        loop {
+            match self.reader.read_line(&mut line) {
+                Ok(0) => return Ok(None),
+                Ok(_) => return Ok(Some(line)),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if super::watch::timed_out(&error) && line.is_empty() => {
+                    return Err(error);
+                }
+                Err(error) if super::watch::timed_out(&error) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     /// A relay with nothing to say is a relay waiting for a phone: after the welcome there is no deadline.
     fn wait(&mut self) -> std::io::Result<()> {
         self.reader.get_ref().set_read_timeout(None)
@@ -400,6 +420,11 @@ pub struct RelayCarrier {
     /// The device the next answer is for: the phone that asked the question the session loop is answering. One
     /// question at a time, because the loop asks the wall and waits (`INV-05`).
     to: Option<String>,
+    /// **The device a watch is publishing to** (#221), if one is open. A publish has no request of its own to take a
+    /// name from, and the name is the relay's routing field rather than the plane's, so the carrier keeps it: set when
+    /// a paired frame asks for a watch, and cleared when the connection goes — **a watch does not resume across one**
+    /// (`docs/mobile-remote.md` decision 1).
+    watching: Option<String>,
     stop: Arc<AtomicBool>,
     current: Arc<Mutex<Option<Wire>>>,
     connected: Arc<AtomicBool>,
@@ -434,6 +459,7 @@ impl RelayCarrier {
             settings,
             connection: None,
             to: None,
+            watching: None,
             stop,
             current,
             connected,
@@ -543,6 +569,18 @@ impl RelayCarrier {
         }
         match self.paired(value.get(frame::DEVICE).and_then(Value::as_str)) {
             Some(name) => {
+                // **A watch is a stream, so its device outlives the request that asked for it** (#221): the publishes
+                // that follow have no request to take a name from, and the relay routes on the name. Only a watch
+                // *this wall carries* starts one: a malformed ask is refused by the session, and the publishes the
+                // carrier would otherwise address to it belong to nobody.
+                if value
+                    .get("watch")
+                    .and_then(Value::as_str)
+                    .and_then(super::watch::Watch::of_word)
+                    .is_some()
+                {
+                    self.watching = Some(name.clone());
+                }
                 self.to = Some(name);
                 Some(line.to_string())
             }
@@ -576,6 +614,9 @@ impl RelayCarrier {
     fn dropped(&mut self) {
         self.connection = None;
         self.to = None;
+        // **A watch does not resume**: a connection that came back knows nothing, and the phone reads before it asks
+        // again (`docs/mobile-remote.md` decision 1, #221).
+        self.watching = None;
         self.connected.store(false, Ordering::SeqCst);
         self.close();
     }
@@ -615,6 +656,13 @@ impl RelayCarrier {
 
 #[cfg(unix)]
 impl Carrier for RelayCarrier {
+    /// **A relay carries a watch** (#221): the connection is open already — it is how a phone reaches this wall at
+    /// all — so a stream of lines costs it nothing it was not already paying. The socket beside the wheel does not,
+    /// and says so by name.
+    fn carries_a_watch(&self) -> bool {
+        true
+    }
+
     fn read_line(&mut self) -> std::io::Result<Option<String>> {
         loop {
             if self.stop.load(Ordering::SeqCst) {
@@ -666,15 +714,71 @@ impl Carrier for RelayCarrier {
         }
     }
 
+    /// **The same read, waiting at most `within`** (#221): a watch's beat. A deadline here is **not** a relay that
+    /// went away — the connection is still good and the wall simply has nothing to publish yet — so it is handed back
+    /// rather than redialled, and the beat asks the wall again.
+    fn read_line_within(&mut self, within: std::time::Duration) -> std::io::Result<Option<String>> {
+        loop {
+            if self.stop.load(Ordering::SeqCst) {
+                return Ok(None);
+            }
+            if self.connection.is_none() {
+                match self.connect() {
+                    Ok(()) => {}
+                    Err(Uncarried::Refused) => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            REFUSED_WALL,
+                        ));
+                    }
+                    Err(why) => {
+                        self.back_off(why);
+                        continue;
+                    }
+                }
+            }
+            let read = match self.connection.as_mut() {
+                Some(connection) => connection.read_line_within(within),
+                None => Ok(None),
+            };
+            match read {
+                Ok(Some(line)) => {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    if let Some(line) = self.frame(&line) {
+                        return Ok(Some(line));
+                    }
+                    continue;
+                }
+                Ok(None) => tracing::debug!("relay: the connection closed"),
+                // **The beat's own deadline**: nothing from the relay inside it, which is a relay waiting for a phone.
+                Err(error) if super::watch::timed_out(&error) => return Err(error),
+                Err(error) => tracing::debug!("relay: the connection failed ({error})"),
+            }
+            if self.stop.load(Ordering::SeqCst) {
+                return Ok(None);
+            }
+            self.dropped();
+            self.back_off(Uncarried::NotAnswering);
+        }
+    }
+
     fn write_line(&mut self, line: &str) -> std::io::Result<()> {
         // **The answer's own line, with the device it is for on it** (`frame::TO`): `wire::reply` wrote the rest, so
         // the relay speaks the shape the socket speaks, and there is one encoder rather than two.
-        let to = self.to.take();
+        //
+        // **A publish has no request to take a name from** (#221), so it goes to the device watching — which is also
+        // why a line with neither a `to` nor a watcher is dropped: after a redial the watch is gone by design, and a
+        // phone that has not read and asked again is not watching anything.
+        let to = self.to.take().or_else(|| self.watching.clone());
         match serde_json::from_str::<Value>(line) {
             Ok(mut value) => {
-                if let Some(to) = to {
-                    value[frame::TO] = json!(to);
-                }
+                let Some(to) = to else {
+                    tracing::debug!("relay: dropped a line with no device to carry it to");
+                    return Ok(());
+                };
+                value[frame::TO] = json!(to);
                 self.publish(&value.to_string());
             }
             // Not a frame this wall wrote: dropping it is better than writing half a frame to a relay.
@@ -991,6 +1095,26 @@ mod tests {
                 Err(error) => matches!(
                     error.kind(),
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ),
+            };
+            let _ = self.reader.get_ref().set_read_timeout(before);
+            quiet
+        }
+
+        /// Whether nothing arrives within `within`, and what did if something did.
+        fn quiet_line(&mut self, within: Duration) -> (bool, String) {
+            let before = self.reader.get_ref().read_timeout().ok().flatten();
+            let _ = self.reader.get_ref().set_read_timeout(Some(within));
+            let mut line = String::new();
+            let quiet = match self.reader.read_line(&mut line) {
+                Ok(0) => (true, String::new()),
+                Ok(_) => (false, line.trim().to_string()),
+                Err(error) => (
+                    matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ),
+                    String::new(),
                 ),
             };
             let _ = self.reader.get_ref().set_read_timeout(before);
@@ -1435,6 +1559,194 @@ mod tests {
         assert_eq!(answer["changed"], json!(true));
         assert_eq!(answer[frame::TO], json!("phone"));
         drop(relay);
+    }
+
+    /// **What the relay's half of a watched connection saw**, reported as it happens: a test cannot both answer the
+    /// wall's beats and block on the phone's side of one socket.
+    enum Report {
+        /// The answer to the watch request.
+        Ack(Value),
+        /// A projection the wall published.
+        Published(Value),
+        /// Whether nothing arrived after the publish, within a beat and a half — and what did, if anything.
+        Quiet(bool, String),
+    }
+
+    /// **The fake relay carries a watch** (#221): a phone asks, the wall grants it, a change is **published to that
+    /// phone**, and a wall that changed nothing writes nothing at all.
+    ///
+    /// The two falsifiers are named in the ticket: a wall that publishes when nothing changed (a phone woken for
+    /// nothing), and a publish that does not reach the device that asked — so the `to` on the frame is checked as
+    /// carefully as the projection is.
+    #[test]
+    fn the_relay_carries_a_watch_and_publishes_only_what_changed() {
+        let fake = Fake::start("watch");
+        let wall = TempDir::new("watch-wall");
+        let (devices, key) = fake.pair_phone(wall.path());
+        let settings = fake.settings(&devices);
+        let (seen, observed) = std::sync::mpsc::channel::<Report>();
+        let relay_half = std::thread::spawn(move || {
+            let mut end = fake.claim();
+            end.welcome();
+            end.send(&format!(
+                r#"{{"v":{PROTOCOL},"device":"{key}","watch":"wall"}}"#
+            ));
+            let ack = end.answer();
+            let _ = seen.send(Report::Ack(ack));
+            let published = end.answer();
+            let _ = seen.send(Report::Published(published));
+            // **A wall that changed nothing publishes nothing** (#221): a beat and a half of silence, which a wall
+            // that published on every beat could not manage.
+            let (quiet, what) = end.quiet_line(super::super::watch::BEAT * 3 / 2);
+            let _ = seen.send(Report::Quiet(quiet, what));
+        });
+
+        // **The wall**, played by this thread: it answers every beat, because the loop asks between frames exactly as
+        // `poll` answers it, and a test that stopped answering would be a wall that stopped drawing (`INV-05`).
+        let relay = Relay::spawn(settings).expect("the carrier thread starts");
+        let mut state = crate::ui::State::default();
+        let deadline = Instant::now() + PATIENCE;
+        let (mut ack, mut published, mut quiet) = (None, None, None);
+        let mut changed = false;
+        while ack.is_none() || published.is_none() || quiet.is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "the relay never carried the watch through: ack={ack:?} published={published:?} quiet={quiet:?}"
+            );
+            if let Some(job) = relay.next_job() {
+                let (answer, _) = crate::control::authority::answer(&mut state, &job.request);
+                job.answer(answer);
+                // **The change, once the grant has been based on the wall as it was**: a phone that has just read is
+                // watching a wall somebody else may move.
+                if !changed {
+                    changed = true;
+                    let _ = crate::control::authority::answer(
+                        &mut state,
+                        &Request::Intent(Intent::NewWorkspace),
+                    );
+                }
+                continue;
+            }
+            while let Ok(report) = observed.try_recv() {
+                match report {
+                    Report::Ack(answer) => ack = Some(answer),
+                    Report::Published(answer) => published = Some(answer),
+                    Report::Quiet(within, what) => quiet = Some((within, what)),
+                }
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        relay_half.join().expect("the relay's half ends");
+        // **The last job is answered before the carrier stops** (`INV-05`): a session blocked in `ask_the_wall`
+        // outlives the wall by its own deadline, and a test that left one would spend five seconds saying nothing.
+        while let Some(job) = relay.next_job() {
+            let (answer, _) = crate::control::authority::answer(&mut state, &job.request);
+            job.answer(answer);
+        }
+        drop(relay);
+
+        let ack = ack.expect("the grant");
+        assert_eq!(
+            ack["watch"],
+            json!("wall"),
+            "the grant says which stream is open (#221)"
+        );
+        assert_eq!(
+            ack[frame::TO],
+            json!("phone"),
+            "and it is addressed to the device that asked, so the relay can route it"
+        );
+        assert!(
+            ack.get("wall").is_none(),
+            "the grant carries no projection: the client has just read one (#221)"
+        );
+
+        let published = published.expect("a publish");
+        assert_eq!(
+            published["watch"],
+            json!("wall"),
+            "a publish carries the watch it belongs to, so a client with a request in flight can tell the two \
+             apart (#221)"
+        );
+        assert_eq!(published[frame::TO], json!("phone"));
+        assert_eq!(
+            published["wall"]["seq"],
+            json!(1),
+            "the change moved the projection's version by one, and the publish says which version it is (#221)"
+        );
+        assert_eq!(
+            published["wall"]["workspaces"].as_array().map(Vec::len),
+            Some(4),
+            "and the body is the projection the change left, not the one the client read"
+        );
+        assert!(
+            published["wall"]["focused"].is_number() || published["wall"]["focused"].is_null(),
+            "a publish is a whole projection and not a patch: every field a read answers with is on it"
+        );
+        let (none_arrived, what) = quiet.expect("the quiet check");
+        assert!(
+            none_arrived,
+            "the wall wrote {what:?} after publishing a change: a wall that publishes when nothing moved is the \
+             ticket's falsifier — a phone woken for nothing (#221)"
+        );
+    }
+
+    /// **A watch is a carrier's capability, not a verb of the plane** (#221): the socket answers one request with one
+    /// answer — a `ctl` script must not be able to hold the wall's one connection open for ever — and refuses a watch
+    /// **by name**, while the connection stays usable for the next request.
+    #[test]
+    fn the_unix_socket_refuses_a_watch_by_name_and_keeps_one_answer_per_request() {
+        let (wall_end, client) =
+            UnixStream::pair().expect("a socket pair, with no file to leave behind");
+        let (tx, jobs) = mpsc::channel::<Job>();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = Arc::clone(&stop);
+        let serving = std::thread::spawn(move || {
+            serve_session(
+                super::super::carrier::Unix::new(wall_end).expect("a carrier over the socket"),
+                &tx,
+                &stopping,
+            )
+        });
+        let mut writer = client.try_clone().expect("two handles on one socket");
+        let mut reader = BufReader::new(client);
+
+        writeln!(writer, r#"{{"v":{PROTOCOL},"watch":"wall"}}"#).expect("the ask goes");
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("the refusal comes");
+        assert_eq!(
+            line.trim(),
+            r#"{"kind":"rule","ok":false,"v":1,"why":"this carrier does not carry a watch"}"#,
+            "a socket that was asked for a stream refuses by name, with the kind a client acts on (#221, INV-07)"
+        );
+        assert!(
+            jobs.try_recv().is_err(),
+            "the watch reached the wall: whether a watch can exist is the carrier's question (#221)"
+        );
+
+        // **One request in, one answer out, still**: the refusal is a line and not a closed connection.
+        writeln!(writer, r#"{{"v":{PROTOCOL},"read":"wall"}}"#).expect("the next request goes");
+        let job = jobs
+            .recv_timeout(PATIENCE)
+            .expect("the socket still answers requests after refusing a watch");
+        assert_eq!(job.request, Request::Wall);
+        let (answer, _) =
+            crate::control::authority::answer(&mut crate::ui::State::default(), &job.request);
+        job.answer(answer);
+        line.clear();
+        reader.read_line(&mut line).expect("the read is answered");
+        assert!(
+            line.contains(r#""wall""#),
+            "the connection did not answer a read after refusing a watch: {line}"
+        );
+
+        drop(reader);
+        drop(writer);
+        stop.store(true, Ordering::SeqCst);
+        serving
+            .join()
+            .expect("the loop thread ends")
+            .expect("a hung-up client is end of file, not an error");
     }
 
     /// **No line the carrier writes carries the wall's credential** (`INV-08`): not a `Debug`, not a refusal's words,

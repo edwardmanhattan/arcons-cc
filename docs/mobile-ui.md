@@ -219,9 +219,10 @@ That is not caution: every intent on this screen names a pane by id, and a stale
 (`mobile-remote.md` decision 1).
 
 **The number in `last read 41 s ago` is an age, not a sequence.** The wall's own stale banner for a viewer names a
-sequence (`last held #41`, #206) because a scene carries `seq`. A projection carries no `seq` today — #221 adds one,
-with a watch to go with it — so the honest number the phone has is how long ago it last read. An age says exactly
-what it says; a sequence would be a number the phone has to be told means "current".
+sequence (`last held #41`, #206) because a scene carries `seq`, and since #221 a projection carries one too, with a
+watch to go with it. This screen still draws the age: it is the number a person can act on, and an age says exactly
+what it says, where a sequence is a number the phone has to be told means "current". The `seq` is what the phone
+compares when a publish arrives — one version after the one it holds, or it reads (`docs/control.md`).
 
 **Nothing is retried through a `version` refusal.** The screen that replaces the phone's whole UI carries the wall's
 words (`unsupported protocol version`), one sentence in the app's own words, and one button that opens the store
@@ -406,9 +407,9 @@ platform's ellipsis, because the wall's drawn `…` is a rasteriser's answer and
 
 ## What this note leaves open, deliberately
 
-- **The refresh cadence.** Today the projection is pull-only and carries no `seq`. #221 adds both the number and a
-  watch, and the phone then reads first on every connect and resume and takes the watch's publishes in between. This
-  note says the phone reads and never replays; how often is #221's decision, not this screen's.
+- **The refresh cadence, now decided**: #221 added the `seq` the projection carries and the watch that publishes it at
+  4 Hz when it changed (`docs/control.md`). The rule this screen keeps is unchanged: the phone reads first on every
+  connect and every return from sleep, and takes the watch's publishes in between — it reads and never replays.
 - **The gutter's accessible path** — see the accessibility section. A share is a number and no recorded vocabulary
   names one.
 - **The phone's framework and design system**, which is `ADR-0008`'s

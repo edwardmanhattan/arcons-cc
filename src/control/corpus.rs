@@ -305,6 +305,11 @@ pub fn exchanges() -> Vec<Request> {
         send(json!({ "v": 1 })),
         send(json!({ "v": 1, "intent": { "verb": "pane.focus", "pane": 1 }, "read": "wall" })),
         send(json!({ "v": 1, "read": "fleet" })),
+        // ---- a watch (#221) is a **carrier's capability**, and the corpus's carrier is the socket's stand-in: the ask
+        // is refused by name, which is what a `ctl` script gets. The carried half is not recordable — a coalesced
+        // publish is a race, and `fixtures/README.md` says why a file cannot hold one.
+        send(json!({ "v": 1, "watch": "wall" })),
+        send(json!({ "v": 1, "watch": "scene" })),
         send(json!({ "v": 1, "intent": 5 })),
         send(json!({ "v": 1, "intent": {} })),
         send(json!({ "v": 1, "intent": { "verb": "pane.teleport", "pane": 1 } })),

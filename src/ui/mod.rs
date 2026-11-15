@@ -480,6 +480,14 @@ pub struct State {
     /// scenes and notice a gap without an event log. The authority owns it once there is one (#202); today it moves
     /// wherever `arranged()` is called or a scene is applied.
     pub scene_seq: u64,
+    /// **How many versions of the projection a client has been handed** (#221): the `seq` a read of `wall` carries,
+    /// and the number a watch publishes with. It moves when — and only when — the projection a client reads differs
+    /// from the last one this wall handed out, which is what makes a wall that changed nothing publish nothing:
+    /// [`crate::control::projection::versioned`] is the only thing that moves it.
+    pub projection_seq: u64,
+    /// The projection that number belongs to, so "changed" is a comparison and not a promise every call site keeps
+    /// (#221). A wall that has never been read from has none.
+    pub(crate) projection_seen: Option<crate::control::projection::Wall>,
     /// **An intent script waiting for its frame** (#172): a scene that drives the wall **only** through the
     /// control plane carries its steps here, and `poll` applies the ones that are due. Empty on a wall — nothing
     /// scripts a wall — which is why it is a field on the state and not an environment variable.
@@ -778,6 +786,8 @@ impl Default for State {
             stale_bucket: None,
             heard_at: None,
             scene_seq: 0,
+            projection_seq: 0,
+            projection_seen: None,
             #[cfg(unix)]
             session: None,
             pending_intents: Vec::new(),
