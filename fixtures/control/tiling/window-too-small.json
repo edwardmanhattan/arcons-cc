@@ -1,0 +1,193 @@
+{
+  "viewport": {
+    "w": 300.0,
+    "h": 200.0
+  },
+  "numbers": {
+    "min_pane_pt": 160.0,
+    "edge_band": 0.3,
+    "gap": 8.0,
+    "ratio_min": 0.05,
+    "ratio_max": 0.95
+  },
+  "panes": [
+    1,
+    2
+  ],
+  "tiling": {
+    "split": "side",
+    "ratio": 0.5,
+    "a": {
+      "pane": 0
+    },
+    "b": {
+      "pane": 1
+    }
+  },
+  "cells": [
+    {
+      "pane": 1,
+      "rect": {
+        "x": 0.0,
+        "y": 0.0,
+        "w": 150.0,
+        "h": 200.0
+      }
+    },
+    {
+      "pane": 2,
+      "rect": {
+        "x": 150.0,
+        "y": 0.0,
+        "w": 150.0,
+        "h": 200.0
+      }
+    }
+  ],
+  "rects": [
+    {
+      "pane": 1,
+      "rect": {
+        "x": 4.0,
+        "y": 4.0,
+        "w": 142.0,
+        "h": 192.0
+      }
+    },
+    {
+      "pane": 2,
+      "rect": {
+        "x": 154.0,
+        "y": 4.0,
+        "w": 142.0,
+        "h": 192.0
+      }
+    }
+  ],
+  "drops": [
+    {
+      "dragged": 2,
+      "at": [
+        37.5,
+        100.0
+      ],
+      "drop": {
+        "kind": "retile",
+        "target": 1,
+        "side": "left"
+      }
+    },
+    {
+      "dragged": 2,
+      "at": [
+        52.5,
+        100.0
+      ],
+      "drop": {
+        "kind": "swap",
+        "a": 1,
+        "b": 2
+      }
+    },
+    {
+      "dragged": 2,
+      "at": [
+        112.5,
+        100.0
+      ],
+      "drop": {
+        "kind": "retile",
+        "target": 1,
+        "side": "right"
+      }
+    },
+    {
+      "dragged": 2,
+      "at": [
+        97.5,
+        100.0
+      ],
+      "drop": {
+        "kind": "swap",
+        "a": 1,
+        "b": 2
+      }
+    },
+    {
+      "dragged": 2,
+      "at": [
+        75.0,
+        50.0
+      ],
+      "drop": {
+        "kind": "retile",
+        "target": 1,
+        "side": "top"
+      }
+    },
+    {
+      "dragged": 2,
+      "at": [
+        75.0,
+        70.0
+      ],
+      "drop": {
+        "kind": "swap",
+        "a": 1,
+        "b": 2
+      }
+    },
+    {
+      "dragged": 2,
+      "at": [
+        75.0,
+        150.0
+      ],
+      "drop": {
+        "kind": "retile",
+        "target": 1,
+        "side": "bottom"
+      }
+    },
+    {
+      "dragged": 2,
+      "at": [
+        75.0,
+        130.0
+      ],
+      "drop": {
+        "kind": "swap",
+        "a": 1,
+        "b": 2
+      }
+    },
+    {
+      "dragged": 2,
+      "at": [
+        75.0,
+        100.0
+      ],
+      "drop": {
+        "kind": "swap",
+        "a": 1,
+        "b": 2
+      }
+    },
+    {
+      "dragged": 2,
+      "at": [
+        225.0,
+        100.0
+      ],
+      "drop": null
+    },
+    {
+      "dragged": 2,
+      "at": [
+        310.0,
+        210.0
+      ],
+      "drop": null
+    }
+  ]
+}

@@ -17,6 +17,8 @@
 //! Nothing here touches Rune: this module is pure, so the tree is property-tested in the gate with no
 //! window, no GPU and no capture.
 
+use serde::{Deserialize, Serialize};
+
 use crate::map::geometry::Viewport;
 use crate::ui::tokens;
 
@@ -33,7 +35,11 @@ pub enum Dir {
 }
 
 /// A rectangle in the window's points.
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// It is serialised because `fixtures/control/tiling/` records cells and drawn rectangles verbatim (#220): a
+/// contract file that spelled a rectangle its own way would be a second definition of one, and the second
+/// definition is the disagreement the file exists to prevent.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
     pub x: f32,
     pub y: f32,
@@ -624,6 +630,13 @@ impl Layout {
     /// What a pane released at a point would do: swap with the pane under the middle of the pointer,
     /// re-tile against the edge it is nearest.
     ///
+    /// **The band's rule, stated once** (#220): a point belongs to the pane under it; for each of that
+    /// pane's four edges, `|point − edge| / span` is how deep into the band it is, an edge only counts when
+    /// that share is **below** [`tokens::PANE_EDGE_BAND`] (0.3), the nearest edge that counts wins, and
+    /// **no edge in band is a swap**. A client that guesses the band sends `centre` where the wall's own
+    /// hand would send `left`, which is why the number is recorded in `fixtures/control/tiling/` and this
+    /// function's answers are recorded with it.
+    ///
     /// A point over the dragged pane itself is **no drop**, which is what makes "released where it
     /// started" a no-op rather than a swap with itself.
     pub fn drop_for(&self, viewport: Viewport, dragged: ViewId, at: (f32, f32)) -> Option<Drop> {
@@ -719,12 +732,21 @@ impl Layout {
         Some(id)
     }
 
-    /// The rectangles, one per pane, **covering the viewport exactly**: no gaps between panes, no
+    /// The tiling's **cells**, one per pane, **covering the viewport exactly**: no gaps between panes, no
     /// overlap, and every rectangle at least [`MIN_PANE_PT`] unless the window itself is smaller than
     /// two panes.
-    pub fn rects(&self, viewport: Viewport) -> Vec<(ViewId, Rect)> {
+    ///
+    /// These are what a point is hit-tested against — a press in the gutter still belongs to a pane's cell
+    /// — and they are **the geometry a client that is not this wall has to mirror** (#220): the band that
+    /// turns a point into an edge ([`Layout::drop_for`]), the clamp that keeps a pane drawable and the
+    /// ratio range are all stated against these rectangles. So `fixtures/control/tiling/` records *this*
+    /// function, and a client that reproduces the file draws the wall's own shape.
+    ///
+    /// Not the drawn rectangles: [`panes_on`] pulls each cell in by half the gap, because the space between
+    /// two panes is a look and not a tiling.
+    pub fn cells(&self, viewport: Viewport) -> Vec<(ViewId, Rect)> {
         let mut out = Vec::new();
-        walk_rects(
+        walk_cells(
             &self.root,
             Rect {
                 x: 0.0,
@@ -735,6 +757,13 @@ impl Layout {
             &mut out,
         );
         out
+    }
+
+    /// [`Layout::cells`], under the name every caller in the crate already asks it by: the gestures
+    /// (`rect_of`, `pane_at`), [`panes_on`], the drawing and `verify`. One walk of the tree with two names
+    /// rather than two walks — a second one is a wall drawn in one place and dragged in another.
+    pub fn rects(&self, viewport: Viewport) -> Vec<(ViewId, Rect)> {
+        self.cells(viewport)
     }
 
     /// One pane's rectangle, for a gesture that needs to know where it happened.
@@ -944,13 +973,13 @@ fn contains_leaf(node: &Node, id: ViewId) -> bool {
     }
 }
 
-fn walk_rects(node: &Node, rect: Rect, out: &mut Vec<(ViewId, Rect)>) {
+fn walk_cells(node: &Node, rect: Rect, out: &mut Vec<(ViewId, Rect)>) {
     match node {
         Node::Leaf(id) => out.push((*id, rect)),
         Node::Split { dir, ratio, a, b } => {
             let (a_rect, b_rect) = split_rects(*dir, *ratio, rect);
-            walk_rects(a, a_rect, out);
-            walk_rects(b, b_rect, out);
+            walk_cells(a, a_rect, out);
+            walk_cells(b, b_rect, out);
         }
     }
 }
@@ -1744,5 +1773,297 @@ mod tests {
         // The far edge belongs to the last pane, and just outside belongs to none.
         assert!(layout.pane_at(viewport(), (1279.9, 719.9)).is_some());
         assert_eq!(layout.pane_at(viewport(), (1280.0, 400.0)), None);
+    }
+}
+
+/// **The tiling is a contract, not a reimplementation** (#220).
+///
+/// A phone draws the same arrangement into its own rectangle, so every rectangle the wall lands on has to be
+/// a number the phone can read rather than a rule it guessed. `fixtures/control/tiling/` is that reading:
+/// one file per case, written by `cargo run -- --record` from [`Layout::cells`] and the two functions that
+/// sit on top of it. This module is the client's side of it — read the file, build the tiling through the
+/// wall's own reader, and check the wall still answers what the file says.
+#[cfg(test)]
+mod cells_tests {
+    use super::*;
+    use crate::control::tiling;
+
+    /// Every recorded case, by name, as the file says it.
+    fn corpus() -> Vec<(String, tiling::Tiling)> {
+        let dir = tiling::directory();
+        let files = tiling::files(&dir);
+        assert!(
+            !files.is_empty(),
+            "no recorded tiling in {}: a client in another language has nothing to reproduce, and the \
+             numbers it would have to guess are the band, the minimum and the ratio range (#220). \
+             `cargo run -- --record` writes them",
+            dir.display()
+        );
+        files
+            .into_iter()
+            .map(|path| {
+                let name = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let read = tiling::read(&path).unwrap_or_else(|error| panic!("{error}"));
+                (name, read)
+            })
+            .collect()
+    }
+
+    /// **Every recorded tiling reproduces its rectangles, to the point** — read from the file, rebuilt
+    /// through `layout.toml`'s reader, drawn by the same functions the wall draws with.
+    ///
+    /// A file whose tiling no longer makes its cells is a client and a wall disagreeing about where a pane
+    /// is: a moved edge, a clamp that changed, a ratio read off the wrong axis. The failure names the pane
+    /// and both rectangles, because "the tiling changed" is not a line anybody can act on.
+    #[test]
+    fn every_recorded_tiling_reproduces_its_rectangles_to_the_point() {
+        let mut seen = 0;
+        for (name, recorded) in corpus() {
+            seen += 1;
+            let viewport = recorded.viewport();
+            let layout = recorded.layout().unwrap_or_else(|| {
+                panic!(
+                    "{name}.json: the recorded tiling names no pane, or one pane twice — it is not a \
+                     partition of the panes it lists, so a client drawing it draws half a wall"
+                )
+            });
+            assert_eq!(
+                recorded.panes,
+                layout.ids(),
+                "{name}.json: the `panes` list and the tiling's leaves disagree about which panes are on \
+                 the wall"
+            );
+
+            // The cells: what a point is hit-tested against, and what the client must reproduce.
+            let cells = layout.cells(viewport);
+            assert_eq!(
+                cells.len(),
+                recorded.cells.len(),
+                "{name}.json: {} cells recorded for {} panes",
+                recorded.cells.len(),
+                cells.len()
+            );
+            for ((pane, rect), cell) in cells.iter().zip(recorded.cells.iter()) {
+                assert_eq!(
+                    *pane, cell.pane,
+                    "{name}.json: the cells are in a different order, or name a different pane: {cells:?}"
+                );
+                assert_rect(&name, *pane, *rect, cell.rect, "cell");
+            }
+
+            // The drawn rectangles: the cells pulled in by the gap the file records.
+            let drawn = panes_on(&layout, viewport, recorded.numbers.gap);
+            assert_eq!(
+                drawn.len(),
+                recorded.rects.len(),
+                "{name}.json: {} drawn rectangles recorded for {} panes",
+                recorded.rects.len(),
+                drawn.len()
+            );
+            for ((pane, rect), cell) in drawn.iter().zip(recorded.rects.iter()) {
+                assert_eq!(*pane, cell.pane, "{name}.json: {drawn:?}");
+                assert_rect(&name, *pane, *rect, cell.rect, "drawn rectangle");
+            }
+
+            // **The cells are a tiling**: they cover the viewport and no two of them overlap. A file whose
+            // rectangles leave a hole or sit on each other is a fixture that is not a wall, whatever the
+            // numbers say.
+            let area: f64 = cells
+                .iter()
+                .map(|(_, rect)| f64::from(rect.w) * f64::from(rect.h))
+                .sum();
+            let viewport_area = viewport.w * viewport.h;
+            assert!(
+                (area - viewport_area).abs() < 0.5,
+                "{name}.json: the cells cover {area} of {viewport_area} — a gap or an overlap, so this is \
+                 not a tiling of that viewport"
+            );
+            for (index, (pane, rect)) in cells.iter().enumerate() {
+                assert!(
+                    rect.w > 0.0 && rect.h > 0.0,
+                    "{name}.json: pane {pane} has no area: {rect:?}"
+                );
+                for (other, other_rect) in cells.iter().skip(index + 1) {
+                    let overlap_w =
+                        (rect.right().min(other_rect.right()) - rect.x.max(other_rect.x)).max(0.0);
+                    let overlap_h = (rect.bottom().min(other_rect.bottom())
+                        - rect.y.max(other_rect.y))
+                    .max(0.0);
+                    assert!(
+                        overlap_w * overlap_h < 0.0001,
+                        "{name}.json: panes {pane} and {other} overlap by {} pt²",
+                        overlap_w * overlap_h
+                    );
+                }
+            }
+
+            // **And the band**: every recorded release is the decision the wall's own hand makes. This is
+            // the half a client gets wrong by guessing — a release at 35% of a pane is a swap, at 25% it is
+            // that edge — so the file carries the answer instead of a sentence describing it.
+            assert!(
+                !recorded.drops.is_empty() || layout.len() == 1,
+                "{name}.json: no release is recorded, so nothing in this case pins the band"
+            );
+            for probe in &recorded.drops {
+                let answer = layout
+                    .drop_for(viewport, probe.dragged, probe.at)
+                    .map(tiling::DropRecord::from);
+                assert_eq!(
+                    answer, probe.drop,
+                    "{name}.json: a hand holding pane {} released at {:?} lands at {answer:?} today, and the \
+                     file records {:?} — a client drawing a preview from this file would show a pane landing \
+                     where the wall does not put it",
+                    probe.dragged, probe.at, probe.drop
+                );
+            }
+        }
+        assert!(seen > 0, "the corpus is empty");
+    }
+
+    /// **The corpus is what `--record` would write, and nothing else**: a fixture no case produces is a wall
+    /// that no longer exists, and a case with no fixture is a client left to guess that shape.
+    #[test]
+    fn the_corpus_is_exactly_what_record_would_write() {
+        let dir = tiling::directory();
+        let expected: Vec<(&str, String)> = tiling::cases()
+            .iter()
+            .map(|case| (case.name, tiling::bytes(&tiling::record_one(case))))
+            .collect();
+        let found: Vec<String> = tiling::files(&dir)
+            .into_iter()
+            .filter_map(|path| {
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        for (name, bytes) in &expected {
+            let path = dir.join(format!("{name}.json"));
+            let actual = std::fs::read_to_string(&path).unwrap_or_else(|_| {
+                panic!(
+                    "{} is missing: every case is a file a client reproduces, and this shape is the one it \
+                     cannot read (#220). `cargo run -- --record` writes it",
+                    path.display()
+                )
+            });
+            if actual == *bytes {
+                continue;
+            }
+            // The first line that differs, because a wall of JSON is not a failure message.
+            let found = actual
+                .lines()
+                .zip(bytes.lines())
+                .position(|(found, recorded)| found != recorded);
+            let line = found.unwrap_or_else(|| actual.lines().count().min(bytes.lines().count()));
+            panic!(
+                "{} diverges from what the wall records now, at line {}:\n  file: {}\n  wall: {}\n\
+                 A token, a clamp or a case moved without re-recording, so a client mirroring this file is \
+                 mirroring yesterday's wall. Run `cargo run -- --record` and say in the commit which number \
+                 moved (#220)",
+                path.display(),
+                line + 1,
+                actual.lines().nth(line).unwrap_or("<end of file>"),
+                bytes.lines().nth(line).unwrap_or("<end of file>"),
+            );
+        }
+        for name in found {
+            assert!(
+                expected.iter().any(|(case, _)| *case == name),
+                "{name}.json is a recording no case produces: either the case that made it is gone and the \
+                 file is a wall nobody can draw, or it was written by hand — which is the one thing this \
+                 directory may not contain (#220)"
+            );
+        }
+    }
+
+    /// Two rectangles, as the file writes them: `f32` round-trips through JSON exactly, so a difference is a
+    /// real one and the bound is only there to keep the message readable.
+    fn assert_rect(case: &str, pane: ViewId, actual: Rect, recorded: Rect, what: &str) {
+        let near = |a: f32, b: f32| (a - b).abs() < 0.001;
+        assert!(
+            near(actual.x, recorded.x)
+                && near(actual.y, recorded.y)
+                && near(actual.w, recorded.w)
+                && near(actual.h, recorded.h),
+            "{case}.json: pane {pane}'s {what} is {actual:?} today, and the file records {recorded:?} — a \
+             client that reproduces the file draws the pane somewhere the wall does not"
+        );
+    }
+}
+
+/// **The numbers in the recording are the tokens** (#220), so a token change fails here instead of on a
+/// phone.
+///
+/// This is the test the file exists for. `MIN_PANE_PT`, `PANE_EDGE_BAND`, `RATIO_RANGE` and `GAP` are the
+/// wall's own, and a client in another language reads them from the recording; if the wall moves one and the
+/// file keeps the old one, every client is confidently wrong. Re-recording is then a deliberate act with a
+/// commit message, which is the moment to tell whoever writes the phone.
+#[cfg(test)]
+mod tokens_tests {
+    use super::*;
+    use crate::config::layout::RATIO_RANGE;
+    use crate::control::tiling;
+
+    #[test]
+    fn the_numbers_in_every_recorded_tiling_are_the_tokens() {
+        let dir = tiling::directory();
+        let mut seen = 0;
+        for path in tiling::files(&dir) {
+            let name = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let recorded = tiling::read(&path).unwrap_or_else(|error| panic!("{error}"));
+            let numbers = recorded.numbers;
+            seen += 1;
+            assert_eq!(
+                numbers.min_pane_pt,
+                tokens::MIN_PANE_PT,
+                "{name}.json records min_pane_pt {} and the wall's smallest pane is {} — a client drawing \
+                 from this file draws a pane the wall's clamp would not",
+                numbers.min_pane_pt,
+                tokens::MIN_PANE_PT
+            );
+            assert_eq!(
+                numbers.edge_band,
+                tokens::PANE_EDGE_BAND,
+                "{name}.json records an edge band of {} and the wall decides an edge at {} — a phone \
+                 reading the file sends `centre` where the wall's own hand sends `left`",
+                numbers.edge_band,
+                tokens::PANE_EDGE_BAND
+            );
+            assert_eq!(
+                numbers.gap,
+                tokens::GAP,
+                "{name}.json records a gap of {} and the wall insets every pane by {}. A recording is \
+                 re-recorded, not reconciled: `cargo run -- --record` (#220)",
+                numbers.gap,
+                tokens::GAP
+            );
+            assert_eq!(
+                (numbers.ratio_min, numbers.ratio_max),
+                RATIO_RANGE,
+                "{name}.json records the share a split may take as {}…{}, and the wall clamps to {:?}",
+                numbers.ratio_min,
+                numbers.ratio_max,
+                RATIO_RANGE
+            );
+            assert_eq!(
+                numbers,
+                tiling::numbers(),
+                "{name}.json carries numbers the wall no longer reads from its own tokens"
+            );
+        }
+        assert!(
+            seen > 0,
+            "no recorded tiling in {}: the numbers a client must not guess are recorded, not assumed \
+             (#220). `cargo run -- --record` writes them",
+            dir.display()
+        );
     }
 }

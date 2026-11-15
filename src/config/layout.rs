@@ -88,16 +88,25 @@ pub struct SavedWorkspace {
 /// table with `split`, `a` and `b` is a split, and the reader says which shape it found. An externally
 /// tagged enum would put `[workspace.tiling.Pane]` in an operator's file, which is a file nobody wants to
 /// read, let alone hand-edit.
+///
+/// A field that is absent is left out of the file rather than written as a null (#220): the same tree is
+/// recorded as `fixtures/control/tiling/` for a client in another language, and `"ratio": null` beside a
+/// leaf is a field a reader has to learn to ignore.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct SavedNode {
     /// The leaf: an index into the workspace's `pane` list.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pane: Option<u32>,
     /// The split's axis: `side` for side by side, `stack` for one above the other.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub split: Option<Axis>,
     /// The share the `a` side takes, clamped to [`RATIO_RANGE`].
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ratio: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub a: Option<Box<SavedNode>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub b: Option<Box<SavedNode>>,
 }
 

@@ -1,0 +1,59 @@
+{
+  "viewport": {
+    "w": 1280.0,
+    "h": 720.0
+  },
+  "numbers": {
+    "min_pane_pt": 160.0,
+    "edge_band": 0.3,
+    "gap": 8.0,
+    "ratio_min": 0.05,
+    "ratio_max": 0.95
+  },
+  "panes": [
+    1
+  ],
+  "tiling": {
+    "pane": 0
+  },
+  "cells": [
+    {
+      "pane": 1,
+      "rect": {
+        "x": 0.0,
+        "y": 0.0,
+        "w": 1280.0,
+        "h": 720.0
+      }
+    }
+  ],
+  "rects": [
+    {
+      "pane": 1,
+      "rect": {
+        "x": 4.0,
+        "y": 4.0,
+        "w": 1272.0,
+        "h": 712.0
+      }
+    }
+  ],
+  "drops": [
+    {
+      "dragged": 1,
+      "at": [
+        640.0,
+        360.0
+      ],
+      "drop": null
+    },
+    {
+      "dragged": 1,
+      "at": [
+        1290.0,
+        730.0
+      ],
+      "drop": null
+    }
+  ]
+}
