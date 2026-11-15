@@ -229,6 +229,12 @@ fn serve_one(stream: UnixStream, tx: &Sender<Job>, stop: &AtomicBool) -> std::io
 /// Two things a session says about its client besides the line (#222): the **origin** the carrier knows it by is
 /// stamped on the request, and when the carrier hangs up every origin it served is reported to the wall as a
 /// [`Job::Departed`] — a pointer that outlives its hand is a ghost on a wall at three in the morning.
+///
+/// **A watch is the one line that is not answered once** (#221): the carrier's capability decides whether one may
+/// exist, the grant is one answer like any other, and from then on the loop wakes on the beat, asks the wall what the
+/// projection is and writes it if it moved. One watch per connection: a second ask is a new baseline, not a second
+/// stream. The two compose — a watch is a deadline on the *same* read, so a watched connection still carries every
+/// hand it did before it was watched.
 pub(super) fn serve_session(
     mut carrier: impl super::carrier::Carrier,
     tx: &Sender<Job>,
@@ -254,7 +260,29 @@ fn serve_lines(
     stop: &AtomicBool,
     hands: &mut BTreeSet<Origin>,
 ) -> std::io::Result<()> {
-    while let Some(line) = carrier.read_line()? {
+    // **The watch that is open on this connection** (#221), if one is. It lives here and not in the wall because the
+    // beat is the carrier's clock, and a watched connection is the only one read with a deadline.
+    let mut watching: Option<super::watch::Watching> = None;
+    loop {
+        // **A watched connection is read only as far as the next publish is due** (#221): the carrier's read deadline
+        // is the beat, so a wall that changed nothing costs the client nothing and a line from the client still wakes
+        // this loop at once.
+        let line = match watching.as_ref() {
+            None => carrier.read_line()?,
+            Some(open) => match carrier.read_line_within(open.waits(std::time::Instant::now())) {
+                Ok(line) => line,
+                // **A deadline is a beat, not a broken wire**: the wall is asked what the projection is now, and the
+                // client is written to only if that is not the projection it already holds.
+                Err(error) if super::watch::timed_out(&error) => {
+                    if let Some(open) = watching.as_mut() {
+                        publish(carrier, tx, open)?;
+                    }
+                    continue;
+                }
+                Err(error) => return Err(error),
+            },
+        };
+        let Some(line) = line else { break };
         if stop.load(Ordering::SeqCst) {
             break;
         }
@@ -268,14 +296,68 @@ fn serve_lines(
             hands.insert(hand.clone());
         }
         let answer = match super::wire::request(&line) {
+            Ok(super::wire::Request::Watch(wanted)) => grant(carrier, tx, &mut watching, wanted),
             Ok(request) => ask_the_wall(tx, request, hand),
             Err(why) => super::wire::Answer::Changed(Err(why)),
         };
         // **A refused request is a line, never a closed connection** (`INV-07`): a client that asked for
-        // something impossible can ask for something else without reconnecting.
+        // something impossible can ask for something else without reconnecting. That includes a watch the carrier
+        // cannot carry — the socket stays one request in, one answer out.
         carrier.write_line(&super::wire::reply(answer))?;
     }
     Ok(())
+}
+
+/// **Grant a watch** (#221), or refuse it because this carrier cannot carry one.
+///
+/// The wall is asked for the projection **as it stands**: that version is the one the client holds (it has just read —
+/// decision 1 of the mobile note), so the first publish is a change and a wall that changes nothing writes nothing at
+/// all. A wall that does not answer this request grants nothing, and its own `busy` refusal is the answer.
+fn grant(
+    carrier: &impl super::carrier::Carrier,
+    tx: &Sender<Job>,
+    watching: &mut Option<super::watch::Watching>,
+    wanted: super::watch::Watch,
+) -> super::wire::Answer {
+    if !carrier.carries_a_watch() {
+        // **A carrier's capability, not a verb of the plane** (#221): the socket answers one request with one answer,
+        // because a `ctl` script must not be able to hold the wall's one connection open for ever.
+        return super::wire::Answer::Changed(Err(Refused(super::watch::NOT_CARRIED)));
+    }
+    match ask_the_wall(tx, super::wire::Request::Wall, None) {
+        super::wire::Answer::Wall(wall) => {
+            *watching = Some(super::watch::Watching::at(
+                wanted,
+                wall.seq,
+                std::time::Instant::now(),
+            ));
+            super::wire::Answer::Watching(wanted)
+        }
+        other => other,
+    }
+}
+
+/// **One beat of a watch** (#221): ask the wall what the projection is now, and write it only if it moved.
+///
+/// The projection is asked for through the same door a read uses, so the version a publish carries is the version a
+/// read answers with — one counter, in one place, owned by the thread that owns the wall.
+fn publish(
+    carrier: &mut impl super::carrier::Carrier,
+    tx: &Sender<Job>,
+    open: &mut super::watch::Watching,
+) -> std::io::Result<()> {
+    let super::wire::Answer::Wall(wall) = ask_the_wall(tx, super::wire::Request::Wall, None) else {
+        // The wall did not answer this beat: nothing to publish, and the next beat asks again. A session that ended
+        // because a frame was slow would be a phone that went quiet for a wall's bad afternoon.
+        return Ok(());
+    };
+    if !open.due(wall.seq, std::time::Instant::now()) {
+        return Ok(());
+    }
+    carrier.write_line(&super::wire::reply(super::wire::Answer::Published(
+        open.watch(),
+        wall,
+    )))
 }
 
 /// Hand one intent to the UI thread and wait for its answer.

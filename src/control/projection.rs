@@ -26,6 +26,12 @@ use crate::ui::{PaneContent, State, ViewId};
 /// The wall, as a controller sees it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Wall {
+    /// **The projection's version** (#221): a counter that only goes up, one step per change to what a client reads.
+    ///
+    /// `Scene::seq`'s sibling (#201), and the reason a client can be told a wall moved without being told how: a
+    /// number it did not expect means it missed one and should **read again**, never reconstruct. A publish the wall
+    /// sent carries this number, so a client holding a projection can put the two in order.
+    pub seq: u64,
     /// The workspaces, in chip order.
     pub workspaces: Vec<WorkspaceView>,
     /// Which workspace is on screen, as an index into `workspaces`.
@@ -141,6 +147,7 @@ pub fn of(state: &State) -> Wall {
     let active = state.active;
     let focused = state.layout().map(|layout| layout.focused());
     Wall {
+        seq: state.projection_seq,
         active,
         focused,
         maximised: state.maximised(),
@@ -189,6 +196,28 @@ pub fn of(state: &State) -> Wall {
             })
             .collect(),
     }
+}
+
+/// **The projection, versioned** (#221): what a client reads, and the number that says which version it is.
+///
+/// The version is the **projection's own**. [`of`] is a function of `State`, so "it changed" is a comparison of two
+/// projections rather than a promise thirty call sites would have to keep — a wall that changed nothing cannot hand
+/// out a new number, which is precisely the falsifier this exists for (a phone that wakes for nothing).
+///
+/// The first projection is version `0`, so a client's first read is the wall *at* a number rather than one step past
+/// nothing; every change the wall answers from then on is one more.
+pub fn versioned(state: &mut State) -> Wall {
+    let wall = of(state);
+    if state.projection_seen.as_ref() == Some(&wall) {
+        // Nothing a client reads has moved: the same number says so, and a watcher publishes nothing.
+        return wall;
+    }
+    if state.projection_seen.is_some() {
+        state.projection_seq += 1;
+    }
+    let wall = of(state);
+    state.projection_seen = Some(wall.clone());
+    wall
 }
 
 #[cfg(test)]
@@ -307,8 +336,76 @@ mod tests {
             .collect();
         assert_eq!(
             keys,
-            ["active", "focused", "maximised", "workspaces"],
+            ["active", "focused", "maximised", "seq", "workspaces"],
             "the top-level shape is the document's shape"
+        );
+    }
+
+    /// **The projection is versioned** (#221): the number moves when — and only when — what a client reads changed, so a
+    /// watcher can be told "it is not what you hold" without a diff, and a wall that changed nothing cannot hand out a
+    /// new number at all.
+    ///
+    /// The falsifiers are the two implementations that are easier: a counter bumped by every call (a wall that
+    /// publishes on every beat, which wakes a phone for nothing) and a counter bumped by `arranged()` (a save's
+    /// debounce and a change nobody can read are one number, so a real change can hide behind them).
+    #[test]
+    fn the_version_moves_only_when_the_projection_did() {
+        let mut state = State::default();
+        let first = versioned(&mut state);
+        assert_eq!(
+            first.seq, 0,
+            "the first projection a client reads is version 0"
+        );
+        assert_eq!(
+            versioned(&mut state).seq,
+            0,
+            "a wall that changed nothing handed out a new version: a watch would publish, and a phone would wake for \
+             nothing (INV-01's rule, in a number)"
+        );
+
+        // **A change a client can read is one version further on.** A new workspace changes the chips and the active
+        // index — both are in the projection.
+        state.add_workspace();
+        let second = versioned(&mut state);
+        assert_eq!(
+            second.seq, 1,
+            "the projection changed and the number did not follow it: a client cannot put the two in order"
+        );
+        assert_eq!(
+            second.active, 3,
+            "and the version is the wall it was taken from: the fourth workspace is the one it made"
+        );
+        assert_eq!(
+            versioned(&mut state).seq,
+            1,
+            "the same projection twice is one version, however often it is asked for"
+        );
+
+        // **An arrangement change a client cannot see is not a version**: `arranged()` is the save's clock and the
+        // scene's counter (#201, #153), and a projection that moved with it would publish a wall identical to the one
+        // the client holds.
+        state.arranged();
+        assert_eq!(
+            versioned(&mut state).seq,
+            1,
+            "a change to nothing a client reads moved the projection's version (#221)"
+        );
+
+        // **And a change that leaves the projection as it was is not a change**: selecting in a pane the hull it already
+        // shows twice is the same projection, so it is the same number. (The pane is workspace 1's, because the
+        // workspace just made is the one on screen and it holds none.)
+        let pane = state.workspaces[0].panes[0].id;
+        state.select_in(pane, 512_345);
+        assert_eq!(
+            versioned(&mut state).seq,
+            2,
+            "a selection a client reads is a version"
+        );
+        state.select_in(pane, 512_345);
+        assert_eq!(
+            versioned(&mut state).seq,
+            2,
+            "selecting the hull a pane already shows is not a version: nothing a client reads moved"
         );
     }
 

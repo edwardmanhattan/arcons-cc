@@ -21,6 +21,8 @@
 
 use super::carrier::Carrier;
 use super::projection::Wall;
+use super::watch::Watch;
+use super::watch::{Publish, Session};
 use super::wire::{self, Answer, Refusal, Request, Unreadable};
 use super::{Changed, Intent, PROTOCOL, RefusalKind};
 use crate::ui::ViewId;
@@ -75,6 +77,9 @@ pub enum Denied {
     NoConnection,
     /// **Nothing has been read on this connection.** Read, then act.
     NotRead,
+    /// **No watch is open here** (#221): a publish is only ever the answer to a watch this client asked for and was
+    /// granted, and a client that takes one without having asked is reading a wire it did not set up.
+    NotWatching,
     /// The carrier failed, or the wall hung up, while the request was out — the connection went with it.
     Lost,
     /// The wall answered something this protocol does not have.
@@ -87,7 +92,11 @@ impl Denied {
     pub fn recourse(&self) -> Option<Recourse> {
         match self {
             Denied::Refused(refusal) => Some(refusal.recourse()),
-            Denied::NoConnection | Denied::NotRead | Denied::Lost | Denied::Unreadable(_) => None,
+            Denied::NoConnection
+            | Denied::NotRead
+            | Denied::NotWatching
+            | Denied::Lost
+            | Denied::Unreadable(_) => None,
         }
     }
 }
@@ -119,6 +128,10 @@ pub struct Client<C: Carrier> {
     carrier: Option<C>,
     /// What it knows, which is only ever what it has just read.
     known: Known,
+    /// **The watch this connection keeps** (#221): the version it holds, and whether the wall is publishing to it. It
+    /// is shut by every way a connection can end, because a watch is a connection's and not a memory's — the client
+    /// reads before it asks again (`docs/mobile-remote.md` decision 1).
+    session: Session,
 }
 
 impl<C: Carrier> Client<C> {
@@ -134,6 +147,7 @@ impl<C: Carrier> Client<C> {
             version,
             carrier: None,
             known: Known::Nothing,
+            session: Session::new(),
         }
     }
 
@@ -142,6 +156,8 @@ impl<C: Carrier> Client<C> {
     pub fn connect(&mut self, carrier: C) {
         self.carrier = Some(carrier);
         self.known = Known::Nothing;
+        // **A new connection is not a new memory**, and it is not a watch either (#221): the phone reads, then asks.
+        self.session.shut();
     }
 
     /// Let go: the connection and the projection both. **Nothing is queued here**, because an intent is a change and
@@ -149,6 +165,7 @@ impl<C: Carrier> Client<C> {
     pub fn disconnect(&mut self) {
         self.carrier = None;
         self.known = Known::Nothing;
+        self.session.shut();
     }
 
     /// Whether this client has a connection. It may still know nothing (`read` has not been called).
@@ -195,6 +212,9 @@ impl<C: Carrier> Client<C> {
         };
         match wire::answer(&line) {
             Ok(Answer::Wall(wall)) => {
+                // **The version the read answers with is the one this client holds** (#221): a publish is expected to
+                // be the next one, and anything else is a read.
+                self.session.read(wall.seq);
                 self.known = Known::Wall(wall.clone());
                 Ok(wall)
             }
@@ -255,6 +275,123 @@ impl<C: Carrier> Client<C> {
             }
             Err(unreadable) => {
                 self.known = Known::Nothing;
+                Err(Denied::Unreadable(unreadable))
+            }
+        }
+    }
+
+    /// **The watch this connection keeps** (#221): the version of the projection the client holds, and whether the
+    /// wall is publishing to it.
+    pub fn session(&self) -> &Session {
+        &self.session
+    }
+
+    /// **Ask the wall to publish its projection whenever it changes** (#221) — the one request on this plane whose
+    /// answer keeps coming.
+    ///
+    /// Refused by this client's own rule until it has **read on this connection** ([`Denied::NotRead`]): decision 1 is
+    /// unchanged by a watch, and a watch that resumed without a read would be a client believing what it remembered.
+    /// Refused by the *wall* with `rule` when the carrier cannot carry one — the socket answers one request with one
+    /// answer, because a `ctl` script must not be able to hold it open for ever — and a `rule`'s recourse is to read,
+    /// which is exactly the fallback a controller wants.
+    pub fn watch(&mut self) -> Result<(), Denied> {
+        match &self.known {
+            Known::Stopped(refusal) => return Err(Denied::Refused(refusal.clone())),
+            Known::Nothing => {
+                return Err(if self.carrier.is_some() {
+                    Denied::NotRead
+                } else {
+                    Denied::NoConnection
+                });
+            }
+            Known::Wall(_) => {}
+        }
+        let Some(carrier) = self.carrier.as_mut() else {
+            return Err(Denied::NoConnection);
+        };
+        let request = wire::request_line_at(self.version, &Request::Watch(Watch::Wall));
+        let line = match exchange(carrier, &request) {
+            Ok(line) => line,
+            Err(denied) => {
+                self.disconnect();
+                return Err(denied);
+            }
+        };
+        match wire::answer(&line) {
+            Ok(Answer::Watching(_)) => {
+                self.session.opened();
+                Ok(())
+            }
+            // A refusal moved nothing, so the projection the ask was composed from is still the wall's.
+            Err(Unreadable::Refused(refusal)) => Err(self.refused(refusal)),
+            // An answer that is not a grant cannot say the stream exists. Forget the projection: read again.
+            Ok(other) => {
+                self.known = Known::Nothing;
+                Err(Denied::Unreadable(Unreadable::Malformed(format!(
+                    "a watch was answered with {other:?}"
+                ))))
+            }
+            Err(unreadable) => {
+                self.known = Known::Nothing;
+                Err(Denied::Unreadable(unreadable))
+            }
+        }
+    }
+
+    /// **Take a projection the wall published**, without waiting (#221): `Ok(None)` is "nothing has arrived", which is
+    /// what most frames of a watch are.
+    ///
+    /// A publish one version after the one this client holds is the wall now. **A number it did not expect makes it
+    /// read** — the read's projection is what comes back — because the one thing a client may not do with a line it
+    /// cannot place is reconstruct a history from it. And a client that is not watching takes nothing at all: a
+    /// publish is only ever the answer to a watch this client asked for.
+    pub fn published(&mut self) -> Result<Option<Wall>, Denied> {
+        if !self.session.is_open() {
+            return Err(if self.carrier.is_some() {
+                Denied::NotWatching
+            } else {
+                Denied::NoConnection
+            });
+        }
+        let Some(carrier) = self.carrier.as_mut() else {
+            return Err(Denied::NoConnection);
+        };
+        // **Taken, never waited for** (#221): a phone polls its wire between frames, and a client that blocked here
+        // would be a screen that stops drawing until the wall moves.
+        let line = match carrier.read_line_within(std::time::Duration::ZERO) {
+            Ok(Some(line)) => line,
+            // End of file: the connection went with it, and so did the watch.
+            Ok(None) => {
+                self.disconnect();
+                return Err(Denied::Lost);
+            }
+            // A deadline is not a failure: nothing has arrived yet.
+            Err(error) if super::watch::timed_out(&error) => return Ok(None),
+            Err(_) => {
+                self.disconnect();
+                return Err(Denied::Lost);
+            }
+        };
+        match wire::answer(&line) {
+            Ok(Answer::Published(_, wall)) => match self.session.publish(wall.seq) {
+                Publish::Take => {
+                    self.known = Known::Wall(wall.clone());
+                    Ok(Some(wall))
+                }
+                // **A version it did not expect**: read, and hold what the read answers with.
+                Publish::Read => self.read().map(Some),
+            },
+            Ok(other) => {
+                self.known = Known::Nothing;
+                self.session.shut();
+                Err(Denied::Unreadable(Unreadable::Malformed(format!(
+                    "a watch published {other:?}"
+                ))))
+            }
+            Err(Unreadable::Refused(refusal)) => Err(self.refused(refusal)),
+            Err(unreadable) => {
+                self.known = Known::Nothing;
+                self.session.shut();
                 Err(Denied::Unreadable(unreadable))
             }
         }
@@ -365,6 +502,13 @@ mod tests {
         fn write_line(&mut self, line: &str) -> std::io::Result<()> {
             let _ = self.sent.send(line.to_string());
             self.peer.write_line(line)
+        }
+
+        fn read_line_within(
+            &mut self,
+            within: std::time::Duration,
+        ) -> std::io::Result<Option<String>> {
+            self.peer.read_line_within(within)
         }
 
         fn hang_up(&mut self) {

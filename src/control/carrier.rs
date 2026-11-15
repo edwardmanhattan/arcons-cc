@@ -13,6 +13,7 @@
 //! [`super::server::Job`] and waits — which is the rule this seam must not tempt anyone to break.
 
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::Duration;
 
 use crate::ui::Origin;
 
@@ -26,6 +27,24 @@ pub trait Carrier: Send {
     /// Hang the connection up, so a thread blocked in [`Carrier::read_line`] wakes. Called when the wall stops: a
     /// client that typed half a line must not hold the process open.
     fn hang_up(&mut self) {}
+
+    /// **Whether this carrier can carry a watch** (#221) — a stream of lines, not one answer to one request.
+    ///
+    /// The socket the wall has always had says **no**: it answers one request with one answer, because a `ctl` script
+    /// must not be able to hold the wall's one connection open for ever. A relay holds a connection open already, and
+    /// says **yes**. So a watch is a capability of a transport and not a verb of the plane, and a client that asks the
+    /// wrong one is refused by name ([`super::watch::NOT_CARRIED`]).
+    fn carries_a_watch(&self) -> bool {
+        false
+    }
+
+    /// **Read a line, waiting at most `within`** (#221): what a watched session loop uses to make a publish due.
+    ///
+    /// `Ok(None)` is end of file, exactly as [`Carrier::read_line`]'s is. A deadline is **not a failure**: it is an
+    /// error of kind [`std::io::ErrorKind::WouldBlock`] or `TimedOut` (see [`super::watch::timed_out`]), and the loop
+    /// treats it as "nothing has happened yet". Every carrier can be told how long to wait — the one that carries no
+    /// watch is simply never asked.
+    fn read_line_within(&mut self, within: Duration) -> std::io::Result<Option<String>>;
 
     /// **Whose hand the line just read came in on** (#222) — the name this carrier knows its client by.
     ///
@@ -76,6 +95,16 @@ impl Carrier for Unix {
         use std::io::Write;
         writeln!(self.writer, "{line}")?;
         self.writer.flush()
+    }
+
+    /// The socket's reads have no deadline: one request, one answer, and a client that has gone quiet is moved along by
+    /// `hang_up` rather than by a timer. The method exists because every carrier answers it, and the wait it is given
+    /// is honoured — this carrier simply never carries a watch (#221).
+    fn read_line_within(&mut self, within: Duration) -> std::io::Result<Option<String>> {
+        self.reader.get_ref().set_read_timeout(Some(within))?;
+        let outcome = self.read_line();
+        let _ = self.reader.get_ref().set_read_timeout(None);
+        outcome
     }
 
     fn hang_up(&mut self) {
@@ -141,6 +170,13 @@ impl Carrier for Loopback {
         Ok(self.from_peer.recv().ok())
     }
 
+    /// **This pair stands in for the socket** (#195), and a socket carries no watch (#221) — so the corpus and every
+    /// session test that drives this carrier meet the same refusal a `ctl` script would. A test that wants a watch
+    /// carries one with its own `Carrier`, which is the claim: the capability belongs to the transport.
+    fn read_line_within(&mut self, within: Duration) -> std::io::Result<Option<String>> {
+        within_of(&self.from_peer, within)
+    }
+
     fn write_line(&mut self, line: &str) -> std::io::Result<()> {
         self.to_peer
             .send(line.to_string())
@@ -157,10 +193,27 @@ impl Carrier for Peer {
         Ok(self.from_wall.recv().ok())
     }
 
+    fn read_line_within(&mut self, within: Duration) -> std::io::Result<Option<String>> {
+        within_of(&self.from_wall, within)
+    }
+
     fn write_line(&mut self, line: &str) -> std::io::Result<()> {
         self.to_wall
             .send(line.to_string())
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "the wall hung up"))
+    }
+}
+
+/// **A channel read with a deadline** (#221): `Ok(None)` is end of file and a deadline is `WouldBlock`, which is the
+/// same pair a socket's read gives a watched loop.
+fn within_of(from: &Receiver<String>, within: Duration) -> std::io::Result<Option<String>> {
+    match from.recv_timeout(within) {
+        Ok(line) => Ok(Some(line)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "nothing arrived within the beat",
+        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Ok(None),
     }
 }
 

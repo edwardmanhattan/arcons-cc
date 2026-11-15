@@ -61,6 +61,9 @@ pub mod relay;
 pub mod sessions;
 pub mod snapshot;
 pub mod tiling;
+// **A watch** (#221) is the one thing on this plane that is not request/answer. It compiles everywhere: the wire's
+// three frames are the vocabulary, and the carrier that can actually carry a stream is a unix one.
+pub mod watch;
 pub mod wire;
 
 #[cfg(unix)]
@@ -479,13 +482,14 @@ pub const REFUSALS: &[(&str, RefusalKind)] = &[
         RefusalKind::Input,
     ),
     ("\"unit\" is a hull id or null", RefusalKind::Input),
+    ("\"watch\" is \"wall\"", RefusalKind::Input),
     ("\"zoom\" is a number or null", RefusalKind::Input),
     (
-        "a request carries \"intent\" or \"read\", not both",
+        "a request carries \"intent\", \"read\" or \"watch\", not two",
         RefusalKind::Input,
     ),
     (
-        "a request carries \"intent\" or \"read\"",
+        "a request carries \"intent\", \"read\" or \"watch\"",
         RefusalKind::Input,
     ),
     ("a request carries \"v\"", RefusalKind::Input),
@@ -521,6 +525,9 @@ pub const REFUSALS: &[(&str, RefusalKind)] = &[
     ("the wall did not answer", RefusalKind::Busy),
     ("the wall has no source of chance", RefusalKind::Busy),
     ("the wall has stopped", RefusalKind::Busy),
+    // **A carrier's capability, not a verb of the plane** (#221): a socket answers one request with one answer, and
+    // a client that asked for a stream on it is told which wall it is talking to.
+    ("this carrier does not carry a watch", RefusalKind::Rule),
     ("those panes are not neighbours", RefusalKind::Rule),
     ("unknown pane kind", RefusalKind::Input),
     ("unknown read", RefusalKind::Input),

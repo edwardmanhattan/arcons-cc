@@ -27,13 +27,15 @@ the last one is deliberate:
 | lands a pane where another one is, and moves the gutter between two | `pane.drop`, `pane.resize` (#219) | yes |
 | walks a menu and picks a row | `menu.focus`, `menu.submenu`, `menu.choose` (#164) | yes |
 | presses a thing it can name but not see | `cursor.move`, `cursor.press`, `cursor.release` (#167) | yes |
-| learns *what* a pane is looking at | the projection: a pane's `title`, `kind`, `camera`, `selected` | yes |
+| learns *what* a pane is looking at | the projection: a pane's `title`, `kind`, `camera`, `selected`, and the `seq` that says which version it is | yes |
+| keeps up with a wall **somebody else** is driving, without polling | one watch frame (`{"v": 1, "watch": "wall"}`, #221): the projection, published at 4 Hz when it changed | yes, over the relay |
 | is paired in the room | `pair.begin`, `pair.claim`, `pair.forget` (#194) — a code on the wall, a hashed key in `devices.toml` | yes, over the local socket |
 | reaches the wall from another machine | the relay's frames — the wall dials out and a phone talks to the relay (#196) | **the wall's half**; the relay's own service is not this repository's |
 
 The wire is one JSON object per line, in and out: a request is a verb with its fields, and the answer is either
-`{"ok": true, "changed": true}` or `{"ok": false, "why": "…"}` or `{"read": "wall", "wall": {…}}` — one or the other,
-never both (`docs/control.md` is the reference).
+`{"ok": true, "changed": true}` or `{"ok": false, "why": "…"}` or `{"read": "wall", "wall": {…}}` — one of those,
+never two (`docs/control.md` is the reference). The fourth shape is the **watch** (#221): one ask, one `ok` answer, and
+then the projection whenever it changed — the only stream on a wire that is otherwise request and answer.
 
 ## The three decisions
 
@@ -41,6 +43,11 @@ never both (`docs/control.md` is the reference).
 
 The phone reads the wall when it connects and **again every time it comes back** — from sleep, from a dropped socket,
 from a network change. It never replays intents it sent before, and it keeps no state it did not just read.
+
+**A watch is not a subscription the phone resumes.** It is the projection arriving without being asked for (#221),
+and it belongs to a connection: the phone reads first on every reconnect and every return from sleep, and asks for a
+watch after that read has landed. The wall ends one with the connection, so a watch that resumed on its own would be a
+phone watching nothing — and a phone that believed what it remembered is the one thing this decision forbids.
 
 Why: an intent is a *change*, and a wall that changed while the phone was away would be changed wrongly by a replay.
 "I closed pane 4" is a fact about a wall that no longer exists; "read what is on the wall, then act" is the only rule

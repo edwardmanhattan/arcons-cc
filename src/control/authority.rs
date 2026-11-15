@@ -99,7 +99,14 @@ pub fn answer(
             Ok(Applied::Paired(paired)) => (Answer::Paired(paired), true),
             Err(why) => (Answer::Changed(Err(why)), false),
         },
-        Request::Wall => (Answer::Wall(crate::control::projection::of(state)), false),
+        Request::Wall => (
+            Answer::Wall(crate::control::projection::versioned(state)),
+            false,
+        ),
+        // **A watch** (#221) is granted here and carried by the transport: whether a carrier can hold a stream open is
+        // the carrier's question (`carrier::Carrier::carries_a_watch`), so the grant is all the wall has to say. The
+        // session loop that asked gets the projection the client already holds and starts the beat from it.
+        Request::Watch(watch) => (Answer::Watching(*watch), false),
         // **The arrangement, not the projection** (#201): what a viewer's picture is computed from. Built on the frame
         // that asks, which is what "what is on the wall" means.
         Request::Scene => (Answer::Scene(Box::new(state.scene())), false),
@@ -304,6 +311,16 @@ mod tests {
             "the scene is the wall it was asked of"
         );
         assert_eq!(scene.seq, state.scene_seq, "and says how old it is");
+
+        // **A watch is granted by the wall and carried by the transport** (#221): whether one can be carried is the
+        // carrier's question, and it moves nothing, so the wall's half is the grant alone.
+        let (reply, changed) = answer(
+            &mut state,
+            &Request::Watch(crate::control::watch::Watch::Wall),
+            None,
+        );
+        assert_eq!(reply, Answer::Watching(crate::control::watch::Watch::Wall));
+        assert!(!changed, "a watch changes nothing on the wall");
     }
 
     /// **A viewer that hears nothing stops calling its picture current** (#206), and a scene clears it.

@@ -28,14 +28,17 @@ a verb.
 {"v": 1, "ok": false, "why": "the last pane on the wall"}
 
 {"v": 1, "read": "wall"}
-{"v": 1, "ok": true, "wall": { … }}
+{"v": 1, "ok": true, "wall": { …, "seq": 41 }}
+
+{"v": 1, "watch": "wall"}
+{"v": 1, "ok": true, "watch": "wall"}
 
 {"v": 1, "intent": {"verb": "pair.claim", "code": "481902", "name": "phone"}}
 {"v": 1, "ok": true, "paired": {"name": "phone", "key": "…64 hex…"}}
 ```
 
-**One or the other, never both**: a line that changed the wall and read it at once could not say which answer the
-client is waiting for. A request with neither is refused by name.
+**One of the three, never two**: a line that changed the wall and read it at once could not say which answer the client
+is waiting for, and a watch on the same line would say it twice. A request with none of them is refused by name.
 
 **Every refusal says what kind it is** (#198), because the client is not always a person at a terminal:
 
@@ -127,6 +130,7 @@ It is the read half of the plane, and the first thing a client should ask for.
 
 | field | meaning |
 | --- | --- |
+| `seq` | **the projection's version** (#221): a counter that only goes up, one step per change to what a client can read. A client holding a projection can tell the next one from the same one, and a number it did not expect is a read. |
 | `active` | the workspace on screen, as an index into `workspaces` |
 | `focused` | the pane with the keys, or `null` when the workspace on screen holds none |
 | `maximised` | the pane drawn over the wall (#85), or `null` |
@@ -175,6 +179,49 @@ the picture, which is the one thing this protocol decided not to send.
 ```sh
 arcons-cc ctl wall | jq '.workspaces[] | {name, panes: [.panes[].kind]}'
 ```
+
+### A watch: the projection, when it moves (#221)
+
+`read: "wall"` is a question a client asks. A **watch** is the same projection, sent when the wall changes — the one
+thing on this wire that is not request/answer, and it exists for one client: a phone showing the wall's arrangement
+while **somebody else** drives it. The wall moves because a hand on the glass, a `ctl` script or another phone moved it,
+and a phone that polls to learn that pays a radio wake to learn nothing.
+
+```json
+{"v": 1, "watch": "wall"}
+{"v": 1, "ok": true, "watch": "wall"}
+{"v": 1, "ok": true, "watch": "wall", "wall": { …, "seq": 41 }}
+```
+
+The first line is the ask, the second the **grant** — one answer, like every request — and the third a **publish**: the
+body a read answers with, with the watch it belongs to on it. **A publish carries `watch` and a read does not**, so a
+client that has a request in flight can tell the two lines apart.
+
+**`seq` is how a client knows what it holds.** A publish is **one version after** the one the client holds; a number it
+did not expect is a **read** — `read: "wall"` again, and take what comes back — never a reconstruction of a difference
+it did not see. A client that has read and then watched holds the wall; a client that guesses holds a memory.
+
+**One publish per beat at most**, and the beat is **250 ms** — 4 Hz, the cadence #71 gives a focused pane's map. The
+wall coalesces: sixty changes inside one beat are one line, and it is the newest; a wall that changed nothing writes
+nothing at all. That is the whole promise to a phone: a wall that is still and a wall that is busy cost it the same.
+
+**A watch is not a subscription a client resumes** (`mobile-remote.md` decision 1). It belongs to a connection: after a
+drop, a sleep or a network change the phone **reads first** and asks again. The wall ends one with the connection too,
+so a phone that resumed one would be watching nothing.
+
+**A watch is a carrier's capability, not a verb of the plane** (#195). The socket this machine has answers one request
+with one answer and **refuses a watch by name** — `this carrier does not carry a watch`, `kind: "rule"` — because a `ctl` script
+must not be able to hold the wall's one connection open for ever. The relay (#196) holds a connection open already, so
+it carries one: the ask is an ordinary paired frame with `watch` on it, and every publish is addressed to the device
+that asked (`to`), because a publish has no request of its own to take a name from.
+
+**One watch per connection.** The stream belongs to the carrier's session, so a second ask on the same connection is
+a new baseline and not a second stream. Two phones at one wall is a different question, and it is
+[#222](https://github.com/edwardmanhattan/arcons-cc/issues/222)'s.
+
+A watch **stream** is not in the corpus: a coalesced publish is a race, and a file a client compares byte for byte
+cannot hold one (`fixtures/README.md`). The **refusal** is in it — a `ctl` script meeting that refusal is a client
+meeting the wall.
 
 **Where a pane is** is not in the projection yet (#218). The wall's own answer to it is one function,
 `view::Layout::cells`, and that answer is **recorded**: `fixtures/control/tiling/` holds one file per tiling,
@@ -246,7 +293,9 @@ A viewer asks for the arrangement and draws it:
 
 **Pull, not push.** A viewer asks for the newest scene and `seq` tells it whether anything moved, so a wall that has
 changed nothing costs one small answer. A push channel belongs to the relay (#196), where a connection is already held
-open; two ways to learn about a change would be two ways to disagree about when it happened.
+open; two ways to learn about a change would be two ways to disagree about when it happened. **And it is a
+controller's**: the relay's watch publishes the *projection* (#221), which is the wall's controls — a viewer draws the
+whole `Scene`, and a screen that watched this one would be drawing an arrangement with no water in it.
 
 **A viewer that has lost its authority says so** (#206). It asks for a scene every frame, so silence for five seconds
 is not a slow frame — it is a wire that is gone, or an authority that is. The header then carries a banner over a picture
@@ -397,8 +446,8 @@ The file is **recorded, never written by hand**: a setup script in `fixtures/int
 through `control::apply`, and the exchanges go through the wall's own session loop over an in-memory
 carrier — the door the socket uses. A client that replays the file and gets the same lines agrees with the
 wall about the protocol; a change to a verb or a refusal leaves the corpus red until a human re-records it
-and reads the diff. A `watch` stream is deliberately not in it: a coalesced publish is a race, and a race is
-not a fixture.
+and reads the diff. A `watch` **stream** is deliberately not in it (#221): a coalesced publish is a race, and a race is
+not a fixture. The watch's *refusal* is, because a `ctl` script meeting it is a client meeting the wall.
 
 ## The scene: the whole arrangement (#201)
 

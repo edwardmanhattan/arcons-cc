@@ -21,6 +21,7 @@ use serde_json::{Map, Value, json};
 
 use super::projection::Wall;
 use super::snapshot::Scene;
+use super::watch::Watch;
 use super::{Changed, Intent, PROTOCOL, Paired, RefusalKind, Refused};
 use crate::ui::{PaneContent, RenameTarget};
 
@@ -455,7 +456,7 @@ fn content(object: &Map<String, Value>) -> Result<PaneContent, Refused> {
     }
 }
 
-/// **What a client asked for**: a change (an `Intent`), or a look at the wall (#181).
+/// **What a client asked for**: a change (an `Intent`), a look at the wall (#181), or a stream of them (#221).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
     Intent(Intent),
@@ -463,9 +464,13 @@ pub enum Request {
     /// **The whole arrangement, for a viewer** (#201, #202): what a picture is computed from, so a second screen can
     /// draw the same wall. Not a projection — that is for a controller, and it deliberately leaves the picture out.
     Scene,
+    /// **A watch** (#221): the projection, and then a line whenever it changed. Not an intent — nothing on the wall
+    /// moves for it — and not a read, because the answer keeps coming. Whether a carrier can carry one is the
+    /// carrier's question, not this enum's.
+    Watch(Watch),
 }
 
-/// **The wall's answer**, in the shape the listener sends back (#165, #181).
+/// **The wall's answer**, in the shape the listener sends back (#165, #181, #221).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Answer {
     Changed(Result<Changed, Refused>),
@@ -474,6 +479,13 @@ pub enum Answer {
     Wall(Wall),
     /// The arrangement a viewer draws (#202), with the `seq` that says how old it is.
     Scene(Box<Scene>),
+    /// **A watch was granted** (#221): the one answer to the request, and what follows is the stream.
+    Watching(Watch),
+    /// **A projection the wall published** (#221): the body a read answers with, and the watch it belongs to.
+    ///
+    /// The `watch` on the line is what tells a publish from the answer to a request a client has in flight — both
+    /// carry a `wall`, and a client that could not tell them apart would take a publish for its read.
+    Published(Watch, Wall),
 }
 
 /// **One request line** — the version, and the intent inside it.
@@ -490,19 +502,34 @@ pub fn request(line: &str) -> Result<Request, Refused> {
         Some(_) => return Err(Refused("unsupported protocol version")),
         None => return Err(Refused("a request carries \"v\"")),
     }
-    // **One or the other, never both** (#181): a line that changes the wall and reads it at once cannot say
-    // which answer the client is waiting for.
-    match (object.get("intent"), object.get("read")) {
-        (Some(intent), None) => from_wire(intent).map(Request::Intent),
-        (None, Some(read)) => match read.as_str() {
+    // **One of the three, never two** (#181, #221): a line that changes the wall and reads it at once cannot say
+    // which answer the client is waiting for, and a watch on the same line would say it twice.
+    match (
+        object.get("intent"),
+        object.get("read"),
+        object.get("watch"),
+    ) {
+        (Some(intent), None, None) => from_wire(intent).map(Request::Intent),
+        (None, Some(read), None) => match read.as_str() {
             Some("wall") => Ok(Request::Wall),
             Some("scene") => Ok(Request::Scene),
             _ => Err(Refused("unknown read")),
         },
-        (Some(_), Some(_)) => Err(Refused(
-            "a request carries \"intent\" or \"read\", not both",
+        // **A word this wall does not carry is a refusal, not a default** (`INV-07`): guessing `wall` for a word a
+        // newer wall added would start a stream the client did not ask for.
+        (None, None, Some(watch)) => watch
+            .as_str()
+            .and_then(Watch::of_word)
+            .map(Request::Watch)
+            .ok_or(Refused("\"watch\" is \"wall\"")),
+        (None, None, None) => Err(Refused(
+            "a request carries \"intent\", \"read\" or \"watch\"",
         )),
-        (None, None) => Err(Refused("a request carries \"intent\" or \"read\"")),
+        // The remaining cases are two of the three at once, and the match says so in the order it answers them:
+        // the three singles above are exhaustive for one field, so this arm is exactly "more than one".
+        (Some(_), _, _) | (_, Some(_), _) => Err(Refused(
+            "a request carries \"intent\", \"read\" or \"watch\", not two",
+        )),
     }
 }
 
@@ -520,6 +547,7 @@ pub fn request_line_at(version: u32, request: &Request) -> String {
         Request::Intent(intent) => json!({ "v": version, "intent": to_wire(intent) }).to_string(),
         Request::Wall => json!({ "v": version, "read": "wall" }).to_string(),
         Request::Scene => json!({ "v": version, "read": "scene" }).to_string(),
+        Request::Watch(watch) => json!({ "v": version, "watch": watch.word() }).to_string(),
     }
 }
 
@@ -607,6 +635,21 @@ pub fn answer(line: &str) -> Result<Answer, Unreadable> {
         })?;
         return Ok(Answer::Scene(Box::new(scene)));
     }
+    // **The watch's two lines** (#221), read before the plain `wall` answer because a publish carries both: the
+    // `watch` it belongs to is what tells it from the answer to a read.
+    if let Some(watch) = object.get("watch") {
+        let watch = watch
+            .as_str()
+            .and_then(Watch::of_word)
+            .ok_or_else(|| Unreadable::Malformed("a watch this client knows".to_string()))?;
+        let Some(wall) = object.get("wall") else {
+            return Ok(Answer::Watching(watch));
+        };
+        let wall: Wall = serde_json::from_value(wall.clone()).map_err(|_| {
+            Unreadable::Malformed("the wall is not a projection this client knows".to_string())
+        })?;
+        return Ok(Answer::Published(watch, wall));
+    }
     if let Some(wall) = object.get("wall") {
         let wall: Wall = serde_json::from_value(wall.clone()).map_err(|_| {
             Unreadable::Malformed("the wall is not a projection this client knows".to_string())
@@ -649,6 +692,16 @@ pub fn reply(answer: Answer) -> String {
         // change nothing is not told something did.
         Answer::Wall(wall) => json!({ "v": PROTOCOL, "ok": true, "wall": wall }).to_string(),
         Answer::Scene(scene) => json!({ "v": PROTOCOL, "ok": true, "scene": scene }).to_string(),
+        // **The grant says what is being watched, and nothing else** (#221): the projection follows on the stream, so
+        // the client is told the stream exists rather than being handed a body it has just read.
+        Answer::Watching(watch) => {
+            json!({ "v": PROTOCOL, "ok": true, "watch": watch.word() }).to_string()
+        }
+        // **A publish is a read's body with the watch on it**: one encoder, and a client that has a request in flight
+        // can still tell which line is which.
+        Answer::Published(watch, wall) => {
+            json!({ "v": PROTOCOL, "ok": true, "watch": watch.word(), "wall": wall }).to_string()
+        }
     }
 }
 
@@ -796,12 +849,14 @@ mod tests {
         assert_eq!(
             request(r#"{"v":1,"intent":{"verb":"pane.focus","pane":1},"read":"wall"}"#),
             Err(Refused(
-                "a request carries \"intent\" or \"read\", not both"
+                "a request carries \"intent\", \"read\" or \"watch\", not two"
             ))
         );
         assert_eq!(
             request(r#"{"v":1}"#),
-            Err(Refused("a request carries \"intent\" or \"read\""))
+            Err(Refused(
+                "a request carries \"intent\", \"read\" or \"watch\""
+            ))
         );
     }
 
@@ -843,6 +898,77 @@ mod tests {
             assert_eq!(value["kind"], json!(kind), "{why} is a {kind}");
         }
     }
+    /// **The watch's three lines** (#221): the ask, the grant, and a publish — which is a read's body with the watch
+    /// on it, so a client that has a request in flight can tell a publish from the answer it is waiting for.
+    ///
+    /// The falsifiers are the two shapes that would have been easier: a publish identical to a read's answer (a client
+    /// cannot tell them apart, and would take one for the other) and a session that had to parse the relay's frames
+    /// itself (a second vocabulary, which is the bug #196 exists to make impossible).
+    #[test]
+    fn a_watch_asks_is_granted_and_publishes_a_body_a_read_would_answer_with() {
+        use super::super::watch::Watch;
+
+        let ask = json!({ "v": 1, "watch": "wall" });
+        assert_eq!(
+            request(&ask.to_string()),
+            Ok(Request::Watch(Watch::Wall)),
+            "the ask is a request like any other: a version and one of the three fields"
+        );
+        assert_eq!(request_line(&Request::Watch(Watch::Wall)), ask.to_string());
+        assert_eq!(
+            reply(Answer::Watching(Watch::Wall)),
+            r#"{"ok":true,"v":1,"watch":"wall"}"#,
+            "the grant says which stream is open and carries no projection: the client has just read one"
+        );
+
+        let wall = crate::control::projection::of(&crate::ui::State::default());
+        let published = reply(Answer::Published(Watch::Wall, wall.clone()));
+        assert_eq!(
+            answer(&published),
+            Ok(Answer::Published(Watch::Wall, wall.clone())),
+            "a publish comes back as itself: {published}"
+        );
+        let read = reply(Answer::Wall(wall.clone()));
+        assert_eq!(
+            answer(&read),
+            Ok(Answer::Wall(wall)),
+            "and a read is still a read"
+        );
+        let value: Value = serde_json::from_str(&published).expect("a publish is JSON");
+        assert_eq!(
+            value["watch"],
+            json!("wall"),
+            "a publish belongs to a watch"
+        );
+        assert!(
+            value["wall"].is_object(),
+            "and carries the projection a read answers with, not a patch"
+        );
+        assert!(
+            serde_json::from_str::<Value>(&read)
+                .expect("a read is JSON")
+                .get("watch")
+                .is_none(),
+            "a read carries no watch: that field is the only thing that tells the two apart (#221)"
+        );
+
+        // **A word this wall does not carry is refused by name**, and so is a line that asks for two things.
+        assert_eq!(
+            request(r#"{"v":1,"watch":"scene"}"#),
+            Err(Refused("\"watch\" is \"wall\""))
+        );
+        assert_eq!(
+            request(r#"{"v":1,"watch":5}"#),
+            Err(Refused("\"watch\" is \"wall\""))
+        );
+        assert_eq!(
+            request(r#"{"v":1,"watch":"wall","read":"wall"}"#),
+            Err(Refused(
+                "a request carries \"intent\", \"read\" or \"watch\", not two"
+            ))
+        );
+    }
+
     /// **A scene travels as a line and comes back as itself** (#202): one encoder, one decoder, and the identity in
     /// between — which is what lets a viewer on another machine draw the wall the authority owns.
     #[test]
