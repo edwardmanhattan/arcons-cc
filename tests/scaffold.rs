@@ -471,8 +471,21 @@ fn every_refusal_has_a_category() {
                 .collect::<Vec<_>>()
                 .join("\n");
             let mut rest = code.as_str();
-            while let Some(at) = rest.find("Refused(\"") {
-                rest = &rest[at + 9..];
+            // **A call site may wrap.** `Refused(` and its message are one expression however rustfmt
+            // breaks it, so the scan skips the whitespace between them — a tripwire that only reads
+            // one-line calls goes quiet exactly where a refusal is long enough to be wrapped, and a
+            // message it never sees is a message it will call stale (#198, found by #224's corpus).
+            while let Some(at) = rest.find("Refused(") {
+                let qualified = rest[..at].ends_with("::");
+                rest = &rest[at + "Refused(".len()..];
+                if qualified {
+                    // `Failure::Refused(why)` is the CLI's own exit reason, not a message the wall sends.
+                    continue;
+                }
+                let Some(after) = rest.trim_start().strip_prefix('"') else {
+                    continue;
+                };
+                rest = after;
                 let mut message = String::new();
                 let mut chars = rest.chars();
                 while let Some(c) = chars.next() {

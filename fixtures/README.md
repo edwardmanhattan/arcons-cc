@@ -34,7 +34,7 @@ steps on the frame clock through `control::apply` — the same door the pointer 
 Curated, not recorded: an intent script is input (like `scripts/`), not wire data. What it must never become is a
 second description of the wall — the twin's golden is what decides whether it is right.
 
-## `control/` — the geometry a client mirrors (#220)
+## `control/` — the geometry and the exchanges a client mirrors (#220, #224)
 
 Not input, and not wire data: a **contract recording**. `control/tiling/` holds one JSON file per tiling,
 written by `cargo run -- --record` from the wall's own functions (`Layout::cells`, `ui::view::panes_on`,
@@ -84,6 +84,29 @@ Two rules for this directory:
 2. **A case is a wall.** Every tiling is built through the gestures (`Layout::split_with`, `Layout::set_ratio`),
    and a test refuses a case whose cells do not cover its viewport, overlap, leave a pane below
    `MIN_PANE_PT`, or carry a split outside the ratio range.
+
+### `control/session.jsonl` — what the wall answers (#224)
+
+`session.jsonl` is **the wire, recorded**: one JSON object per line,
+`{"send": {…}, "expect": {…}}`. `send` is the request as a client sends it (a JSON string instead of an
+object is a line that is deliberately not JSON), and `expect` is the wall's answer line **verbatim** — kept
+as `RawValue` so a float cannot move by one unit in the last place on the way to the file. Every verb in
+`docs/control.md` is sent at least once, every rule and malformed field a client can provoke is exercised,
+and the file opens with the projection (`read: "wall"`) before a change and reads it again after one.
+
+It is written by `cargo run -- --record`, which builds a wall from `fixtures/intents/control-corpus.json`
+(so no deployment's pane names reach the tree) and drives it through the **wall's own session loop** over a
+`Loopback` carrier — the door the unix socket uses (#195) — never by hand. `tests/control_corpus.rs` replays
+it through the same loop and fails when the file is stale, when a verb has no exchange, or when a refusal a
+client can provoke has no example. `scripts/conformance.sh fixtures/control/session.jsonl` is the same
+replay outside the gate, for a client in another language.
+
+Two rules for this file:
+
+1. **Re-record, never edit.** `cargo run -- --record` writes it from the wall; an edit that makes a test pass
+   is a client and a wall agreeing about nothing.
+2. **No timed exchange.** A `watch` stream (#221) is a race, not a fixture: a coalesced publish is covered
+   by Rust tests, where a thread can be held at the moment it happens, and never by a file a machine compares.
 
 ## `rest/` — recorded 2026-11-06
 

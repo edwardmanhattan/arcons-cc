@@ -40,6 +40,10 @@ use crate::ui::{self, MenuAction, PaneContent, RenameTarget, State, ViewId};
 #[cfg_attr(not(unix), allow(dead_code))]
 pub mod authority;
 pub mod carrier;
+// **The exchange corpus** (#224) is recorded through the session loop, which is a unix socket's reader
+// (`server`). A Windows build has the vocabulary and no plane, so it has no corpus either.
+#[cfg(unix)]
+pub mod corpus;
 pub mod projection;
 pub mod snapshot;
 pub mod tiling;
@@ -383,6 +387,10 @@ pub const REFUSALS: &[(&str, RefusalKind)] = &[
     ("\"camera\" is {lat, lon, zoom}", RefusalKind::Input),
     ("\"content\" needs a \"kind\"", RefusalKind::Input),
     (
+        "\"content\" is {kind: \"map\" | \"newsroom\" | \"tree\"}",
+        RefusalKind::Input,
+    ),
+    (
         "\"edge\" is left, right, top, bottom or centre",
         RefusalKind::Input,
     ),
@@ -404,6 +412,10 @@ pub const REFUSALS: &[(&str, RefusalKind)] = &[
     ),
     ("\"unit\" is a hull id or null", RefusalKind::Input),
     ("\"zoom\" is a number or null", RefusalKind::Input),
+    (
+        "a request carries \"intent\" or \"read\", not both",
+        RefusalKind::Input,
+    ),
     (
         "a request carries \"intent\" or \"read\"",
         RefusalKind::Input,

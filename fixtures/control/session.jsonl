@@ -1,0 +1,82 @@
+{"send":{"read":"wall","v":1},"expect":{"ok":true,"v":1,"wall":{"active":0,"focused":3,"maximised":null,"workspaces":[{"empty":false,"focused":3,"name":"Workspace 1","panes":[{"camera":{"lat":-6.108,"lon":106.91,"zoom":11.0},"focused":false,"id":1,"kind":"map","selected":null,"title":"pane-01"},{"camera":{"lat":-6.108,"lon":106.91,"zoom":11.0},"focused":false,"id":2,"kind":"map","selected":null,"title":"pane-02"},{"camera":null,"focused":true,"id":3,"kind":"newsroom","selected":null,"title":"pane-03"}],"tiling":{"a":{"pane":1},"b":{"a":{"pane":2},"b":{"pane":3},"ratio":0.5,"split":"stack"},"ratio":0.5,"split":"side"}},{"empty":true,"focused":null,"name":"Workspace 2","panes":[],"tiling":null},{"empty":true,"focused":null,"name":"Workspace 3","panes":[],"tiling":null},{"empty":false,"focused":4,"name":"Workspace 4","panes":[{"camera":{"lat":-6.108,"lon":106.91,"zoom":11.0},"focused":false,"id":4,"kind":"map","selected":null,"title":"pane-04"}],"tiling":{"pane":4}}]}}}
+{"send":{"intent":{"pane":2,"verb":"pane.focus"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"read":"wall","v":1},"expect":{"ok":true,"v":1,"wall":{"active":0,"focused":2,"maximised":null,"workspaces":[{"empty":false,"focused":2,"name":"Workspace 1","panes":[{"camera":{"lat":-6.108,"lon":106.91,"zoom":11.0},"focused":false,"id":1,"kind":"map","selected":null,"title":"pane-01"},{"camera":{"lat":-6.108,"lon":106.91,"zoom":11.0},"focused":true,"id":2,"kind":"map","selected":null,"title":"pane-02"},{"camera":null,"focused":false,"id":3,"kind":"newsroom","selected":null,"title":"pane-03"}],"tiling":{"a":{"pane":1},"b":{"a":{"pane":2},"b":{"pane":3},"ratio":0.5,"split":"stack"},"ratio":0.5,"split":"side"}},{"empty":true,"focused":null,"name":"Workspace 2","panes":[],"tiling":null},{"empty":true,"focused":null,"name":"Workspace 3","panes":[],"tiling":null},{"empty":false,"focused":4,"name":"Workspace 4","panes":[{"camera":{"lat":-6.108,"lon":106.91,"zoom":11.0},"focused":false,"id":4,"kind":"map","selected":null,"title":"pane-04"}],"tiling":{"pane":4}}]}}}
+{"send":{"intent":{"pane":2,"verb":"pane.full_size"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"pane":2,"verb":"pane.full_size"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"target":{"pane":1},"verb":"rename.begin"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"name":"Straits watch","target":{"pane":1},"verb":"rename.set"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"name":"Straits watch","target":{"workspace":0},"verb":"rename.set"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"name":null,"target":{"workspace":0},"verb":"rename.set"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"verb":"surface.close"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"content":{"kind":"map"},"pane":1,"verb":"pane.split"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"content":{"kind":"tree","organisation":null},"pane":5,"verb":"pane.split"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"content":{"kind":"map"},"verb":"pane.open"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"at":[100.0,100.0],"pane":1,"verb":"pane.split_at"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"the pane has no frame yet"}}
+{"send":{"intent":{"pane":3,"unit":999999,"verb":"object.follow"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"the pane draws no map"}}
+{"send":{"intent":{"pane":1,"unit":999999,"verb":"object.follow"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"the hull has not reported"}}
+{"send":{"intent":{"pane":1,"unit":512345,"verb":"pane.select"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"pane":1,"unit":null,"verb":"pane.select"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"camera":{"lat":-6.108,"lon":106.91,"zoom":11},"pane":1,"verb":"map.camera"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"pane":1,"verb":"workspace.from_pane"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"verb":"workspace.new"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"verb":"pane.close_others"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"no pane has the keys"}}
+{"send":{"intent":{"pane":4,"verb":"pane.move","workspace":4},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"pane":4,"verb":"pane.move","workspace":4},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"the pane is already in that workspace"}}
+{"send":{"intent":{"index":0,"verb":"workspace.focus"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"other":3,"pane":1,"ratio":0.58,"verb":"pane.resize"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"those panes are not neighbours"}}
+{"send":{"intent":{"other":2,"pane":1,"ratio":2.0,"verb":"pane.resize"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"ratio\" is a share from 0.05 to 0.95"}}
+{"send":{"intent":{"other":9,"pane":1,"ratio":0.58,"verb":"pane.resize"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"no such pane"}}
+{"send":{"intent":{"other":3,"pane":2,"ratio":0.58,"verb":"pane.resize"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"edge":"top","onto":1,"pane":1,"verb":"pane.drop"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"the pane cannot be swapped with itself"}}
+{"send":{"intent":{"edge":"top","onto":4,"pane":1,"verb":"pane.drop"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"the tiling refused the pane"}}
+{"send":{"intent":{"edge":"top","onto":1,"pane":2,"verb":"pane.drop"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"verb":"cursor.press"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"the cursor has not been placed"}}
+{"send":{"intent":{"at":[420.0,180.0],"verb":"cursor.move"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"verb":"cursor.release"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"the cursor is not pressed"}}
+{"send":{"intent":{"verb":"cursor.press"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"verb":"cursor.release"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"verb":"surface.settings"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"verb":"surface.close"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"row":1,"verb":"menu.focus"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"no menu is open"}}
+{"send":{"intent":{"open":true,"verb":"menu.submenu"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"no menu is open"}}
+{"send":{"intent":{"verb":"menu.choose"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"no menu is open"}}
+{"send":{"intent":{"pane":7,"verb":"pane.close"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"pane":99,"verb":"pane.close"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"no such pane"}}
+{"send":{"intent":{"pane":2,"verb":"pane.focus"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"verb":"pane.close_others"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"verb":"workspace.close_others"},"v":1},"expect":{"changed":true,"ok":true,"v":1}}
+{"send":{"intent":{"pane":2,"verb":"pane.close"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"the last pane on the wall"}}
+{"send":{"read":"wall","v":1},"expect":{"ok":true,"v":1,"wall":{"active":0,"focused":2,"maximised":null,"workspaces":[{"empty":false,"focused":2,"name":"Workspace 1","panes":[{"camera":{"lat":-6.108,"lon":106.91,"zoom":11.0},"focused":true,"id":2,"kind":"map","selected":null,"title":"pane-02"}],"tiling":{"pane":2}}]}}}
+{"send":{"intent":{"pane":99,"verb":"pane.focus"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"no such pane"}}
+{"send":{"intent":{"index":9,"verb":"workspace.focus"},"v":1},"expect":{"kind":"rule","ok":false,"v":1,"why":"no such workspace"}}
+{"send":{"intent":{"pane":"two","verb":"pane.focus"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"an id is a non-negative integer"}}
+{"send":{"intent":{"verb":"pane.focus"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"pane\" is a pane id"}}
+{"send":{"intent":{"pane":1,"verb":"pane.split"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"content\" is {kind: \"map\" | \"newsroom\" | \"tree\"}"}}
+{"send":{"intent":{"content":{},"pane":1,"verb":"pane.split"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"content\" needs a \"kind\""}}
+{"send":{"intent":{"content":{"kind":"hologram"},"pane":1,"verb":"pane.split"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"unknown pane kind"}}
+{"send":{"intent":{"content":{"kind":"tree","organisation":"navy"},"pane":1,"verb":"pane.split"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"organisation\" is a structure id or null"}}
+{"send":{"intent":{"target":{},"verb":"rename.begin"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"target\" is {\"pane\": n} or {\"workspace\": n}"}}
+{"send":{"intent":{"name":5,"target":{"pane":1},"verb":"rename.set"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"name\" is a string or null"}}
+{"send":{"intent":{"at":"middle","pane":1,"verb":"pane.split_at"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"at\" is [x, y] in the pane's frame"}}
+{"send":{"intent":{"onto":2,"pane":1,"verb":"pane.drop"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"edge\" is left, right, top, bottom or centre"}}
+{"send":{"intent":{"edge":"top","pane":1,"verb":"pane.drop"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"onto\" is a pane id"}}
+{"send":{"intent":{"edge":"north","onto":2,"pane":1,"verb":"pane.drop"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"edge\" is left, right, top, bottom or centre"}}
+{"send":{"intent":{"pane":1,"ratio":0.5,"verb":"pane.resize"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"other\" is a pane id"}}
+{"send":{"intent":{"other":2,"pane":1,"ratio":"half","verb":"pane.resize"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"ratio\" is a share from 0.05 to 0.95"}}
+{"send":{"intent":{"open":"yes","verb":"menu.submenu"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"open\" is true or false"}}
+{"send":{"intent":{"row":"two","verb":"menu.focus"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"row\" is a row index or null"}}
+{"send":{"intent":{"pane":1,"unit":"seven","verb":"pane.select"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"unit\" is a hull id or null"}}
+{"send":{"intent":{"pane":1,"unit":1,"verb":"object.follow","zoom":"far"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"zoom\" is a number or null"}}
+{"send":{"intent":{"at":[7.0],"verb":"cursor.move"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"at\" is [x, y] in the picture panel's points"}}
+{"send":{"intent":{"at":[1.0,2.0],"origin":5,"verb":"cursor.move"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"origin\" is a client name"}}
+{"send":{"intent":{"camera":5,"pane":1,"verb":"map.camera"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"\"camera\" is {lat, lon, zoom}"}}
+{"send":{"intent":{"pane":1,"verb":"pane.focus"},"v":99},"expect":{"kind":"version","ok":false,"v":1,"why":"unsupported protocol version"}}
+{"send":{},"expect":{"kind":"input","ok":false,"v":1,"why":"a request carries \"v\""}}
+{"send":{"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"a request carries \"intent\" or \"read\""}}
+{"send":{"intent":{"pane":1,"verb":"pane.focus"},"read":"wall","v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"a request carries \"intent\" or \"read\", not both"}}
+{"send":{"read":"fleet","v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"unknown read"}}
+{"send":{"intent":5,"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"an intent is a JSON object"}}
+{"send":{"intent":{},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"an intent has no verb"}}
+{"send":{"intent":{"pane":1,"verb":"pane.teleport"},"v":1},"expect":{"kind":"input","ok":false,"v":1,"why":"unknown verb"}}
+{"send":[],"expect":{"kind":"input","ok":false,"v":1,"why":"a request is a JSON object"}}
+{"send":"not json","expect":{"kind":"input","ok":false,"v":1,"why":"not JSON"}}

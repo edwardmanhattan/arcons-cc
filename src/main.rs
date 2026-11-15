@@ -46,6 +46,69 @@ fn probe_map(_camera: arcons_cc::map::geometry::Camera, out: PathBuf) -> ExitCod
     }
 }
 
+/// **`--record`'s tiling half** (#220): one file per case, from the wall's own functions, so a client in
+/// another language reads numbers instead of guessing them.
+fn record_tiling() -> bool {
+    let dir = arcons_cc::control::tiling::directory();
+    match arcons_cc::control::tiling::record(&dir) {
+        Ok(written) => {
+            for path in written {
+                println!("recorded {}", path.display());
+            }
+            true
+        }
+        Err(error) => {
+            eprintln!("arcons-cc: {error}");
+            false
+        }
+    }
+}
+
+/// **`--record`'s corpus half** (#224): the exchange stream, from the wall's own session loop.
+#[cfg(unix)]
+fn record_corpus() -> bool {
+    let dir = arcons_cc::control::corpus::directory();
+    match arcons_cc::control::corpus::record(&dir) {
+        Ok(path) => {
+            println!("recorded {}", path.display());
+            true
+        }
+        Err(error) => {
+            eprintln!("arcons-cc: {error}");
+            false
+        }
+    }
+}
+
+/// **`--conformance FILE`** (#224): replay a corpus through this wall and print what it answered. The first
+/// answer that differs from the file is the failure, with the line and both lines' JSON, because a corpus
+/// that has gone stale is a client reading a contract the wall no longer keeps.
+#[cfg(unix)]
+fn conformance(path: &std::path::Path) -> ExitCode {
+    match arcons_cc::control::corpus::replay(path) {
+        Ok(answered) => {
+            for (number, (exchange, answer)) in answered.iter().enumerate() {
+                println!(
+                    "ok    {:>3}  {}\n            {}",
+                    number + 1,
+                    arcons_cc::control::corpus::line_of(&exchange.send),
+                    answer
+                );
+            }
+            println!(
+                "{}: {} exchanges answered as recorded",
+                path.display(),
+                answered.len()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("arcons-cc: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// `--self-check`: run every check, print one line each, and exit with the first failure's code.
 /// `--assert`: pixels with numbers and a non-zero exit. `scripts/assert.sh` is a wrapper for it.
 fn assert_capture(args: &config::Args) -> ExitCode {
@@ -204,23 +267,30 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        // **The tiling's geometry, recorded** (#220). One file per case, from the wall's own functions,
-        // so a client in another language reads numbers instead of guessing them.
+        // **The control plane's contract, recorded** (#220, #224). One file per tiling case and one
+        // exchange stream, from the wall's own functions and its own session loop, so a client in another
+        // language reads numbers and answers instead of guessing them.
         config::Command::Record => {
-            let dir = arcons_cc::control::tiling::directory();
-            match arcons_cc::control::tiling::record(&dir) {
-                Ok(written) => {
-                    for path in written {
-                        println!("recorded {}", path.display());
-                    }
-                    ExitCode::SUCCESS
-                }
-                Err(error) => {
-                    eprintln!("arcons-cc: {error}");
-                    ExitCode::FAILURE
-                }
+            let tiling = record_tiling();
+            #[cfg(unix)]
+            let corpus = record_corpus();
+            #[cfg(not(unix))]
+            let corpus = true;
+            if tiling && corpus {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
             }
         }
+        // **A corpus, replayed outside the gate** (#224): the same file the phone's CI reads, answered by
+        // this wall through the same session loop the socket serves.
+        #[cfg(not(unix))]
+        config::Command::Conformance(_) => {
+            eprintln!("arcons-cc: the control plane is a unix socket, and this platform has none");
+            ExitCode::from(2)
+        }
+        #[cfg(unix)]
+        config::Command::Conformance(path) => conformance(&path),
         config::Command::Assert => assert_capture(&args),
         config::Command::Compare => compare_captures(&args),
         config::Command::ProbeMap => probe_map(
