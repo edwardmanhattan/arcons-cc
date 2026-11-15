@@ -10,7 +10,8 @@ records is the **state of the ground**: what the epic (#162) actually delivered,
 and what is still open. The mobile client's own epic is
 [#193](https://github.com/edwardmanhattan/arcons-cc/issues/193).
 
-The note is [issue #168](https://github.com/edwardmanhattan/arcons-cc/issues/168).
+The note is [issue #168](https://github.com/edwardmanhattan/arcons-cc/issues/168). **The screen is the next note**:
+[`mobile-ui.md`](mobile-ui.md) says what the phone draws, and what it refuses to draw (#225).
 
 ## What the wall already answers
 
