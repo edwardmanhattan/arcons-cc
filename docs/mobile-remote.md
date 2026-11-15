@@ -50,6 +50,13 @@ a cursor to catch up is a client that can fall behind, and a phone has nothing t
 What the phone shows when it cannot read: **"not connected"**. Never a labelled picture of a wall it last saw — a
 stale projection with a confident label is the failure mode this rule exists to forbid.
 
+**These rules are a command, not a hope** (#197). `src/control/client.rs` is one client over a `Carrier` (#195): it
+reads before it acts, a connection that comes back knows nothing, and a refusal is mapped from its `kind` rather than
+from its sentence. `cargo test control::client` drives all four over the wall's own session loop — read/act/read, a
+drop that sends nothing it queued, a wall changed by another client and read rather than corrected, and a version the
+wall does not speak, which is a stop and an update rather than a retry. A phone in another room and a loopback pair
+in this process hold the same client to the same rules; that is what makes "a client is a client" a test.
+
 ### 2. The wall dials out; a phone never dials the wall
 
 `ADR-0005` rejected a TCP listener on the wall, and this note does not reopen it. The wall keeps its unix socket (0600

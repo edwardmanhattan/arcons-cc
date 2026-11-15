@@ -139,9 +139,10 @@ impl Session {
                             // **A refusal is an answer, not a broken line** (`INV-07`): the wall said no by name, the
                             // session says so and carries on. A viewer whose session ended on the first refused press
                             // would be a screen that stops working the first time somebody asks for something
-                            // impossible. (Showing it is #198's `kind` and the next ticket; today it is a log line.)
-                            Err(why) => {
-                                tracing::warn!("authority: {why}");
+                            // impossible. The words are the wall's; the kind (#198) is what a client branches on, and
+                            // the line prints both.
+                            Err(unreadable) => {
+                                tracing::warn!("authority: {unreadable}");
                             }
                         },
                         // End of file, or a broken carrier: the viewer is on its own until something reconnects.
