@@ -31,7 +31,7 @@ list on purpose — see *what a client may read*):
 | the wall holds | where | a client that wants it |
 | --- | --- | --- |
 | the workspaces, their names, which is active | `State::workspaces`, `State::active` | `#166`'s close-all, `#168`'s projection |
-| each pane's kind, id, tiling position | `Workspace::panes`, `Layout` | `pane.focus`, `pane.move`, `pane.close` |
+| each pane's kind, id, tiling position | `Workspace::panes`, `Layout` | `pane.focus`, `pane.move`, `pane.close`, `pane.drop`, `pane.resize` (#219) |
 | each pane's camera and zoom | `Pane::camera`, the map thread | `map.camera`, `map.zoom` |
 | which pane is focused, which is full size | `State::focused`, `maximised` | `pane.focus`, `pane.toggle_full_size` |
 | what one surface is open over the wall | `State::interaction` | `surface.close`, the cursor vocabulary |

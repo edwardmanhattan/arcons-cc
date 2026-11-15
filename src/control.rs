@@ -75,6 +75,102 @@ pub const SOCKET_MODE: u32 = 0o600;
 /// The refusal a `ClosePane` earns on the wall's last pane (#141's predicate, named once).
 pub const LAST_PANE: &str = "the last pane on the wall";
 
+/// The refusal a drop earns when both names are the same pane (#219): a swap with itself is a rule, not a
+/// tiling that failed — the pointer cannot ask for it (`Layout::drop_for` answers `None` over the pane it is
+/// dragging), and a client that says it meant it gets the rule's name.
+pub const SELF_DROP: &str = "the pane cannot be swapped with itself";
+
+/// The refusal a resize earns when no border separates the two panes (#219): a border names both of its sides,
+/// so a pair with no border between them has no ratio to set.
+pub const NOT_NEIGHBOURS: &str = "those panes are not neighbours";
+
+/// The refusal an unknown edge earns (#219): the five words, spelled out, because a client's mistake is a word
+/// and telling it "bad edge" would leave it guessing which.
+pub const EDGE_WORDS: &str = "\"edge\" is left, right, top, bottom or centre";
+/// The refusal a ratio outside [`crate::config::layout::RATIO_RANGE`] earns (#219): **the range, in the words**.
+/// `config::layout::RATIO_RANGE` is the number and a test keeps the two from drifting apart — a refusal that said
+/// "out of range" would leave a client guessing an end it could have been told.
+pub const RATIO_WORDS: &str = "\"ratio\" is a share from 0.05 to 0.95";
+
+/// **Which slot of a pane a drop names** (#219): an edge splits the target and puts the dropped pane on that
+/// side, and `Centre` swaps the two.
+///
+/// It is the pointer's `view::Drop` with the geometry taken out — a client that has read the wall's `tiling`
+/// knows which panes are where and which one is beside which, and a phone has no frame to measure a point
+/// against. So the settled result of a drag is said in panes and edges, and [`Edge::drop_on`] is the one place
+/// that turns it back into the drop the pointer's release applies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Edge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    /// The one edge that is not an edge: the two panes trade places.
+    Centre,
+}
+
+/// Every edge, so a table over them is exhaustive rather than representative — the rule `RefusalKind::of_word`
+/// keeps, for the same reason: a word this wall does not use is `None`, never a default (`INV-07`).
+pub const EDGES: &[Edge] = &[
+    Edge::Left,
+    Edge::Right,
+    Edge::Top,
+    Edge::Bottom,
+    Edge::Centre,
+];
+
+impl Edge {
+    /// The word on the wire and in `docs/control.md`.
+    pub fn word(self) -> &'static str {
+        match self {
+            Edge::Left => "left",
+            Edge::Right => "right",
+            Edge::Top => "top",
+            Edge::Bottom => "bottom",
+            Edge::Centre => "centre",
+        }
+    }
+
+    /// The edge a word names, or `None` for a word this wall does not use (`INV-07`: no default).
+    pub fn of_word(word: &str) -> Option<Edge> {
+        EDGES.iter().copied().find(|edge| edge.word() == word)
+    }
+
+    /// **The drop this edge is**, in the shape `Layout::drop_for` answers with.
+    ///
+    /// One function, so a client's preview (`Layout::preview`, from the `tiling` it read) and the wall's landing
+    /// are the same drop and therefore the same layout — two ways of computing "where it lands" is exactly the
+    /// bug this intent exists to make unrepresentable (#219).
+    pub fn drop_on(self, pane: ViewId, onto: ViewId) -> crate::ui::view::Drop {
+        use crate::ui::view::{Drop, Side};
+        match self {
+            // The same pair `drop_for` builds when the pointer is over the middle of the target: the dropped pane
+            // is `b`, which is `Drop::dragged`'s answer.
+            Edge::Centre => Drop::Swap { a: onto, b: pane },
+            Edge::Left => Drop::Retile {
+                dragged: pane,
+                target: onto,
+                side: Side::Left,
+            },
+            Edge::Right => Drop::Retile {
+                dragged: pane,
+                target: onto,
+                side: Side::Right,
+            },
+            Edge::Top => Drop::Retile {
+                dragged: pane,
+                target: onto,
+                side: Side::Top,
+            },
+            Edge::Bottom => Drop::Retile {
+                dragged: pane,
+                target: onto,
+                side: Side::Bottom,
+            },
+        }
+    }
+}
+
 /// **One settled change**, asked for by a hand or a socket.
 ///
 /// Every variant is a value a caller can produce without knowing anything about the wall's internals — which is
@@ -106,6 +202,26 @@ pub enum Intent {
     SplitToWorkspace(ViewId),
     /// Carry this pane into another workspace, threads and all (#140).
     MovePane { pane: ViewId, workspace: usize },
+    /// **Land this pane in that pane's slot** (#219): the settled result of a drag, said in panes and edges
+    /// instead of in a point a client cannot see. `edge` is a side — the target splits and this pane takes it
+    /// (`view::Drop::Retile`) — or `centre`, which swaps the two (`view::Drop::Swap`).
+    ///
+    /// Exactly `Layout::apply` through `State::apply_drop`, the call the pointer's release makes, so the preview
+    /// a client draws and the wall's landing are one function. Both panes are in the **active** workspace: a
+    /// crossing is `pane.move` and then this, two settled changes.
+    Drop {
+        pane: ViewId,
+        onto: ViewId,
+        edge: Edge,
+    },
+    /// **Move the gutter between two neighbours** (#219): the settled result of a border drag. The pair names the
+    /// border (`Layout::borders`), and `ratio` is the share its first side takes — the number `tiling` and
+    /// `layout.toml` already carry — clamped to [`crate::config::layout::RATIO_RANGE`].
+    Resize {
+        pane: ViewId,
+        other: ViewId,
+        ratio: f32,
+    },
     /// **Close every pane in the active workspace but the focused one** (#166). Never a workspace the client
     /// cannot see: a wall-wide reset is a weapon.
     CloseOtherPanes,
@@ -179,6 +295,8 @@ impl Intent {
             Intent::SplitAt { .. } => "pane.split_at",
             Intent::SplitToWorkspace(_) => "workspace.from_pane",
             Intent::MovePane { .. } => "pane.move",
+            Intent::Drop { .. } => "pane.drop",
+            Intent::Resize { .. } => "pane.resize",
             Intent::CloseOtherPanes => "pane.close_others",
             Intent::CloseOtherWorkspaces => "workspace.close_others",
             Intent::OpenPane(_) => "pane.open",
@@ -264,19 +382,26 @@ pub const REFUSALS: &[(&str, RefusalKind)] = &[
     ),
     ("\"camera\" is {lat, lon, zoom}", RefusalKind::Input),
     ("\"content\" needs a \"kind\"", RefusalKind::Input),
+    (
+        "\"edge\" is left, right, top, bottom or centre",
+        RefusalKind::Input,
+    ),
     ("\"name\" is a string or null", RefusalKind::Input),
+    ("\"onto\" is a pane id", RefusalKind::Input),
     ("\"open\" is true or false", RefusalKind::Input),
     (
         "\"organisation\" is a structure id or null",
         RefusalKind::Input,
     ),
+    ("\"origin\" is a client name", RefusalKind::Input),
+    ("\"other\" is a pane id", RefusalKind::Input),
     ("\"pane\" is a pane id", RefusalKind::Input),
+    ("\"ratio\" is a share from 0.05 to 0.95", RefusalKind::Input),
     ("\"row\" is a row index or null", RefusalKind::Input),
     (
         "\"target\" is {\"pane\": n} or {\"workspace\": n}",
         RefusalKind::Input,
     ),
-    ("\"origin\" is a client name", RefusalKind::Input),
     ("\"unit\" is a hull id or null", RefusalKind::Input),
     ("\"zoom\" is a number or null", RefusalKind::Input),
     (
@@ -299,6 +424,7 @@ pub const REFUSALS: &[(&str, RefusalKind)] = &[
     ("the cursor is not pressed", RefusalKind::Rule),
     ("the hull has not reported", RefusalKind::Rule),
     ("the last pane on the wall", RefusalKind::Rule),
+    ("the pane cannot be swapped with itself", RefusalKind::Rule),
     ("the pane draws no map", RefusalKind::Rule),
     ("the pane has no frame yet", RefusalKind::Rule),
     ("the pane is already in that workspace", RefusalKind::Rule),
@@ -307,6 +433,7 @@ pub const REFUSALS: &[(&str, RefusalKind)] = &[
     ("the tiling refused the pane", RefusalKind::Rule),
     ("the wall did not answer", RefusalKind::Busy),
     ("the wall has stopped", RefusalKind::Busy),
+    ("those panes are not neighbours", RefusalKind::Rule),
     ("unknown pane kind", RefusalKind::Input),
     ("unknown read", RefusalKind::Input),
     ("unknown verb", RefusalKind::Input),
@@ -443,6 +570,51 @@ pub fn apply(state: &mut State, intent: Intent) -> Result<Changed, Refused> {
             closed > 0
         }
         Intent::CloseOtherWorkspaces => state.close_workspaces_but_active() > 0,
+        Intent::Drop { pane, onto, edge } => {
+            if state.pane(pane).is_none() || state.pane(onto).is_none() {
+                return Err(Refused("no such pane"));
+            }
+            // **A drop on itself is a rule, not a tiling that failed** (#219): the pointer cannot make one —
+            // `drop_for` answers `None` over the pane it is dragging — so a client that says it meant it gets the
+            // rule's own name rather than `Layout::apply`'s `false`.
+            if pane == onto {
+                return Err(Refused(SELF_DROP));
+            }
+            // **The release's own call**: `Edge::drop_on` builds the `view::Drop` a pointer's release builds, and
+            // `State::apply_drop` is what that release calls, so the preview a client drew and this landing are
+            // one function. A second layout computed here is the bug this intent exists to prevent.
+            if !state.apply_drop(edge.drop_on(pane, onto)) {
+                // Both ids are on the wall and the tiling still said no: the two are in different workspaces, or
+                // the workspace on screen holds one pane. A crossing is `pane.move` and then a drop (#219).
+                return Err(Refused("the tiling refused the pane"));
+            }
+            true
+        }
+        Intent::Resize { pane, other, ratio } => {
+            if state.pane(pane).is_none() || state.pane(other).is_none() {
+                return Err(Refused("no such pane"));
+            }
+            // **The field's shape first** (#219): a share the tiling cannot hold is a call to fix, not a rule
+            // about panes, and the refusal names the range so a client is not left guessing it.
+            let (low, high) = crate::config::layout::RATIO_RANGE;
+            if !ratio.is_finite() || !(low..=high).contains(&ratio) {
+                return Err(Refused(RATIO_WORDS));
+            }
+            // **The pair names the border**, unordered: a border carries both of its sides because an id alone
+            // cannot say which of a pane's edges is meant (`Layout::set_ratio`). No border, no ratio to set.
+            let border = state.borders().into_iter().find(|border| {
+                (border.a == pane && border.b == other) || (border.a == other && border.b == pane)
+            });
+            let Some(border) = border else {
+                return Err(Refused(NOT_NEIGHBOURS));
+            };
+            // **The border drag's own call**, clamp and all: `State::set_ratio` is what a hand's release ends in,
+            // so the share a client asked for is the share the gutter lands on.
+            if !state.set_ratio(&border, ratio.clamp(low, high)) {
+                return Err(Refused("the tiling refused the pane"));
+            }
+            true
+        }
         Intent::OpenPane(content) => ui::open_pane_focused(state, content).is_some(),
         Intent::Follow { pane, unit, zoom } => {
             let Some(held) = state.pane(pane) else {
@@ -643,6 +815,16 @@ pub fn vocabulary() -> Vec<Intent> {
         Intent::MovePane {
             pane: 1,
             workspace: 2,
+        },
+        Intent::Drop {
+            pane: 1,
+            onto: 2,
+            edge: Edge::Top,
+        },
+        Intent::Resize {
+            pane: 1,
+            other: 2,
+            ratio: 0.58,
         },
         Intent::CloseOtherPanes,
         Intent::CloseOtherWorkspaces,
@@ -1337,5 +1519,460 @@ mod tests {
             verbs.len(),
             "the table test must build every variant once"
         );
+    }
+}
+
+/// **The two intents a drag settles into** (#219): `pane.drop` and `pane.resize`.
+///
+/// A drag is the pointer's — a pane in the air, a border being held — and the settled result of it is an intent, so
+/// these are the two verbs a client with no pointer can send. What makes them worth having as intents rather than as
+/// a second layout implementation is that they are the wall's **own** calls: `State::apply_drop` (`Layout::apply`)
+/// and `State::set_ratio`, the two a release and a border drag end in. The falsifier is a drop that computes its own
+/// rectangle: two landings for one gesture, and a preview drawn from `tiling` that disagrees with the wall.
+#[cfg(test)]
+mod pane_drop {
+    use super::*;
+
+    /// The shape `panes` draws, built the way the menu builds it: two panes side by side, the left one split
+    /// top/bottom — three panes, two borders, and one pair that is **not** neighbours (the right pane and the
+    /// bottom-left one share no border, which the nested split does not draw).
+    fn three_panes() -> (State, ViewId, ViewId, ViewId) {
+        let mut state = State::default();
+        let first = state.focused();
+        let camera = state.camera_of(first);
+        let second = state
+            .split_pane_as(first, camera, PaneContent::Map)
+            .expect("a second pane");
+        let third = state
+            .split_pane_as(first, camera, PaneContent::Map)
+            .expect("a third pane");
+        (state, first, second, third)
+    }
+
+    fn rect(state: &State, id: ViewId) -> crate::ui::Rect {
+        state
+            .pane_rect(id)
+            .unwrap_or_else(|| panic!("pane {id} has a rectangle"))
+    }
+
+    fn shape(state: &State) -> Option<crate::ui::view::Shape> {
+        state.layout().and_then(crate::ui::Layout::shape)
+    }
+
+    /// Whether a landed pane is on `edge`'s side of the pane it was dropped on, and the word for the failure.
+    fn lands(
+        edge: Edge,
+        dropped: crate::ui::Rect,
+        target: crate::ui::Rect,
+    ) -> (bool, &'static str) {
+        match edge {
+            Edge::Left => (dropped.right() <= target.x, "left of"),
+            Edge::Right => (dropped.x >= target.right(), "right of"),
+            Edge::Top => (dropped.bottom() <= target.y, "above"),
+            Edge::Bottom => (dropped.y >= target.bottom(), "below"),
+            // A swap puts the pane where the target was, so it is "not on the target" in every direction.
+            Edge::Centre => (dropped == target, "on"),
+        }
+    }
+
+    /// **`centre` is a swap**: the two panes trade places and the tiling keeps its shape, because a swap moves the
+    /// panes and not the split.
+    #[test]
+    fn a_drop_on_the_centre_swaps_the_two_panes() {
+        let (mut state, first, second, _third) = three_panes();
+        let before = (rect(&state, first), rect(&state, second));
+        // The split's **line**, which a swap must not move: a swap carries the panes and leaves the tiling's shape
+        // alone, so the borders keep their direction, their place and their extent (only their two ids trade).
+        let borders_before: Vec<_> = state
+            .borders()
+            .into_iter()
+            .map(|border| (border.dir, border.at, border.start, border.span))
+            .collect();
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::Drop {
+                    pane: first,
+                    onto: second,
+                    edge: Edge::Centre,
+                }
+            ),
+            Ok(Changed(true)),
+            "a swap is a change on screen"
+        );
+        assert_eq!(
+            rect(&state, first),
+            before.1,
+            "the dropped pane stands where the target stood"
+        );
+        assert_eq!(
+            rect(&state, second),
+            before.0,
+            "and the target stands where the dropped pane stood"
+        );
+        assert_eq!(
+            state
+                .borders()
+                .into_iter()
+                .map(|border| (border.dir, border.at, border.start, border.span))
+                .collect::<Vec<_>>(),
+            borders_before,
+            "a swap moves the panes, not the split: every border is where it was"
+        );
+    }
+
+    /// **Each of the four edges retiles the target on that side** (#219): the dropped pane takes the named edge's
+    /// half of the target's cell, and the two panes tile rather than overlap or leave a hole.
+    #[test]
+    fn every_edge_lands_the_pane_on_that_side_of_the_target() {
+        for (edge, holds) in [
+            (Edge::Left, "left of the target"),
+            (Edge::Right, "right of the target"),
+            (Edge::Top, "above the target"),
+            (Edge::Bottom, "below the target"),
+        ] {
+            let (mut state, first, second, _third) = three_panes();
+            assert_eq!(
+                apply(
+                    &mut state,
+                    Intent::Drop {
+                        pane: second,
+                        onto: first,
+                        edge,
+                    }
+                ),
+                Ok(Changed(true)),
+                "a drop on the {edge:?} edge is a change"
+            );
+            assert_eq!(state.pane_count(), 3, "a retile keeps every pane");
+            let dropped = rect(&state, second);
+            let target = rect(&state, first);
+            let (lands, why) = lands(edge, dropped, target);
+            assert!(
+                lands,
+                "{edge:?}: the dropped pane is at {dropped:?} and the target at {target:?}, so it does not land \
+                 {why} it ({holds}) — `Layout::apply` is the landing and the preview is drawn from it"
+            );
+            // **Half the target's cell each**, because a re-tile splits it rather than squeezing past it.
+            let share = match edge {
+                Edge::Left | Edge::Right => dropped.w / (dropped.w + target.w),
+                Edge::Top | Edge::Bottom => dropped.h / (dropped.h + target.h),
+                // The centre is a swap, tested on its own: no cell is split.
+                Edge::Centre => 0.5,
+            };
+            assert!(
+                (share - 0.5).abs() < 0.01,
+                "{edge:?}: the split put {share:.3} of the cell on the dropped pane's side, and a fresh split is \
+                 half"
+            );
+        }
+    }
+
+    /// **The intent and the pointer land the pane in the same place** — the claim that makes a preview honest.
+    ///
+    /// The pointer's drop is asked of `Layout::drop_for` at a point in the target's edge band, exactly as a hand's
+    /// release asks it; the intent's drop is `Edge::drop_on`. If the two `view::Drop` values differ, or if the two
+    /// landings differ, this is red — and a drop intent that computed its own layout would fail here and nowhere
+    /// else the gate runs.
+    #[test]
+    fn the_intent_and_the_pointer_land_the_pane_in_the_same_place() {
+        let (mut stated, first, second, _third) = three_panes();
+        let target = rect(&stated, second);
+        let at = (target.x + target.w / 2.0, target.y + target.h * 0.1);
+        assert_eq!(
+            stated.drop_for(first, at),
+            Some(Edge::Top.drop_on(first, second)),
+            "a point in the target's top band is the top edge, and the edge's drop is the pointer's drop"
+        );
+
+        // And the swap, whose drop carries the pair in the order `drop_for` builds — asked of the wall **before**
+        // the drop above moved the target, because a point means something else once the tiling has changed.
+        let middle = (target.x + target.w / 2.0, target.y + target.h / 2.0);
+        assert_eq!(
+            stated.drop_for(first, middle),
+            Some(Edge::Centre.drop_on(first, second)),
+            "the middle of a pane is a swap, and the centre edge is the same swap"
+        );
+
+        // The pointer's landing: the drop `drop_for` answered, applied the way a release applies it.
+        let (mut statep, firstp, secondp, _thirdp) = three_panes();
+        let Some(pointer) = statep.drop_for(firstp, at) else {
+            panic!("the pointer has a drop at a point inside the target");
+        };
+        assert!(statep.apply_drop(pointer), "the release landed");
+        assert_eq!(
+            apply(
+                &mut stated,
+                Intent::Drop {
+                    pane: first,
+                    onto: second,
+                    edge: Edge::Top,
+                }
+            ),
+            Ok(Changed(true))
+        );
+        assert_eq!(
+            shape(&stated),
+            shape(&statep),
+            "the intent and the pointer produce different tilings for one gesture: the intent computes its own \
+             layout instead of calling `Layout::apply`"
+        );
+        for (landed, pointer_landed) in [(first, firstp), (second, secondp)] {
+            assert_eq!(
+                rect(&stated, landed),
+                rect(&statep, pointer_landed),
+                "pane {landed} landed somewhere else on the intent's path"
+            );
+        }
+    }
+
+    /// **A border drag is an intent too**: the pair names the border, in either order, and the share the border's
+    /// first side takes is the share the gutter lands on.
+    #[test]
+    fn a_resize_moves_the_gutter_the_pair_names() {
+        let (mut state, first, second, _third) = three_panes();
+        let panel = state.pane_viewport().w as f32;
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::Resize {
+                    pane: first,
+                    other: second,
+                    ratio: 0.58,
+                }
+            ),
+            Ok(Changed(true))
+        );
+        let split = rect(&state, second).x;
+        assert!(
+            (split - panel * 0.58).abs() < 0.5,
+            "the gutter is at {split:.1} of a {panel} pt panel, and the intent asked for 58%"
+        );
+        // **The pair names the border**, so the other order is the same request: a client that reads the tiling
+        // cannot know which of the two the border calls its first side.
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::Resize {
+                    pane: second,
+                    other: first,
+                    ratio: 0.42,
+                }
+            ),
+            Ok(Changed(true)),
+            "the same border, named the other way round"
+        );
+        let back = rect(&state, second).x;
+        assert!(
+            (back - panel * 0.42).abs() < 0.5,
+            "the pair is unordered — the border was found at {back:.1} of {panel} pt, and the ratio is the border's \
+             own first side"
+        );
+    }
+
+    /// **A drop on itself is a rule, not a tiling that failed** (#219): every edge, and the centre, says the rule's
+    /// name.
+    #[test]
+    fn a_drop_on_itself_is_refused_by_name() {
+        let (mut state, first, _second, _third) = three_panes();
+        for edge in EDGES {
+            assert_eq!(
+                apply(
+                    &mut state,
+                    Intent::Drop {
+                        pane: first,
+                        onto: first,
+                        edge: *edge,
+                    }
+                ),
+                Err(Refused("the pane cannot be swapped with itself")),
+                "{edge:?} on the pane itself is the rule, not a layout that refused"
+            );
+        }
+        assert_eq!(state.pane_count(), 3, "a refusal changes nothing");
+    }
+
+    /// **The tiling's own `false` is a refusal with a name** (#219): two panes that exist and cannot be landed on
+    /// each other — the workspace on screen holds one pane, or the target is in another workspace. A crossing is
+    /// `pane.move` and then a drop, two settled changes.
+    #[test]
+    fn a_drop_the_tiling_refuses_is_refused_by_name() {
+        // **The last pane**: the workspace on screen holds one, and the target is on another chip.
+        let mut state = State::default();
+        let lone = state.focused();
+        let camera = state.camera_of(lone);
+        let elsewhere = state
+            .split_pane_as(lone, camera, PaneContent::Map)
+            .expect("a second pane");
+        apply(
+            &mut state,
+            Intent::MovePane {
+                pane: elsewhere,
+                workspace: 1,
+            },
+        )
+        .expect("a pane in workspace 2");
+        apply(&mut state, Intent::FocusWorkspace(0)).expect("back to the wall with one pane");
+        assert_eq!(state.pane_count(), 1);
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::Drop {
+                    pane: lone,
+                    onto: elsewhere,
+                    edge: Edge::Right,
+                }
+            ),
+            Err(Refused("the tiling refused the pane")),
+            "a workspace's last pane has no cell to split"
+        );
+        assert_eq!(state.pane_count(), 1, "the refusal left the wall alone");
+    }
+
+    /// **Those panes are not neighbours**: no border separates them, so there is no ratio to set — and the wall is
+    /// where it was.
+    #[test]
+    fn a_resize_between_panes_with_no_border_is_refused_by_name() {
+        let (mut state, first, second, third) = three_panes();
+        // The right pane and the bottom-left one are both inside the nested split's `b`… in this shape they share no
+        // border: the left column's line is between `first` and `third`.
+        assert!(
+            state
+                .borders()
+                .iter()
+                .all(|border| !(border.a == second && border.b == third)),
+            "the fixture must not have a border between {second} and {third}"
+        );
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::Resize {
+                    pane: second,
+                    other: third,
+                    ratio: 0.5,
+                }
+            ),
+            Err(Refused("those panes are not neighbours"))
+        );
+        // A pane is not its own neighbour either.
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::Resize {
+                    pane: first,
+                    other: first,
+                    ratio: 0.5,
+                }
+            ),
+            Err(Refused("those panes are not neighbours"))
+        );
+        assert_eq!(state.pane_count(), 3);
+    }
+
+    /// **A share the tiling cannot hold is the field's shape**, and the refusal names the range so a client is not
+    /// left guessing it — the message and `config::layout::RATIO_RANGE` are one number.
+    #[test]
+    fn a_ratio_outside_the_range_is_refused_with_the_range_in_it() {
+        let (mut state, first, second, _third) = three_panes();
+        let (low, high) = crate::config::layout::RATIO_RANGE;
+        for ratio in [-0.5, 0.0, low - 0.01, high + 0.01, 1.0, 7.0, f32::NAN] {
+            assert_eq!(
+                apply(
+                    &mut state,
+                    Intent::Resize {
+                        pane: first,
+                        other: second,
+                        ratio,
+                    }
+                ),
+                Err(Refused("\"ratio\" is a share from 0.05 to 0.95")),
+                "{ratio} is not a share a split can take"
+            );
+        }
+        assert!(
+            RATIO_WORDS.contains(&format!("{low}")) && RATIO_WORDS.contains(&format!("{high}")),
+            "the refusal must say the range: {RATIO_WORDS:?} against RATIO_RANGE {low}..{high}"
+        );
+        assert_eq!(
+            refusal_kind(RATIO_WORDS),
+            Some(RefusalKind::Input),
+            "a share outside the range is a call to fix, not a rule about panes"
+        );
+        // The ends of the range are inside it.
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::Resize {
+                    pane: first,
+                    other: second,
+                    ratio: low,
+                }
+            ),
+            Ok(Changed(true))
+        );
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::Resize {
+                    pane: first,
+                    other: second,
+                    ratio: high,
+                }
+            ),
+            Ok(Changed(true))
+        );
+    }
+
+    /// Both verbs refuse a pane that is not on the wall with the name the rest of the vocabulary uses, and an edge
+    /// that is not one of the five is a mistake in the call rather than a rule (`INV-07`: no default).
+    #[test]
+    fn an_unknown_pane_and_an_unknown_edge_are_named() {
+        let (mut state, first, second, _third) = three_panes();
+        let ghost = 99;
+        assert!(state.pane(ghost).is_none());
+        for (pane, onto) in [(ghost, first), (first, ghost)] {
+            assert_eq!(
+                apply(
+                    &mut state,
+                    Intent::Drop {
+                        pane,
+                        onto,
+                        edge: Edge::Left,
+                    }
+                ),
+                Err(Refused("no such pane"))
+            );
+        }
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::Resize {
+                    pane: ghost,
+                    other: first,
+                    ratio: 0.5,
+                }
+            ),
+            Err(Refused("no such pane"))
+        );
+        assert_eq!(
+            apply(
+                &mut state,
+                Intent::Resize {
+                    pane: first,
+                    other: ghost,
+                    ratio: 0.5,
+                }
+            ),
+            Err(Refused("no such pane"))
+        );
+        // The words are the wire's, and a word this wall does not use is not an edge.
+        assert_eq!(Edge::of_word("north"), None, "INV-07: no default edge");
+        assert_eq!(Edge::of_word("centre"), Some(Edge::Centre));
+        assert_eq!(
+            refusal_kind(EDGE_WORDS),
+            Some(RefusalKind::Input),
+            "an unknown edge is a call to fix, not a rule to wait out"
+        );
+        let _ = second;
     }
 }

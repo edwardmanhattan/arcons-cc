@@ -403,6 +403,37 @@ fn the_remote_twin_s_golden_is_the_pointer_twin_s() {
     );
 }
 
+/// **A gesture and an intent are one picture** (#219).
+///
+/// `panes-drop` is a wall reached by a hand on a pane's handle — `fixtures/scripts/panes-drop.json` presses it and
+/// drags it to another pane's top edge — and `panes-drop-remote` is the same wall reached by one `pane.drop`, through
+/// `control::apply`. The two goldens are **one file**, byte for byte, and this test is what says so: without it a
+/// `--update-goldens` run on one of them would let a drop intent that computed its own layout carry its own golden,
+/// and the pair would prove nothing while both stayed green.
+///
+/// The capture is the stronger half of the claim because it is pixels: `Layout::apply` is what the release calls and
+/// what the intent calls, so a second layout anywhere in the path moves a hull in one picture and not the other.
+#[test]
+fn the_drop_twin_s_golden_is_the_pointer_twin_s() {
+    let pointer = root().join("fixtures/golden/panes-drop.png");
+    let remote = root().join("fixtures/golden/panes-drop-remote.png");
+    let pointer_bytes = std::fs::read(&pointer)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", pointer.display()));
+    let remote_bytes =
+        std::fs::read(&remote).unwrap_or_else(|e| panic!("cannot read {}: {e}", remote.display()));
+    assert_eq!(
+        pointer_bytes.len(),
+        remote_bytes.len(),
+        "fixtures/golden/panes-drop-remote.png must be fixtures/golden/panes-drop.png, and it is not: a dropped \
+         pane landed in one picture and not the other (#219)"
+    );
+    assert!(
+        pointer_bytes == remote_bytes,
+        "fixtures/golden/panes-drop-remote.png differs from panes-drop.png by some byte: a drop a hand makes and a \
+         drop a client asks for are one landing, and the golden is the claim (#219)"
+    );
+}
+
 /// **Every refusal the code can make has a category, and the table has no extras** (#198).
 ///
 /// The rule this enforces is `INV-07`'s at the newest layer: a refusal is a named rule, so it cannot arrive without

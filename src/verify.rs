@@ -2017,6 +2017,113 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                  {gap:.0} pt the setting asks for"
             ));
         }
+        // **A drop is one landing, whichever hand made it** (#219). The pointer scene's picture is asserted against
+        // the **intent** scene's state, exactly as `panes-pan` is asserted against `panes`: `state_for` does not
+        // replay a script, so the wall `fixtures/scripts/panes-drop.json` must reach is the wall `pane.drop` reaches.
+        // A drag that missed the handle leaves the three panes in their old slots — a column and two rows — and
+        // every hull below lands outside the pane this says it is in.
+        "panes-drop" | "panes-drop-remote" => {
+            let Some((origin_x, origin_y, panel_w, panel_h)) =
+                image.find_panel_rect(ink(tokens::panel()))
+            else {
+                failures.push(format!("{scene}: no picture panel on screen"));
+                return Err(failures);
+            };
+            let state = scene::state_for("panes-drop-remote");
+            let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
+            let rects = crate::ui::view::panes_on(
+                state.layout().expect("the scene has a tiling"),
+                viewport,
+                state.settings.pane_gap,
+            );
+            if rects.len() != scene::PANES.len() {
+                failures.push(format!(
+                    "{scene}: {} rectangles for {} panes — a drop moves panes and mints none",
+                    rects.len(),
+                    scene::PANES.len()
+                ));
+                return Err(failures);
+            }
+            // **The panes are bands**: a drop on the target's top edge stacks the three, so each is the panel's
+            // whole width and the heights add up to it. This half is the tiling's own claim, read from the state the
+            // intent twin reaches; the drop's **pixel** claim is the markers below, which the wall the drag never
+            // moved draws in its old slots.
+            let ragged: Vec<String> = rects
+                .iter()
+                .filter(|(_, rect)| (f64::from(rect.w) - panel_w).abs() > 1.0)
+                .map(|(id, rect)| format!("pane {id} at {:.0} pt", rect.w))
+                .collect();
+            let stacked: f64 = rects.iter().map(|(_, rect)| f64::from(rect.h)).sum();
+            if !ragged.is_empty() || (stacked - panel_h).abs() > 1.0 {
+                failures.push(format!(
+                    "{scene}: the panes are {ragged:?} wide in a {panel_w:.0} pt panel and {stacked:.0} pt tall \
+                     in {panel_h:.0} — a drop on the target's top edge stacks them, and this wall is not stacked"
+                ));
+            } else {
+                lines.push(format!(
+                    "{scene}: three panes stacked, {} pt of a {panel_h:.0} pt panel",
+                    rects
+                        .iter()
+                        .map(|(_, rect)| format!("{:.0}", rect.h))
+                        .collect::<Vec<_>>()
+                        .join(" · ")
+                ));
+            }
+            // **Each hull in its own pane** (`INV-04`, per pane): the rectangles come from the same `panes_on` the
+            // view lays the panes out with, so a pane drawing another's camera is tens of pixels out at these zooms.
+            for (index, (id_unit, _zoom)) in scene::PANES.iter().enumerate() {
+                let (id, rect) = rects[index];
+                let Some(pane) = state.pane(id) else {
+                    failures.push(format!("{scene}: pane {id} has no state"));
+                    continue;
+                };
+                let frame = crate::ui::view::synthetic_frame(pane.camera, rect, 1.0);
+                let Some(fix) = scene::fixture().ok().and_then(|entries| {
+                    entries
+                        .into_iter()
+                        .find(|entry| entry.id_unit == *id_unit)
+                        .and_then(|entry| entry.position)
+                }) else {
+                    failures.push(format!("{scene}: hull {id_unit} has no fix"));
+                    continue;
+                };
+                let (px, py) = frame.project(fix.latitude, fix.longitude);
+                let (x, y) = (
+                    origin_x + f64::from(rect.x) + px,
+                    origin_y + f64::from(rect.y) + py,
+                );
+                // A stale hull draws in the dim ink (`INV-03`), so the marker is there in one of the two.
+                let Some((centre, count)) = image
+                    .blob_centre(x, y, accent, 8)
+                    .or_else(|| image.blob_centre(x, y, dim, 8))
+                else {
+                    failures.push(format!(
+                        "{scene}: no marker ink at ({x:.0}, {y:.0}) — the pane the drop gave its slot is not \
+                         where this hull's own projection puts it"
+                    ));
+                    continue;
+                };
+                if count < 8 {
+                    failures.push(format!(
+                        "{scene}: {count} px of marker ink at ({x:.0}, {y:.0}) — too little to be a hull"
+                    ));
+                    continue;
+                }
+                let distance = ((centre.0 - x).powi(2) + (centre.1 - y).powi(2)).sqrt();
+                if distance > TOLERANCE_PX {
+                    failures.push(format!(
+                        "{scene}: pane {index}'s hull {id_unit} is {distance:.1} px from where its own pane's \
+                         projection puts it ({x:.0}, {y:.0}) — a marker drawn against another pane's frame lands \
+                         here (INV-04)"
+                    ));
+                } else {
+                    lines.push(format!(
+                        "{scene}: pane {} ({id_unit}) marker {distance:.1} px from ({x:.0}, {y:.0})",
+                        index
+                    ));
+                }
+            }
+        }
         "panes" | "panes-pan" | "panes-gap-resize" => {
             // **Each pane projects against its own frame** (`INV-04`, per pane). The rectangles come from
             // `Layout::rects` measured against the panel this capture actually has, so this check and the
@@ -4069,6 +4176,11 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     match scene {
         "panes" | "panes-chrome" | "panes-drag" | "panes-pan" | "panes-gaps"
         | "panes-gap-resize" | "panes-named" | "panes-max" | "panes-range"
+        // **A pane dropped on another pane's edge** (#219): the twin is here and not `panes-drop`, because a script's
+        // gesture is not replayed by `state_for` — the pointer scene's state is the wall *before* the drag, and its
+        // claim is the golden. The intent twin's state is the tab's picture, so every pane in the new tiling is asked
+        // for its own markers: a drop that left a pane in a slot it no longer holds draws nothing there.
+        | "panes-drop-remote"
         // The workspaces scene is this wall with two more (empty) workspaces behind it, and the switch
         // scene is the same wall before its click: both are two panes with a marker per reported hull.
         | "workspaces" | "workspaces-switch" => {
