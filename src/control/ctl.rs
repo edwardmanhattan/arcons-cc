@@ -165,6 +165,7 @@ pub fn parse(words: &[String]) -> Result<Intent, Failure> {
                 .map_err(Failure::Usage)?,
         },
         "pane.close_others" => Intent::CloseOtherPanes,
+        "pane.close_all" => Intent::CloseAllPanes,
         "workspace.close_others" => Intent::CloseOtherWorkspaces,
         "pane.open" => Intent::OpenPane(
             super::wire::content_from_words(rest.first().map(String::as_str))
@@ -410,6 +411,8 @@ arcons-cc ctl <noun> <verb> [args]
   pane split <id> [kind]     a new pane beside it: map (default), tree, newsroom
   pane open <kind>           the same, beside the focused pane
   pane close_others          close every pane in this workspace but the one with the keys
+  pane close_all             close every pane in this workspace, leaving it empty on the
+                             chips (`No panes yet.`). The wall's last pane is refused
   workspace close_others     close every workspace but the one on screen
   pane move <id> <index>     carry a pane into another workspace
   pane drop <id> <onto> <edge>
@@ -471,6 +474,7 @@ mod tests {
             "pane split 2 newsroom",
             "pane open tree",
             "pane close_others",
+            "pane close_all",
             "workspace close_others",
             "pane move 2 1",
             "pane drop 2 1 top",

@@ -21,7 +21,7 @@ the last one is deliberate:
 | the phone does | what it uses | today |
 | --- | --- | --- |
 | shows the wall's shape — workspaces, panes, which is on screen, which has the keys | `{"v": 1, "read": "wall"}` (#181) | **yes** |
-| switches workspace, picks a pane, closes one, closes all but one | `workspace.focus`, `pane.focus`, `pane.close`, `pane.close_others`, `workspace.close_others` | yes |
+| switches workspace, picks a pane, closes one, closes all but one, empties a workspace | `workspace.focus`, `pane.focus`, `pane.close`, `pane.close_others`, `pane.close_all` (#241), `workspace.close_others` | yes |
 | zooms, moves a camera, locks onto a hull | `map.camera`, `object.follow` (#169) | yes |
 | opens the chain of command, the newsroom, settings; makes a pane | `pane.open`, `surface.settings`, `pane.split` | yes |
 | lands a pane where another one is, and moves the gutter between two | `pane.drop`, `pane.resize` (#219) | yes |

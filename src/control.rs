@@ -246,6 +246,17 @@ pub enum Intent {
     /// **Close every pane in the active workspace but the focused one** (#166). Never a workspace the client
     /// cannot see: a wall-wide reset is a weapon.
     CloseOtherPanes,
+    /// **Close every pane in the active workspace, and leave it empty on the chips** (#241). The one refusal is
+    /// #141's: a workspace that holds every pane the wall has cannot be emptied, because the wall always keeps one
+    /// pane — the request is refused **whole** (`the last pane on the wall`), never half-applied.
+    ///
+    /// It is not `CloseOtherPanes` said twice: that verb keeps the pane with the keys and the workspace it is in, and
+    /// this one gives up both. A client that could not tell them apart could not say which reset it asked for, and an
+    /// **empty workspace** is a state the operator may ask for deliberately — it is drawn (`No panes yet.`) and it is
+    /// on the projection (`empty: true`, #141), which is what lets a phone say "empty this one" in one request
+    /// instead of N closes it computed from a projection another client may have changed under it
+    /// (`docs/mobile-remote.md` decision 1).
+    CloseAllPanes,
     /// **Close every workspace but the one on screen** (#166). The active workspace is never closed and never
     /// emptied, and every dropped pane joins its map thread.
     CloseOtherWorkspaces,
@@ -336,6 +347,7 @@ impl Intent {
             Intent::Drop { .. } => "pane.drop",
             Intent::Resize { .. } => "pane.resize",
             Intent::CloseOtherPanes => "pane.close_others",
+            Intent::CloseAllPanes => "pane.close_all",
             Intent::CloseOtherWorkspaces => "workspace.close_others",
             Intent::OpenPane(_) => "pane.open",
             Intent::Follow { .. } => "object.follow",
@@ -681,6 +693,17 @@ pub fn apply_by(
             };
             closed > 0
         }
+        Intent::CloseAllPanes => {
+            // **The wall's last pane is the one thing no intent may take** (#141), and the refusal is the request's:
+            // `State::close_all_panes` asks the rule before the first pane goes, so a `None` here is a settled no and
+            // not a wall with two panes missing. The words are `LAST_PANE` — the wall's rule — because the rule is
+            // about the wall, never about this workspace.
+            let Some(closed) = state.close_all_panes() else {
+                return Err(Refused(LAST_PANE));
+            };
+            // An empty workspace is already what the client asked for, so nothing closed is not a change.
+            closed > 0
+        }
         Intent::CloseOtherWorkspaces => state.close_workspaces_but_active() > 0,
         Intent::Drop { pane, onto, edge } => {
             if state.pane(pane).is_none() || state.pane(onto).is_none() {
@@ -945,6 +968,7 @@ pub fn vocabulary() -> Vec<Intent> {
             ratio: 0.58,
         },
         Intent::CloseOtherPanes,
+        Intent::CloseAllPanes,
         Intent::CloseOtherWorkspaces,
         Intent::OpenPane(PaneContent::Newsroom),
         Intent::Follow {
@@ -2106,5 +2130,210 @@ mod pane_drop {
             "an unknown edge is a call to fix, not a rule to wait out"
         );
         let _ = second;
+    }
+}
+
+/// **`pane.close_all`** (#241): the verb that empties the workspace on screen, and the one thing it may not take —
+/// the wall's last pane.
+///
+/// The decision is written in `docs/control.md`: an **empty workspace is a state an operator may ask for** (#141
+/// already draws it — `No panes yet.`, `empty: true` on the projection), so that a phone or a `ctl` script does not
+/// have to send N closes it computed from a projection another client may have changed under it
+/// (`docs/mobile-remote.md` decision 1). What no intent may do is leave the **wall** with nothing, so the verb's only
+/// refusal is `LAST_PANE`, and it refuses the request **whole** — an intent is a settled change, and three panes
+/// half-closed is a wall nobody asked for.
+///
+/// The two verbs are not two spellings of one: `pane.close_others` keeps the pane with the keys and the workspace it
+/// is in (#166); `pane.close_all` gives up both. A client that cannot tell them apart cannot say which reset it
+/// wants.
+#[cfg(test)]
+mod close_all {
+    use super::*;
+
+    /// Every pane on the wall, whatever workspace holds it — `State::pane_count` is the workspace on screen's count,
+    /// and this verb is about the difference between the two.
+    fn wall_panes(state: &State) -> usize {
+        state.workspaces.iter().map(|w| w.panes.len()).sum()
+    }
+
+    /// **A wall with panes in two workspaces**: workspace 1 holds `first` and `second`, workspace 2 holds `third`,
+    /// and workspace 1 is on screen with the keys on `second`. The shape `close_all` has to leave something behind.
+    fn two_workspaces() -> (State, ViewId, ViewId, ViewId) {
+        let mut state = State::default();
+        let first = state.focused();
+        let camera = state.camera_of(first);
+        let second = state
+            .split_pane_as(first, camera, PaneContent::Map)
+            .expect("a second pane");
+        let third = state
+            .split_pane_as(first, camera, PaneContent::Map)
+            .expect("a third pane");
+        // The move the menu's waterfall sends, which takes the wall with it.
+        assert!(
+            crate::ui::move_pane_to(&mut state, third, 1),
+            "the third pane lands in workspace 2"
+        );
+        assert!(state.switch_to(0), "back to workspace 1");
+        state.focus_pane(second);
+        assert_eq!(wall_panes(&state), 3);
+        assert_eq!(state.pane_count(), 2, "workspace 1 holds two of them");
+        (state, first, second, third)
+    }
+
+    /// **Every pane in the workspace on screen goes, and the wall keeps every pane that is not in it** (#241). The
+    /// workspace is left **empty and on the chips** (#141): `No panes yet.` where the water was, and the wall lands on
+    /// the nearest previous workspace that still has a pane, focused on the pane it remembers.
+    #[test]
+    fn close_all_empties_the_workspace_on_screen_and_keeps_its_chip() {
+        let (mut state, first, second, third) = two_workspaces();
+        assert_eq!(
+            apply(&mut state, Intent::CloseAllPanes),
+            Ok(Applied::Changed(Changed(true))),
+            "the wall changed on screen"
+        );
+        assert_eq!(wall_panes(&state), 1, "every pane but the wall's last");
+        assert!(
+            state.pane(third).is_some(),
+            "the pane on the other workspace is the wall's last, and it is not this workspace's to close"
+        );
+        assert!(
+            state.pane(first).is_none() && state.pane(second).is_none(),
+            "the workspace on screen held them, so they went — the one with the keys included"
+        );
+        assert_eq!(
+            state.active, 1,
+            "#141's landing: the nearest previous workspace with a pane"
+        );
+        assert_eq!(
+            state.focused(),
+            third,
+            "and its remembered pane has the keys"
+        );
+        assert_eq!(
+            state.workspaces.len(),
+            3,
+            "an emptied workspace keeps its chip (#141), so nothing was removed"
+        );
+        assert!(
+            state.workspaces[0].layout.is_none() && state.workspaces[0].panes.is_empty(),
+            "the workspace on screen is empty, which is a state the wall already draws"
+        );
+        assert_eq!(
+            state.workspaces[0].name, "Workspace 1",
+            "and it keeps its name"
+        );
+    }
+
+    /// **The wall's last pane is refused, and the refusal names the wall** (the ticket's falsifier): a request that
+    /// would leave nothing behind it is refused by #141's rule, not by a sentence about this workspace and not
+    /// half-applied.
+    #[test]
+    fn close_all_is_refused_whole_by_the_walls_rule() {
+        // Three panes, every one of them in the workspace on screen: closing all of them is closing the wall.
+        let mut state = State::default();
+        let first = state.focused();
+        let camera = state.camera_of(first);
+        state
+            .split_pane_as(first, camera, PaneContent::Map)
+            .expect("a second pane");
+        state
+            .split_pane_as(first, camera, PaneContent::Map)
+            .expect("a third pane");
+        assert_eq!(state.pane_count(), 3);
+        assert_eq!(
+            apply(&mut state, Intent::CloseAllPanes),
+            Err(Refused(LAST_PANE)),
+            "the rule is `LAST_PANE` — the wall's name, not a rule about the workspace"
+        );
+        assert_eq!(
+            LAST_PANE, "the last pane on the wall",
+            "and the words a client reads say which pane cannot go"
+        );
+        assert_eq!(
+            wall_panes(&state),
+            3,
+            "a refusal is a settled no: an intent is not half-applied"
+        );
+    }
+
+    /// A wall of one pane refuses with the same name: `close_all` is not a way round #141.
+    #[test]
+    fn a_wall_of_one_pane_refuses_close_all_by_name() {
+        let mut state = State::default();
+        let only = state.focused();
+        assert_eq!(state.pane_count(), 1);
+        assert_eq!(
+            apply(&mut state, Intent::CloseAllPanes),
+            Err(Refused(LAST_PANE))
+        );
+        assert!(state.pane(only).is_some(), "the refusal changed nothing");
+    }
+
+    /// **An empty workspace is already the answer**: nothing to close is `changed: false`, not a refusal and not a
+    /// second name for "there is nothing here" (#241). The client asked for a state the wall is in.
+    #[test]
+    fn an_empty_workspace_is_already_what_was_asked_for() {
+        let (mut state, _first, _second, _third) = two_workspaces();
+        let index = state.add_workspace();
+        assert_eq!(state.active, index, "a new workspace is on screen");
+        assert!(state.workspaces[index].panes.is_empty());
+        assert_eq!(
+            apply(&mut state, Intent::CloseAllPanes),
+            Ok(Applied::Changed(Changed(false))),
+            "the workspace on screen holds no pane, so no pixel moved"
+        );
+        assert_eq!(state.active, index, "and the wall stayed where it was");
+    }
+
+    /// **The two verbs are not two spellings of one** (#241): `close_others` keeps the pane with the keys and the
+    /// workspace it is in (#166); `close_all` gives up both. A client that cannot tell them apart cannot say which
+    /// reset it asked for.
+    #[test]
+    fn close_others_keeps_a_pane_and_close_all_does_not() {
+        let (mut state, first, second, _third) = two_workspaces();
+        assert_eq!(
+            apply(&mut state, Intent::CloseOtherPanes),
+            Ok(Applied::Changed(Changed(true)))
+        );
+        assert_eq!(
+            state.active, 0,
+            "`Close others` leaves the workspace on screen"
+        );
+        assert!(state.pane(second).is_some(), "and the pane with the keys");
+        assert!(state.pane(first).is_none());
+        assert_eq!(
+            wall_panes(&state),
+            2,
+            "the pane with the keys is still one of them"
+        );
+
+        let (mut state, first, second, third) = two_workspaces();
+        assert_eq!(
+            apply(&mut state, Intent::CloseAllPanes),
+            Ok(Applied::Changed(Changed(true)))
+        );
+        assert_ne!(
+            state.active, 0,
+            "`Close all` empties the workspace on screen"
+        );
+        assert!(
+            state.pane(first).is_none() && state.pane(second).is_none(),
+            "the pane with the keys goes too"
+        );
+        assert!(state.pane(third).is_some());
+    }
+
+    /// The verb is on the wire under `docs/control.md`'s name, and a round trip through the codec is the identity —
+    /// the rule the rest of the vocabulary keeps (#165).
+    #[test]
+    fn close_all_is_a_verb_a_client_can_send() {
+        assert_eq!(Intent::CloseAllPanes.verb(), "pane.close_all");
+        let wire = wire::to_wire(&Intent::CloseAllPanes);
+        assert_eq!(
+            wire,
+            serde_json::json!({ "verb": "pane.close_all" }),
+            "no fields: the workspace on screen is the one every client already knows it is in"
+        );
+        assert_eq!(wire::from_wire(&wire), Ok(Intent::CloseAllPanes));
     }
 }

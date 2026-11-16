@@ -263,6 +263,7 @@ discover it from a refusal.
 | `cursor.move` | a cursor lives in the **picture panel's** points. The phone draws a diagram, not the picture, so it has no space to put a point in |
 | `cursor.press` | a press means something where it lands — a hull, a pane's water — and this screen draws neither. The phone's press names a **pane**, which is a value, not a point |
 | `cursor.release` | the same, and a cursor with no press has nothing to release |
+| `pane.close_all` | the wall's pane menu offers `Close all panes` where it changes more than the rows beside it (#241), and this screen does not: a **clear** on a diagram is one press from a workspace with nothing where the operator's panes were, and a reset is asked for deliberately. The verb exists on the wire for a client that means it |
 
 The plane has more verbs than this screen uses — `pane.close`, `pane.open`, `pane.split`, `pane.move`,
 `workspace.new`, `pane.close_others`, `workspace.close_others`, `menu.focus`, `menu.submenu`, `menu.choose`,

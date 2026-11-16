@@ -87,6 +87,7 @@ field marked **required** is a refusal when it is missing.
 | `pane.drop` | `pane`, `onto`, `edge` | **lands `pane` in `onto`'s slot** (#219): a side (`left`, `right`, `top`, `bottom`) re-tiles the target and the pane takes that half, `centre` swaps the two. Exactly the drop a pointer's release makes — `Layout::apply` through `State::apply_drop` — so the preview a client draws from the `tiling` it read is the wall's landing. `no such pane`, `the pane cannot be swapped with itself`, `the tiling refused the pane` (the two are in different workspaces, or the workspace on screen holds one pane), `"edge" is left, right, top, bottom or centre` |
 | `pane.resize` | `pane`, `other`, `ratio` | **moves the gutter between two neighbours to `ratio`** (#219) — the share the border's first side takes, the number `tiling` and `layout.toml` already carry — clamped to the tiling's range. The pair names the border, in either order. `no such pane`, `those panes are not neighbours` (no border separates them), `"ratio" is a share from 0.05 to 0.95` |
 | `pane.close_others` | — | closes every pane in the **workspace on screen** but the one with the keys (#166), one at a time through the close a menu row uses. Never a workspace the client cannot see. `no pane has the keys` (an empty workspace) |
+| `pane.close_all` | — | **empties the workspace on screen** (#241): every pane in it goes, one at a time through the close a menu row uses, each map thread joined, and the workspace stays on the chips drawing `No panes yet.` (#141). **`the last pane on the wall`** is its only refusal: where the workspace holds every pane the wall has, the request would take that one and is refused **whole** rather than half-applied; a workspace that is already empty is `changed: false` |
 | `workspace.close_others` | — | closes every workspace but the one on screen (#166): the chips go, their panes go with them and join their map threads, and **the active workspace is never closed and never emptied** |
 | `pane.open` | `content` | a pane of that kind beside the focused one — the header's tree and newsroom controls (#116, #136), asking their first reads |
 | `object.follow` | `pane`, `unit`, `zoom` | **locks that pane's camera onto a hull** (#169): every frame the camera centres the hull's current fix, at `zoom` if one is given (once — the pane keeps it afterwards). `unit: null` lets go. `no such pane`, `the pane draws no map`, `the hull has not reported` (no fix is not a fix at zero, `INV-01`) |
@@ -105,6 +106,38 @@ field marked **required** is a refusal when it is missing.
 | `pair.forget` | `name` | **revokes a device**: its row goes. A name that is not there changes nothing — a revocation is a deletion, not a rule to refuse |
 | `surface.settings` | — | opens the settings sheet (#82) |
 | `surface.close` | — | dismisses **one** surface, in the ladder Escape walks: the waterfall, then the menu, then the interaction, then the maximised pane, then the newsroom's detail, then the selection (#140) |
+
+### Closing: one pane, the others, or all of them (#241, #166)
+
+Three verbs about panes going, and what makes them three is **what survives**: `pane.close` leaves every pane but the
+one asked for; `pane.close_others` (#166) leaves the pane with the keys and the workspace on screen; `pane.close_all`
+(#241) leaves the workspace on the chips and **nothing in it** — `No panes yet.` where the water was, which is a state
+the wall has drawn since #141 and a field a client reads (`workspaces[].empty`).
+
+**Having the third one was a decision, not an obvious verb** (#241). A "close everything" control on a wall is a
+weapon, and the reason `workspace.close_others` exists at all is that a full reset must be *asked for*. The answer taken
+is that the verb exists, because the alternative is worse in exactly the place a client lives: a phone or a `ctl`
+script that cannot say "empty this workspace" must send N closes it computed from a projection, and by the third one the
+N panes it named may be N-1 — the failure `docs/mobile-remote.md` decision 1 forbids remembering its way out of. One
+request that says what the client wants, and a wall that decides what it can give, is the shape every other verb here
+has.
+
+The cost of it is paid on the wall's glass, where a menu row is: **`Close all panes` is drawn only where it would
+differ from the rows beside it** — the workspace on screen holds at least two panes, and a pane elsewhere on the wall
+means the pane with the keys goes too. Where the workspace holds one pane, `Close pane` already empties it; where it
+holds every pane the wall has, this verb is refused by #141's rule, so the row would be a press that does nothing. The
+menu's own rule is #81's — a row that does nothing is a row the operator learns to distrust — and #241's cost adds the
+second clause: two rows that differ by one pane is a question nobody can answer from a menu. So the row is drawn only
+where the difference is **which panes are gone**. A client with a socket is not held to the row's predicate: it may
+send the verb whenever its last read says there is a pane somewhere else.
+
+**What it refuses, exactly**: the wall's last pane, and nothing else. An empty workspace is `changed: false`, because
+the client asked for a state the wall is already in; a request that would empty the wall is refused **whole**, with the
+rule's own name, because an intent is a settled change and not a prefix of one.
+
+**The phone's overview does not draw it** (#225, `docs/mobile-ui.md`): a *clear* on a diagram is one press from a
+workspace with nothing where the operator's panes were, and the wall's own menu is where a reset is asked for
+deliberately. The verb is on the wire for a client that means it; that screen does not put it under a thumb.
 
 ### Field shapes
 
