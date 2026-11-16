@@ -10,8 +10,8 @@ description = "Arcons Command Center — the live maritime picture on a wall"
 # UI. Pinned by rev, because `dev` moves: bump it in a commit that says which rev and why.
 # `rune` on crates.io is the scripting language, not this one — the git dependency wins, but
 # never drop the `git =` key or the wrong crate resolves.
-rune = { git = "https://github.com/anomalyco/rune", rev = "82196923fcb43d493353455edab0113cb4493c38" }
-rune-kit = { git = "https://github.com/anomalyco/rune", rev = "82196923fcb43d493353455edab0113cb4493c38" }
+rune = { git = "https://github.com/anomalyco/rune", rev = "4af66a06b554ba6a489e971eb88b03af1161f448" }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "4af66a06b554ba6a489e971eb88b03af1161f448" }
 
 # The map engine. Its default build clones ~2 GB of C++ and builds it, so the `map` feature is off in
 # the gate: `scripts/verify.sh` must run with no network and no C++ toolchain. `cargo test map::`
@@ -64,4 +64,10 @@ default = []
 map = ["dep:maplibre_native", "dep:rusqlite"]
 
 [patch.crates-io]
+# Two crates Rune patches in *its* workspace and a consumer does not inherit: cargo applies patches from
+# the workspace root alone. macOS needs `winit` (#791's input-method extensions); Windows needs
+# `wgpu-hal` (DX12 partial presents). `vendor/README.md` says what each patch does and when to drop it;
+# `scripts/vendor-patches.sh` re-makes both from the rev pinned above (#185).
+winit = { path = "vendor/winit" }
+wgpu-hal = { path = "vendor/wgpu-hal" }
 tokio-centrifuge = { path = "vendor/tokio-centrifuge" }
