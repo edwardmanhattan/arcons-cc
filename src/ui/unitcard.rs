@@ -3,16 +3,42 @@
 //! Everything about *what* it says and *where* it goes is in [`crate::units::card`], which is pure and
 //! tested. This file turns that into elements, and follows the rule the rest of the UI keeps: every
 //! colour and size comes from [`crate::ui::tokens`].
+//!
+//! The card is a display with exactly **one** control (#240): `Follow` / `Stop following`, because locking a
+//! pane's camera onto a hull was a verb only a remote could send — a reading nobody at the glass could act on,
+//! in the one place the hull is already named.
 
 use std::time::Instant;
 
 use rune::{El, col, el, row, spacer, text};
 
+use crate::control::{self, Intent};
+use crate::ui::ViewId;
 use crate::ui::tokens;
 use crate::units::card::{Card, Placement, WIDTH};
 
+/// **The card's one control** (#240, #169): lock this pane's camera onto the hull the card is about.
+pub const FOLLOW: &str = "Follow";
+/// And the same control while the pane is locked on: `object.follow` with `unit: null` is the release, which is why
+/// letting go of a hull is a verb and not a gesture only a pointer can make.
+pub const STOP_FOLLOWING: &str = "Stop following";
+
+/// **Whether the card offers its control, and to whom** (#240): the pane the press is about, and whether that pane
+/// is already locked onto this hull (#169).
+///
+/// `None` is a pane that draws no map — a tree's post has a card, and `object.follow` on it is refused by name
+/// (`the pane draws no map`). A control that says "no" every time is not a control, so the row is not drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Follow {
+    pub pane: ViewId,
+    pub following: bool,
+}
+
 /// The card, placed at `placement` in the picture's own points.
-pub fn card(card: &Card, placement: Placement, now: Instant) -> El {
+///
+/// `follow` is the card's one control: `Follow` on a pane that is not locked onto the hull, `Stop following` on one
+/// that is, and either way the press is the control plane's `object.follow` — the same verb a phone sends.
+pub fn card(card: &Card, placement: Placement, now: Instant, follow: Option<Follow>) -> El {
     let mut body = col()
         .key("card")
         .absolute(placement.x as f32, placement.y as f32)
@@ -25,7 +51,8 @@ pub fn card(card: &Card, placement: Placement, now: Instant) -> El {
         .radius(tokens::PANEL_RADIUS)
         .border(tokens::CARD_BORDER, tokens::card_edge())
         .fill(tokens::panel())
-        // A card is a display. A press on it must not clear the selection behind it.
+        // A card is mostly a display. A press on it must not clear the selection behind it; the one control
+        // inside it is a child and takes its own press (#240).
         .on_press(|_state: &mut crate::ui::State| {});
 
     body = body.child(
@@ -57,6 +84,43 @@ pub fn card(card: &Card, placement: Placement, now: Instant) -> El {
                 .key(format!("card-badge-{badge}"))
                 .font(tokens::LABEL)
                 .color(tokens::ink_dim()),
+        );
+    }
+
+    // **The card's one control** (#240): a hull can be followed from the glass. The row is the press, like every
+    // other control on this wall, and the verb is `object.follow` through the control plane — so the card, the
+    // menu and a phone's `object.follow` are one sentence. It sits above the readings because a control an
+    // operator has to hunt for under an age and a commander line is a control that is not there.
+    if let Some(Follow { pane, following }) = follow {
+        let (label, unit) = if following {
+            (STOP_FOLLOWING, None)
+        } else {
+            (FOLLOW, Some(card.unit.id_unit))
+        };
+        body = body.child(
+            row()
+                .key("card-follow")
+                .w_full()
+                .gap(tokens::GAP)
+                .items_center()
+                .child(
+                    text(label)
+                        .key("card-follow-label")
+                        .font(tokens::LABEL)
+                        .color(tokens::accent())
+                        .grow(1.0),
+                )
+                .on_press(move |state: &mut crate::ui::State| {
+                    control::apply(
+                        state,
+                        Intent::Follow {
+                            pane,
+                            unit,
+                            zoom: None,
+                        },
+                    )
+                    .ok();
+                }),
         );
     }
 

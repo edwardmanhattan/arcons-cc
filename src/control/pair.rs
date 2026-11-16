@@ -283,20 +283,38 @@ mod tests {
         );
     }
 
-    /// **Forgetting is deleting the row** — by name, and only that row.
+    /// **Forgetting is deleting the row** — by name, and **only** the row it names (#194, #240): a `Forget` on the
+    /// wall is one phone's row pressed beside its neighbour's, so a revocation that took the list would revoke the
+    /// phone the operator was keeping.
     #[test]
     fn forgetting_a_device_removes_its_row() {
         let (mut state, digits) = opened();
         super::claim(&mut state, &digits, "phone").expect("the first pairing");
+        // A second phone, with its own code: the row that must survive the press on the first.
+        apply(&mut state, Intent::PairBegin).expect("a fresh code");
+        let next = state.pairing().expect("a code").digits();
+        super::claim(&mut state, &next, "tablet").expect("the second pairing");
+        assert_eq!(state.devices.names(), vec!["phone", "tablet"]);
+
         assert_eq!(super::forget(&mut state, "phone"), Changed(true));
         assert!(
             !state.devices.has("phone"),
             "a forgotten device is a row that is gone"
         );
         assert_eq!(
+            state.devices.names(),
+            vec!["tablet"],
+            "and its neighbour is not: a revocation names one device (#240)"
+        );
+        assert_eq!(
             super::forget(&mut state, "phone"),
             Changed(false),
             "forgetting nothing is a no-op, not a refusal"
+        );
+        assert_eq!(
+            state.devices.names(),
+            vec!["tablet"],
+            "and forgetting it twice removes nothing else"
         );
     }
 
