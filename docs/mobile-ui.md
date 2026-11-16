@@ -67,9 +67,9 @@ The active workspace's name is the **title of the screen**, as it is the title o
 the switch. Naming one is the wall's sheet; the phone shows the name and does not edit it.
 
 **The glyph and the word are one rule, and the word is the load-bearing half.** A glyph nobody can name is a button
-nobody presses (#111): the canvas draws the kind in words, and the glyph is the platform's own icon set rather than
-a path drawn for this screen — the phone's UI is native (#223), so Rune's catalogue is not what it draws from, and a
-symbol invented here would be a picture nobody else can name. A tree pane says what the wall's own header control
+nobody presses (#111): the canvas draws the kind in words, and the glyph is the framework's own icon set rather than
+a path drawn for this screen — the phone's UI is not Rune and not the wall's ([`ADR-0008`](adr/0008-the-phones-framework.md)),
+so Rune's catalogue is not what it draws from, and a symbol invented here would be a picture nobody else can name. A tree pane says what the wall's own header control
 says (`chain of command`, `src/ui/mod.rs`), because two words for one kind is how a reader learns to distrust both.
 
 **A maximised pane is marked, not expanded.** `ADR-0004` is the rule: a maximised pane is *layout*, not an
@@ -300,11 +300,15 @@ Two rules under the table:
   a pane another client closed is `no such pane`. The phone's answer to that is a re-read, and the canvas then shows
   the arrangement the other client made.
 
-## Accessibility, which is why the UI is native
+## Accessibility, and why the UI is not in Rust
 
 A drag is not a reachable control. No screen reader can long-press a card and hover it over another card's edge
 band; no switch control can hold a gutter halfway. So the drag is a **shortcut**, and the screen has a path that is
 made of words:
+
+**Every control here is drawn, so every control carries its own semantics node** (`ADR-0008` decision 2): the
+framework renders the chips, the cards and the rings, and it will describe none of them unless this screen says so.
+The path below is therefore not a fallback for a screen reader — it is the same walk that draws the canvas, spoken.
 
 **Move to…** — on any card, a list of places, and then the same intent the hand sends:
 
@@ -403,8 +407,9 @@ client that could not tell them apart would retry the wrong one for ever.
 
 A pane's `camera` is in the projection, and this screen does not draw it: a latitude and longitude on a diagram
 would be a map's subject on a card, and a camera is a value a map client sends, not a fact about an arrangement.
-The same for `panes[].title`'s ellipsis: the phone cuts a long title the way it cuts any label, with its own
-platform's ellipsis, because the wall's drawn `…` is a rasteriser's answer and not a value on the wire.
+The same for `panes[].title`'s ellipsis: the phone cuts a long title the way it cuts any label, with the
+framework's ellipsis (Flutter's, `ADR-0008`), because the wall's drawn `…` is a rasteriser's answer and not a value
+on the wire.
 
 ## What this note leaves open, deliberately
 
