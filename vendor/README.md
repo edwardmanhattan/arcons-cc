@@ -67,3 +67,28 @@ correct on Windows.
 Nothing else about Windows is patched: the probe in CI (`map (windows-latest)`, manual dispatch only)
 records what the build script does with that core, and `docs/research/portability.md` says why the wall does
 not draw on Windows yet.
+
+## `winit` — Rune's copy, because a dependency's patch cannot reach us (#185)
+
+Copied from Rune's own `vendor/winit` at the rev `Cargo.toml` pins (`4af66a06`): winit 0.30.13 as published, plus
+Rune's `vendor/winit.patch` — ten files, 364 lines. It is applied through `[patch.crates-io]` in **our** root
+`Cargo.toml`, and re-made by `scripts/vendor-winit.sh`, which takes the copy and the patch from the pinned rev.
+
+**Why.** From `#791` on, `rune`'s macOS path calls `winit::platform::macos::{set_ime_text, take_ime_clauses,
+take_ime_replacement}` — Rune's additions to winit's `NSTextInputClient`, so a composition's clauses and a
+reconversion reach the app. Those functions exist only in Rune's patched winit, and a dependency's `[patch.crates-io]`
+applies to the workspace root alone: depending on Rune by rev got published winit, and `check (macos-latest)` failed
+with three `cannot find function`s. The wall is a workspace root, so the wall carries the patch.
+
+**What we changed.** Nothing. The copy is Rune's, byte for byte, and `vendor/winit.patch` is Rune's file, committed so
+the change is readable here rather than only in their history. Pinned to rune's rev, not to winit's: when the section
+below says "drop it", it goes with the pin it came from.
+
+**What it costs.** 3.1 MB, 218 files, and a copy re-made on **every** winit bump. The patch is applied when the copy is
+made, so a patch that no longer applies fails at `scripts/vendor-winit.sh` rather than rotting into a build nobody can
+reproduce — which is the whole reason the script exists instead of a copied directory.
+
+**Drop it when** upstream `winit` publishes those three functions in a release (Rune stops patching winit, and its
+`vendor/winit` disappears with one `scripts/vendor-winit.sh` run failing loudly), or Rune gates the IME extensions
+behind a feature this wall can leave off. Delete `vendor/winit`, `vendor/winit.patch` and the `[patch.crates-io]` line
+together.

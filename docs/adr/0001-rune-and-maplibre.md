@@ -472,8 +472,9 @@ error: could not compile `rune` (lib) due to 3 previous errors
 
 `check (macos-latest)` is a real gate, so the bump is a red PR. Taking it would mean vendoring `winit` ourselves — 3.1 MB,
 175 files, re-made on **every** future bump — to repair a packaging defect in a dependency. That is a project decision
-with a permanent maintenance cost, not a bookkeeping one, so the pin holds at
-`82196923fcb43d493353455edab0113cb4493c38` and #185 stays open with this analysis.
+with a permanent maintenance cost, not a bookkeeping one, so the pin held at
+`82196923fcb43d493353455edab0113cb4493c38` and #185 stayed open with this analysis — until the section at the end of
+this decision paid it.
 
 **What the review found anyway, for the day it is takeable.** The only pixel movement would have been icon edges: with
 the range built on Linux, 45 scenes differed from their goldens in `rune::Icon` antialiasing alone — two rows of each
@@ -485,3 +486,43 @@ wheel (`#856`'s Chromium distances — the wall's wheel intents carry their own 
 **What would change this decision.** Any of: the IME extensions reaching a published `winit` (or a `rune` feature that
 gates them), a rev whose macOS path does not need them, or an explicit decision that this wall vendors `winit` — which
 belongs in `vendor/README.md` with the re-vendor step, not in a bump commit.
+
+### Taken: `8219692` → `4af66a0` — 162 commits, and `vendor/winit` becomes ours (#185)
+
+The section above declined the bump because taking it meant owning a patched `winit`. #185 then sat; re-read against
+`dev` today, two things had changed.
+
+**The newest `dev` cannot be resolved by anyone.** `0796df5f` is 242 commits past the pin, and `cargo` stops before
+compiling:
+
+```
+error: failed to select a version for `parley_engine`.
+  ... required by package `rune`
+package `rune` depends on `parley_engine` with feature `line-dictionaries`
+but `parley_engine` does not have that feature.
+help: available features: bytemuck, complex-scripts, default, libm, std
+```
+
+`line-dictionaries` is a feature of Rune's vendored `parley_engine` only — neither `0.12.0` (what Rune asks for) nor the
+published `0.13.0` has it. It arrived with `#861`, the commit immediately after the rev taken here, so the newest rev a
+consumer can resolve is `4af66a06b554ba6a489e971eb88b03af1161f448` (`#939`). The pin goes there: **162** commits, not 242.
+
+**The macOS defect had not changed, so the cost was paid rather than waited out.** `#791`'s three functions are still
+absent from published `winit` 0.30.13, and there is no winit fork to point a `[patch]` at (`anomalyco/winit` does not
+exist). The only way past the pin was the one this ADR named: vendoring it — done as the previous section asked, in
+`vendor/README.md` with a re-vendor script (`scripts/vendor-winit.sh`, which takes the copy from the pinned rev), and
+not inside a bump commit.
+
+**What the review found: text edges move too, on all 49 scenes.** The character is what the earlier reading predicted —
+antialiasing, never geometry. Per scene 2,500–4,000 pixels differ, the largest channel delta 186–214, and every
+differing pixel is in the header strip: the title, the workspace chips, the chips' glyphs, the add-workspace icon. The
+pane bodies are byte-identical. The chip glyph rows are `#828`'s icon coverage; the text edges are `#862`'s weight
+ranges and `#878`/`#872`'s paint caches, now reaching the header's labels. Read at 8×, the digits and the chip outlines
+are marginally brighter and softer on the same pixels.
+
+Goldens were regenerated with `scripts/capture.sh --update-goldens` and read before they were taken, as
+`docs/verification.md` requires.
+
+**What would take the pin further.** `parley_engine`'s `line-dictionaries` being published (then the remaining 80
+commits to `dev` are a normal bump again), or Rune gating the feature. Neither is ours to fix. What is ours is the
+cost of the next bump: one `scripts/vendor-winit.sh` run and one review of the pictures.
