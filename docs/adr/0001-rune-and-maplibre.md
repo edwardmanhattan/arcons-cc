@@ -510,8 +510,14 @@ consumer can resolve is `4af66a06b554ba6a489e971eb88b03af1161f448` (`#939`). The
 **The macOS defect had not changed, so the cost was paid rather than waited out.** `#791`'s three functions are still
 absent from published `winit` 0.30.13, and there is no winit fork to point a `[patch]` at (`anomalyco/winit` does not
 exist). The only way past the pin was the one this ADR named: vendoring it — done as the previous section asked, in
-`vendor/README.md` with a re-vendor script (`scripts/vendor-winit.sh`, which takes the copy from the pinned rev), and
-not inside a bump commit.
+`vendor/README.md` with a re-vendor script (`scripts/vendor-patches.sh`, which takes the copies from the pinned rev),
+and not inside a bump commit.
+
+It turned out to be **two** crates, not one. `check (macos-latest)` went green on `winit` alone; `check
+(windows-latest)` then failed on `hal.set_present_rects` — Rune's DX12 partial presents, which live in its patched
+`wgpu-hal` for the same reason and are missing from the published crate. 2.4 MB, 86 files. The pattern is the one this
+ADR is about: Rune's own workspace is not buildable by anyone who depends on Rune, and each fix is a copy we carry.
+Both are in `scripts/vendor-patches.sh`, whose `CRATES` list is now the record of what we owe Rune's packaging.
 
 **What the review found: text edges move too, on all 49 scenes.** The character is what the earlier reading predicted —
 antialiasing, never geometry. Per scene 2,500–4,000 pixels differ, the largest channel delta 186–214, and every

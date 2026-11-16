@@ -64,8 +64,10 @@ default = []
 map = ["dep:maplibre_native", "dep:rusqlite"]
 
 [patch.crates-io]
-# rune from #791 (an IME fix) on calls `winit::platform::macos::set_ime_text` and its siblings,
-# which exist only in rune's own patched winit — a dependency's `[patch]` does not apply to the
-# workspace that depends on it, so the copy has to be ours too (#185).
+# Two crates Rune patches in *its* workspace and a consumer does not inherit: cargo applies patches from
+# the workspace root alone. macOS needs `winit` (#791's input-method extensions); Windows needs
+# `wgpu-hal` (DX12 partial presents). `vendor/README.md` says what each patch does and when to drop it;
+# `scripts/vendor-patches.sh` re-makes both from the rev pinned above (#185).
 winit = { path = "vendor/winit" }
+wgpu-hal = { path = "vendor/wgpu-hal" }
 tokio-centrifuge = { path = "vendor/tokio-centrifuge" }

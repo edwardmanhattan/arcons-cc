@@ -14,6 +14,7 @@ from this file, or when a copyleft crate appears in the lockfile unnamed.
 | --- | --- | --- |
 | **Rune** (`rune`, `rune-kit`) | MIT, © 2026 Anomaly | The UI framework. <https://github.com/anomalyco/rune>, pinned to rev `4af66a06b554ba6a489e971eb88b03af1161f448`. Vendored before release; the full licence text then lives at `vendor/rune/LICENSE`. |
 | **winit** 0.30.13 (vendored) | Apache-2.0 OR MIT | Window, input and the event loop. Not the wall's dependency: it is Rune's, copied so Rune's macOS input-method path compiles — `vendor/README.md`. Licence text at `vendor/winit/LICENSE`. |
+| **wgpu-hal** 30.0.1 (vendored) | Apache-2.0 OR MIT | The GPU backend under `wgpu`. Not the wall's dependency either: Rune's DX12 partial presents live in its patched copy, and Rune does not compile on Windows without it — `vendor/README.md`. |
 | **MapLibre Native** (`maplibre_native` 0.9.3, vendored) | BSD-2-Clause | The map engine, vendored for two checkout-cache fixes — see `vendor/README.md`. <https://github.com/maplibre/maplibre-native>. Behind the `map` feature, which the gate does not enable. |
 | **Inter**, **IBM Plex Mono** | SIL Open Font License 1.1 | Typefaces bundled with Rune. |
 | **milsymbol** (`spatialillusions/milsymbol`) | MIT — © 2017 Mans Beckman | NATO/APP-6 icon geometry, pinned by the sister project at `f5134380…` v3.0.5. **Not linked or vendored yet**: `docs/research/sheets/wall-symbol-icons.svg` is derived from it (#33), and lifting the module needs this row to stay and the licence text to travel with the copy. |

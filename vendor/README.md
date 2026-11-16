@@ -72,7 +72,7 @@ not draw on Windows yet.
 
 Copied from Rune's own `vendor/winit` at the rev `Cargo.toml` pins (`4af66a06`): winit 0.30.13 as published, plus
 Rune's `vendor/winit.patch` — ten files, 364 lines. It is applied through `[patch.crates-io]` in **our** root
-`Cargo.toml`, and re-made by `scripts/vendor-winit.sh`, which takes the copy and the patch from the pinned rev.
+`Cargo.toml`, and re-made by `scripts/vendor-patches.sh`, which takes the copy and the patch from the pinned rev.
 
 **Why.** From `#791` on, `rune`'s macOS path calls `winit::platform::macos::{set_ime_text, take_ime_clauses,
 take_ime_replacement}` — Rune's additions to winit's `NSTextInputClient`, so a composition's clauses and a
@@ -85,10 +85,36 @@ the change is readable here rather than only in their history. Pinned to rune's 
 below says "drop it", it goes with the pin it came from.
 
 **What it costs.** 3.1 MB, 218 files, and a copy re-made on **every** winit bump. The patch is applied when the copy is
-made, so a patch that no longer applies fails at `scripts/vendor-winit.sh` rather than rotting into a build nobody can
+made, so a patch that no longer applies fails at `scripts/vendor-patches.sh` rather than rotting into a build nobody can
 reproduce — which is the whole reason the script exists instead of a copied directory.
 
 **Drop it when** upstream `winit` publishes those three functions in a release (Rune stops patching winit, and its
-`vendor/winit` disappears with one `scripts/vendor-winit.sh` run failing loudly), or Rune gates the IME extensions
+`vendor/winit` disappears with one `scripts/vendor-patches.sh` run failing loudly), or Rune gates the IME extensions
 behind a feature this wall can leave off. Delete `vendor/winit`, `vendor/winit.patch` and the `[patch.crates-io]` line
 together.
+
+## `wgpu-hal` — Rune's copy, for the same reason as `winit` (#185)
+
+Copied from Rune's `vendor/wgpu-hal` at the rev `Cargo.toml` pins: wgpu-hal 30.0.1 as published, plus Rune's
+`vendor/wgpu-hal.patch`. Applied through our own `[patch.crates-io]`, re-made by `scripts/vendor-patches.sh`.
+
+**Why.** Rune's DX12 backend calls `Surface::set_present_rects` — `Present1`'s dirty rectangles on a sequential
+flip-model swap chain, which is how `render::damaged` reaches the screen on Windows — and the method is Rune's
+addition. Published wgpu-hal 30.0.1 has no such method, so `check (windows-latest)` failed with
+
+```
+error[E0599]: no method named `set_present_rects` found for opaque type `impl Deref<Target = <Dx12 as Api>::Surface>`
+   --> rune/src/window/draw.rs:433
+```
+
+The same patch also picks one adapter through DXGI without making a device on the others, and loads FXC before the
+first compile instead of with the instance (Rune's uber shader is precompiled).
+
+**What we changed.** Nothing — the copy and the patch are Rune's, and the patch file is committed so the change is
+readable here.
+
+**What it costs.** 2.4 MB, 86 files, re-made on every `wgpu` bump. Linux and macOS never execute the added code, so the
+gate's pictures are unaffected (`scripts/verify.sh` proves that per bump, since the copy is what they build against).
+
+**Drop it when** upstream `wgpu-hal` gains those entry points, or Rune stops patching it. Delete `vendor/wgpu-hal`,
+`vendor/wgpu-hal.patch`, the `[patch.crates-io]` line, and the crate's name in `scripts/vendor-patches.sh` together.
