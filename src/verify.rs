@@ -453,6 +453,39 @@ fn solid_box(
     })
 }
 
+/// **Where a scene's menu is, and how big** — the same arithmetic the picture draws from: the panel, the state's
+/// layout rectangle for the pane the menu was asked on, `tokens::menu_size` for the box, and `ui::menu_origin` for
+/// the corner (#77, #81).
+///
+/// One function for the two scenes that show a pane menu, and it takes the corner from the layout rather than from a
+/// literal: #240 made the menu a row taller, the menu slid up to stay inside its pane, and a strip measured at the old
+/// `y` sampled water — a false pass that said "no ring, as it should be".
+fn menu_box(image: &Image, scene: &str) -> Option<(f64, f64, f64, f64, usize)> {
+    let (origin_x, origin_y, panel_w, panel_h) = image.find_panel_rect(ink(tokens::panel()))?;
+    let state = scene::state_for(scene);
+    let menu = state.menu()?;
+    let rows = crate::ui::menu_items(&state, menu.pane).len();
+    let (w, h) = tokens::menu_size(rows.max(1));
+    let viewport = crate::map::geometry::Viewport::new(panel_w, panel_h);
+    let rect = state
+        .layout()
+        .and_then(|layout| layout.rect_of(viewport, menu.pane))
+        .unwrap_or(crate::ui::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: panel_w as f32,
+            h: panel_h as f32,
+        });
+    let (mx, my) = crate::ui::menu_origin(rect, scene::MENU_AT, (w, h));
+    Some((
+        origin_x + f64::from(mx),
+        origin_y + f64::from(my),
+        f64::from(w),
+        f64::from(h),
+        rows,
+    ))
+}
+
 /// Count the pixels inside `rect` that are close to `colour`. A rectangle's answer where the rest of
 /// this module asks a whole image's: a newsroom pane is a region, and the accent ink a marker would
 /// leave is only a failure **inside** it.
@@ -701,12 +734,16 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             }
         }
         "menu-ring" => {
-            let x = 1044.0;
-            let y = 188.0 + f64::from(tokens::MENU_ROW) * crate::scene::MENU_RING_ROW as f64;
+            // **The row's own strip**, taken from the menu's box — not from a literal `y`: the menu is as tall as its
+            // items and the ring is wherever the row it names was drawn (#240 made it a row taller).
+            let Some((mx, my, w, _h, _rows)) = menu_box(image, scene) else {
+                failures.push("menu-ring: no menu on screen".to_string());
+                return Err(failures);
+            };
             let strip = (
-                x,
-                y,
-                f64::from(tokens::MENU_WIDTH) - 8.0,
+                mx + 4.0,
+                my + f64::from(tokens::MENU_ROW) * crate::scene::MENU_RING_ROW as f64,
+                w - 8.0,
                 f64::from(tokens::MENU_ROW),
             );
             let ring = count_colour_in(image, strip, ink(tokens::focus_edge()), 24);
@@ -1375,13 +1412,16 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             // The erosion took a pixel off each side; put it back.
             let (sx, sy) = (sx - 1.0, sy - 1.0);
             let (sw, sh) = (ex - sx + 2.0, ey - sy + 2.0);
-            let (want_w, want_h) = (
-                f64::from(tokens::SHEET_SIZE.0),
-                f64::from(tokens::SHEET_SIZE.1),
-            );
+            // **As tall as its rows** (#82, #240): the count is the wall's own — `ui::settings_rows`, the list the
+            // sheet draws — and the box is `tokens::settings_size`, so a sheet that grew a row without the token
+            // (or a token that grew without the sheet) is a red line with both numbers in it.
+            let rows = crate::ui::settings_rows(&scene::state_for(scene)).len();
+            let (want_w, want_h) = tokens::settings_size(rows);
+            let (want_w, want_h) = (f64::from(want_w), f64::from(want_h));
             if (sw - want_w).abs() > 2.0 || (sh - want_h).abs() > 2.0 {
                 failures.push(format!(
-                    "settings: the sheet is {sw:.0}×{sh:.0} for a {want_w:.0}×{want_h:.0} token"
+                    "settings: the sheet is {sw:.0}×{sh:.0} for {rows} row(s) and a {want_w:.0}×{want_h:.0} \
+                     token"
                 ));
             } else {
                 lines.push(format!(
@@ -2324,13 +2364,13 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
         }
         "pane-menu" | "panes-menu" => {
             // **A menu opened by a press has no ring** (#164): the pointer is where the operator's attention is, and
-            // a ring nobody put there would be a second answer to "which row". The strip is the first row's.
-            let strip = (
-                1044.0,
-                188.0,
-                f64::from(tokens::MENU_WIDTH) - 8.0,
-                f64::from(tokens::MENU_ROW),
-            );
+            // a ring nobody put there would be a second answer to "which row". The strip is the first row's, from the
+            // menu's own box.
+            let Some((mx, my, w, _, _)) = menu_box(image, scene) else {
+                failures.push(format!("{scene}: no menu on screen"));
+                return Err(failures);
+            };
+            let strip = (mx + 4.0, my, w - 8.0, f64::from(tokens::MENU_ROW));
             let ring = count_colour_in(image, strip, ink(tokens::focus_edge()), 24);
             if ring >= 200 {
                 failures.push(format!(
@@ -2359,7 +2399,9 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             // #111, so it is not a row on either wall.
             // #140 added `Focus on new workspace` and the waterfall: growth at the top, the
             // destructive row still last.
-            let expected = if scene == "panes-menu" { 5 } else { 4 };
+            // #240 adds the reset's waterfall to both walls: six rows where a pane can be closed, five on the
+            // wall whose only pane refuses.
+            let expected = if scene == "panes-menu" { 6 } else { 5 };
             if rows != expected {
                 failures.push(format!(
                     "{scene}: the menu offers {rows} items, and this wall is the case for {expected}"
@@ -2378,7 +2420,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                          workspaces cannot be fixed with a menu row (#141)"
                             .into(),
                     );
-                } else if rows == 4
+                } else if rows == 5
                     && crate::ui::menu_items(&state, menu.pane)
                         .iter()
                         .all(|item| item.label != crate::ui::MENU_CLOSE)

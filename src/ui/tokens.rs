@@ -119,8 +119,23 @@ pub const NAME_MAX_CHARS: usize = 28;
 /// a menu `size()`d to one row clips the second one, which is the kind of wrong no golden notices until
 /// someone opens it on a wall.
 pub const MENU_WIDTH: f32 = 216.0;
-/// The settings sheet: wide enough for a sentence and its switch, and as tall as the settings it has.
+/// The rename sheet's box, and the pairing code's: wide enough for a sentence, and as tall as the three rows
+/// they carry. **The settings sheet has its own** (#240) — it is as tall as its rows, not as tall as these.
 pub const SHEET_SIZE: (f32, f32) = (360.0, 132.0);
+/// **The settings sheet's own box** (#82, #240): its width, and the height one of its rows takes.
+pub const SETTINGS_W: f32 = 360.0;
+pub const SETTINGS_ROW: f32 = 28.0;
+/// What sits above the settings sheet's rows — the padding, the title, the hint and the first gap.
+pub const SETTINGS_HEAD: f32 = 76.0;
+/// The size of a settings sheet with `rows` rows, the only place its height is computed — `menu_size`'s rule, and
+/// for its reason: a sheet `size()`d for one setting clips the second, which is the bug a menu sized for one row
+/// had (#81). #240's pairing row and one row per phone are what made it a rule here.
+pub fn settings_size(rows: usize) -> (f32, f32) {
+    (
+        SETTINGS_W,
+        SETTINGS_HEAD + (SETTINGS_ROW + GAP) * rows.max(1) as f32,
+    )
+}
 pub const MENU_ROW: f32 = 36.0;
 /// The size of a menu with `rows` items, the only place a menu's height is computed.
 pub fn menu_size(rows: usize) -> (f32, f32) {

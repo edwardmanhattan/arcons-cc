@@ -559,7 +559,15 @@ pub fn content(state: &State, pane: ViewId, rect: Rect, tree: &Tree) -> El {
             })
             .unwrap_or((0.0, 0.0));
         let placement = crate::units::card::place(anchor, (f64::from(rect.w), f64::from(rect.h)));
-        body = body.child(crate::ui::unitcard::card(card, placement, state.now()));
+        // **A tree pane's card carries no follow** (#240): the same card, but `object.follow` on a tree pane is
+        // refused by name — it draws no map, so there is no camera to lock — and a row that always says no is not
+        // a control. The rest of the card is the hull's, which is why the card is drawn at all.
+        body = body.child(crate::ui::unitcard::card(
+            card,
+            placement,
+            state.now(),
+            None,
+        ));
     }
     body
 }

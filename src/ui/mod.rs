@@ -2796,12 +2796,120 @@ fn ask_tree_reads(state: &mut State) {
     }
 }
 
-/// What the settings sheet calls its one setting, and what the row says when it is on and off.
+/// What the settings sheet says about itself, and what its first setting is called, and what the row says when
+/// it is on and off.
+pub const SETTING_TITLE: &str = "Settings";
+pub const SETTING_HINT: &str = "saved to settings.toml, beside config.toml";
 pub const SETTING_GAPS: &str = "Gaps between panes";
 pub const SETTING_ON: &str = "on";
 pub const SETTING_OFF: &str = "off";
+/// **Pairing, from the glass** (#194, #240): the row that draws the six digits, and the words a wall with no
+/// phones says instead of an empty list (`INV-01`: an absence says so rather than drawing nothing).
+pub const SETTING_PAIR: &str = "Pair a phone";
+pub const SETTING_NO_DEVICES: &str = "no phones paired";
+/// **Revoke a device** (#194): the word beside a row of `devices.toml`, and the verb it means (`pair.forget`).
+pub const SETTING_FORGET: &str = "Forget";
 /// The way out of the sheet, in words. A key nobody was told about is not a way out (#98).
 pub const SETTING_CLOSE: &str = "Close";
+
+/// **One row of the settings sheet** (#82, #240), in the order the sheet draws them: the wall's own preferences,
+/// the door onto pairing, one row per paired phone, and the way out.
+///
+/// A value rather than an element because the sheet's box is `tokens::settings_size(rows.len())` — the rule
+/// `menu_items` keeps for the menu (#81) — and because a test has to be able to say what the sheet offers without
+/// rendering it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SettingRow {
+    /// Between the panes, and whether it is on now.
+    Gaps { on: bool },
+    /// **Draw six digits for two minutes** (`pair.begin`, #194): the one door onto pairing the wall has, because
+    /// the code is a picture for the room and not something a client may ask for and read.
+    Pair,
+    /// A paired device, by name, with the `Forget` that revokes it (`pair.forget`).
+    Device(String),
+    /// The words a wall with no phones says, rather than a list that is simply absent.
+    NoDevices,
+    /// The way out.
+    Close,
+}
+
+impl SettingRow {
+    /// What a capture calls this row, and what the sheet keys it by.
+    pub fn key(&self) -> String {
+        match self {
+            SettingRow::Gaps { .. } => "setting-gaps".to_string(),
+            SettingRow::Pair => "setting-pair".to_string(),
+            SettingRow::Device(name) => format!("setting-device-{name}"),
+            SettingRow::NoDevices => "setting-no-devices".to_string(),
+            SettingRow::Close => "settings-close".to_string(),
+        }
+    }
+
+    /// **What pressing this row means as an intent** (#240): the row's own description of itself, so a test can say
+    /// every control the sheet offers is a verb the glass lists and the vocabulary declares — `MenuItem::intent`'s
+    /// rule, at the other surface a hand opens.
+    ///
+    /// `None` for the two rows that are not the control plane's: the gap is a **preference** the wall keeps in
+    /// `settings.toml` (no verb names it, because a client that set one would be arranging a wall it cannot see),
+    /// and the words a wall with no phones says are a label, not a control.
+    pub fn intent(&self) -> Option<Intent> {
+        Some(match self {
+            SettingRow::Gaps { .. } => return None,
+            SettingRow::Pair => Intent::PairBegin,
+            SettingRow::Device(name) => Intent::PairForget { name: name.clone() },
+            SettingRow::NoDevices => return None,
+            SettingRow::Close => Intent::CloseSurfaces,
+        })
+    }
+
+    /// Run the row, **through the control plane** where it has one (#240), the rule `MenuItem::run` keeps: a press
+    /// and a client's request must be the same sentence, or one of them is a second vocabulary.
+    fn run(&self, state: &mut State) {
+        match self.intent() {
+            Some(intent) => {
+                // **The code takes the sheet's place** (#194, #240): six digits are a picture two people in the
+                // room read off the wall, and a sheet drawn under that panel is a second surface over the one the
+                // pair is looking at. Pressing `Close` is the sheet's own way out and closes nothing else.
+                let yields_the_wall = matches!(self, SettingRow::Pair);
+                control::apply(state, intent).ok();
+                if yields_the_wall {
+                    close_settings(state);
+                }
+            }
+            // The two rows the vocabulary does not have: a preference the wall writes beside `config.toml`, and a
+            // label with no control behind it.
+            None => {
+                if matches!(self, SettingRow::Gaps { .. }) {
+                    toggle_pane_gap(state);
+                }
+            }
+        }
+    }
+}
+
+/// **The settings sheet's rows** — one function for the sheet and for the capture that measures its box, the rule
+/// `menu_items` keeps (#81): a scene's settings sheet is as tall as the rows the wall itself says it has.
+pub fn settings_rows(state: &State) -> Vec<SettingRow> {
+    let mut rows = vec![SettingRow::Gaps {
+        on: state.settings.pane_gap > 0.0,
+    }];
+    // **The code is a door on the wall, not only on a socket** (#240): without this row `pair.begin` existed in the
+    // vocabulary and nowhere a hand could reach it, so the wall could draw a code nobody in the room could ask for.
+    rows.push(SettingRow::Pair);
+    if state.devices.device.is_empty() {
+        rows.push(SettingRow::NoDevices);
+    } else {
+        rows.extend(
+            state
+                .devices
+                .names()
+                .into_iter()
+                .map(|name| SettingRow::Device(name.to_string())),
+        );
+    }
+    rows.push(SettingRow::Close);
+    rows
+}
 
 /// Close the settings sheet, from any of its three exits: the row, the scrim, Escape.
 fn close_settings(state: &mut State) {
@@ -2883,48 +2991,12 @@ pub(crate) fn close_surfaces(state: &mut State) -> bool {
 fn settings_sheet(state: &State, scale: f32) -> El {
     let viewport = state.pane_viewport();
     let _ = scale;
-    let (w, h) = tokens::SHEET_SIZE;
-    let at = view::sheet_rect(viewport, tokens::SHEET_SIZE);
-    let gaps_on = state.settings.pane_gap > 0.0;
-    // The row is the control: pressing it flips the setting, which is what a switch on a wall with no
-    // pointer-driven chrome has to be. It says its state in words, so a capture can assert the words.
-    let gaps_row = row()
-        .key("setting-gaps")
-        .w_full()
-        .gap(tokens::GAP)
-        .items_center()
-        .child(
-            text(SETTING_GAPS)
-                .font(tokens::LABEL)
-                .color(tokens::ink())
-                .grow(1.0),
-        )
-        .child(
-            text(if gaps_on { SETTING_ON } else { SETTING_OFF })
-                .key("setting-gaps-value")
-                .font(tokens::LABEL)
-                .color(if gaps_on {
-                    tokens::accent()
-                } else {
-                    tokens::ink_dim()
-                }),
-        )
-        .on_press(|state: &mut State| toggle_pane_gap(state));
-    // The way out, as a row like the setting above it: same height, same words-not-icons rule. Pressing it
-    // closes the sheet — the one exit the operator asked for (#98).
-    let close = row()
-        .key("settings-close")
-        .w_full()
-        .gap(tokens::GAP)
-        .items_center()
-        .child(
-            text(SETTING_CLOSE)
-                .font(tokens::LABEL)
-                .color(tokens::accent())
-                .grow(1.0),
-        )
-        .on_press(|state: &mut State| close_settings(state));
-    let sheet = col()
+    // **As tall as its rows** (#240): the list is `settings_rows`, and the box is the token that counts it — the
+    // rule the menu keeps (#81), for the same reason: a sheet sized for one setting clips the second.
+    let rows = settings_rows(state);
+    let (w, h) = tokens::settings_size(rows.len());
+    let at = view::sheet_rect(viewport, (w, h));
+    let mut sheet = col()
         .key("settings-sheet")
         // Swallows a press that lands on the sheet rather than on one of its rows: without it the press
         // would reach the scrim underneath and close the sheet the operator was pressing in (#98).
@@ -2936,17 +3008,18 @@ fn settings_sheet(state: &State, scale: f32) -> El {
         .radius(tokens::PANEL_RADIUS)
         .fill(tokens::panel())
         .border(tokens::HAIRLINE, tokens::card_edge())
-        .child(text("Settings").font(tokens::TITLE).color(tokens::ink()))
-        .child(gaps_row)
+        .child(text(SETTING_TITLE).font(tokens::TITLE).color(tokens::ink()))
         .child(
-            text("saved to settings.toml, beside config.toml")
+            text(SETTING_HINT)
                 .font(tokens::LABEL)
                 .color(tokens::ink_dim()),
-        )
-        // A spacer, because the way out belongs at the bottom of the sheet and the tiling behind it must
-        // stay visible: the sheet keeps its box and the row sits at the foot of it.
-        .child(el().grow(1.0))
-        .child(close);
+        );
+    // A row **is** the control, which is what a switch on a wall with no pointer-driven chrome has to be
+    // (#82); it says its state in words so a capture can assert the words. One loop for both surfaces' rows,
+    // and the list is `settings_rows` — the function the capture measures the box against (#240).
+    for row in rows {
+        sheet = sheet.child(setting_control(row));
+    }
     // The scrim: full-window, behind the sheet, and the press that dismisses.
     //
     // **`modal` alone does not dismiss this sheet.** Rune dismisses a modal when a press reaches something
@@ -2966,6 +3039,86 @@ fn settings_sheet(state: &State, scale: f32) -> El {
         // a press *inside* the sheet is told apart from one outside it without a second copy of the box.
         .on_press(|state: &mut State| close_settings(state))
         .child(sheet)
+}
+
+/// **One row of the settings sheet, as the element it is** (#240): a label, a word on the right that says what the
+/// press means, and the press itself — which is the row, because a wall's controls are things you press.
+///
+/// Every row is `tokens::SETTINGS_ROW` tall so the box `tokens::settings_size` computes is the box the rows fill:
+/// a sheet whose arithmetic and drawing disagree is a sheet that clips its last row.
+fn setting_control(setting: SettingRow) -> El {
+    let key = setting.key();
+    let mut line = row()
+        .key(key)
+        .w_full()
+        .h(tokens::SETTINGS_ROW)
+        .gap(tokens::GAP)
+        .items_center();
+    match &setting {
+        SettingRow::Gaps { on } => {
+            line = line
+                .child(
+                    text(SETTING_GAPS)
+                        .font(tokens::LABEL)
+                        .color(tokens::ink())
+                        .grow(1.0),
+                )
+                .child(
+                    text(if *on { SETTING_ON } else { SETTING_OFF })
+                        .key("setting-gaps-value")
+                        .font(tokens::LABEL)
+                        .color(if *on {
+                            tokens::accent()
+                        } else {
+                            tokens::ink_dim()
+                        }),
+                );
+        }
+        SettingRow::Pair => {
+            line = line.child(
+                text(SETTING_PAIR)
+                    .font(tokens::LABEL)
+                    .color(tokens::ink())
+                    .grow(1.0),
+            );
+        }
+        SettingRow::Device(name) => {
+            line = line
+                .child(
+                    text(name.clone())
+                        .font(tokens::LABEL)
+                        .color(tokens::ink())
+                        .grow(1.0),
+                )
+                // The verb, in the accent the `Close` row owns: what the press does, in the row's own words.
+                .child(
+                    text(SETTING_FORGET)
+                        .key(format!("forget-{name}"))
+                        .font(tokens::LABEL)
+                        .color(tokens::accent()),
+                );
+        }
+        SettingRow::NoDevices => {
+            line = line.child(
+                text(SETTING_NO_DEVICES)
+                    .font(tokens::LABEL)
+                    .color(tokens::ink_dim()),
+            );
+        }
+        SettingRow::Close => {
+            line = line.child(
+                text(SETTING_CLOSE)
+                    .font(tokens::LABEL)
+                    .color(tokens::accent())
+                    .grow(1.0),
+            );
+        }
+    }
+    // **A label is not a control**: the words a wall with no phones says are drawn and pressed by nothing.
+    if matches!(setting, SettingRow::NoDevices) {
+        return line;
+    }
+    line.on_press(move |state: &mut State| setting.run(state))
 }
 
 /// The rename sheet (#83): a field over the wall, with the pane it names said in words.
@@ -3830,7 +3983,14 @@ fn projections(
     {
         let anchor = (marker.x / points, marker.y / points);
         let placement = crate::units::card::place(anchor, viewport);
-        layer = layer.child(unitcard::card(card, placement, state.now()));
+        // **The card's one control** (#240): a map pane can lock onto the hull the card is about, and the row says
+        // which way the press goes by whether it is already locked on — a control that cannot be un-pressed is half
+        // a control.
+        let follow = unitcard::Follow {
+            pane: id,
+            following: state.pane(id).and_then(|pane| pane.follow) == Some(card.unit.id_unit),
+        };
+        layer = layer.child(unitcard::card(card, placement, state.now(), Some(follow)));
     }
     // **The facility card** (#109): what the row carries, anchored to its mark in this pane. Drawn
     // only when the facility is still in the layer — a hidden layer draws no floating card.
@@ -4447,6 +4607,11 @@ impl MenuItem {
             MenuAction::Rename => Intent::BeginRename(RenameTarget::Pane(pane)),
             MenuAction::Close => Intent::ClosePane(pane),
             MenuAction::CloseAll => Intent::CloseAllPanes,
+            // **The wall's two resets** (#166, #240): the same verbs a `ctl` types, on the pane the menu was asked
+            // on. The refusal is the intent's own — `no pane has the keys` on a workspace with no focus — so the
+            // row and the action cannot disagree.
+            MenuAction::CloseOtherPanes => Intent::CloseOtherPanes,
+            MenuAction::CloseOtherWorkspaces => Intent::CloseOtherWorkspaces,
             MenuAction::MoveTo(target) => Intent::MovePane {
                 pane,
                 workspace: target,
@@ -4511,6 +4676,25 @@ pub fn menu_items(state: &State, pane: ViewId) -> Vec<MenuItem> {
     if !elsewhere.is_empty() {
         items.push(MenuItem::submenu(MENU_MOVE, "menu-move", elsewhere));
     }
+    // **Everything but this** (#166, #240): the two verbs that clear the wall down to the pane an operator is
+    // looking at. A waterfall beside the move's, because a hand at the glass could not ask for either before —
+    // only a phone could tidy the wall — and because the two are one decision about the same nothing-else.
+    items.push(MenuItem::submenu(
+        MENU_CLOSE_OTHERS,
+        "menu-close-others",
+        vec![
+            MenuItem::leaf(
+                MENU_CLOSE_OTHER_PANES,
+                "menu-close-other-panes",
+                MenuAction::CloseOtherPanes,
+            ),
+            MenuItem::leaf(
+                MENU_CLOSE_OTHER_WORKSPACES,
+                "menu-close-other-workspaces",
+                MenuAction::CloseOtherWorkspaces,
+            ),
+        ],
+    ));
     // **The same predicate the action uses** (#141): a pane with a sibling, or one on another
     // workspace. A lone pane on a wall of empty workspaces is refused here and refused there.
     if state.can_close(pane) {
@@ -4555,6 +4739,13 @@ pub const MENU_SPLIT: &str = "Focus on new pane";
 pub const MENU_NEW_WORKSPACE: &str = "Focus on new workspace";
 /// The waterfall's trigger: `Move to workspace > …` (#140).
 pub const MENU_MOVE: &str = "Move to workspace";
+/// **The wall's reset, as a waterfall** (#166, #240): `Close others > …`, the two rows that clear everything but
+/// the pane on screen. Words an operator can read before pressing, because both are destructive.
+pub const MENU_CLOSE_OTHERS: &str = "Close others";
+/// The waterfall's two leaves: every pane in this workspace but the focused one, and every workspace but the one
+/// on screen (#166).
+pub const MENU_CLOSE_OTHER_PANES: &str = "Close other panes";
+pub const MENU_CLOSE_OTHER_WORKSPACES: &str = "Close other workspaces";
 pub const MENU_RENAME: &str = "Name this pane…";
 pub const MENU_CLOSE: &str = "Close pane";
 /// **Empty this workspace on the wall's chips** (#241) — the row that goes one pane further than `Close pane` and
@@ -4567,11 +4758,12 @@ pub const MENU_CLOSE_ALL: &str = "Close all panes";
 /// carries it as text, so it needs the literal back. A key with an index in it (`menu-move-2`, one per workspace)
 /// is deliberately absent: reopening a waterfall from a scene would be a scene inventing which workspace it means,
 /// so a scene that names one opens the first surface instead, and a test keeps this list in step with the rows.
-pub const MENU_KEYS: [&str; 6] = [
+pub const MENU_KEYS: [&str; 7] = [
     "menu-split",
     "menu-new-workspace",
     "menu-rename",
     "menu-move",
+    "menu-close-others",
     "menu-close",
     "menu-close-all",
 ];
@@ -4592,9 +4784,176 @@ pub enum MenuAction {
     CloseAll,
     /// Move this pane to the workspace at that index.
     MoveTo(usize),
+    /// Close every pane in this workspace but the one with the keys (#166).
+    CloseOtherPanes,
+    /// Close every workspace but the one on screen (#166).
+    CloseOtherWorkspaces,
     /// A row with a second surface: its children draw beside it, and this is the key that opens them.
     Submenu(&'static str),
 }
+
+/// **One verb a hand at the glass can produce, and the control that produces it** (#240).
+///
+/// The control is words because it is the answer to a person's question — "where is it?" — and because a test
+/// that asked the drawing code would be asking the thing it is checking.
+pub struct Reach {
+    pub verb: &'static str,
+    pub control: &'static str,
+}
+
+/// **The verbs a hand at the glass can produce** (#240), beside the menu's own tables.
+///
+/// `control::vocabulary()` is what the wall *accepts* — a socket, a phone or a `ctl` may send any verb in it. This
+/// is what a person in front of the wall can *ask for*, and the difference is [`REMOTE_ONLY`]: a verb in neither
+/// table is a control that exists only over the socket, which is the failure this table exists to make loud
+/// (#240). The menu's rows, the sheet's rows and the card's buttons are compared with it by the tests below, so a
+/// control added without its verb here is red rather than silently remote.
+pub const REACHES: &[Reach] = &[
+    Reach {
+        verb: "pane.focus",
+        control: "a press in a pane, or a right-click on it",
+    },
+    Reach {
+        verb: "pane.full_size",
+        control: "the pane chrome's maximise toggle",
+    },
+    Reach {
+        verb: "pane.close",
+        control: "the pane menu's `Close pane`",
+    },
+    Reach {
+        verb: "rename.begin",
+        control: "a pane's plate, the menu's `Name this pane…`, the header's title, a right-click on a chip",
+    },
+    Reach {
+        verb: "rename.set",
+        control: "Enter in the rename sheet",
+    },
+    Reach {
+        verb: "pane.split_at",
+        control: "the pane menu's `Focus on new pane`",
+    },
+    Reach {
+        verb: "workspace.from_pane",
+        control: "the pane menu's `Focus on new workspace`",
+    },
+    Reach {
+        verb: "pane.move",
+        control: "the pane menu's `Move to workspace > <name>`",
+    },
+    Reach {
+        verb: "pane.drop",
+        control: "a pane's handle dragged to another pane's edge (`State::apply_drop`, the release's own call)",
+    },
+    Reach {
+        verb: "pane.resize",
+        control: "a border between two panes dragged (`State::set_ratio`, the release's own call)",
+    },
+    Reach {
+        verb: "pane.close_all",
+        control: "the pane menu's `Close all panes` (#241), drawn where it differs from the rows beside it",
+    },
+    Reach {
+        verb: "pane.close_others",
+        control: "the pane menu's `Close others > Close other panes`",
+    },
+    Reach {
+        verb: "workspace.close_others",
+        control: "the pane menu's `Close others > Close other workspaces`",
+    },
+    Reach {
+        verb: "pane.open",
+        control: "the header's `chain of command` and `newsroom`",
+    },
+    Reach {
+        verb: "pane.select",
+        control: "a press on a hull",
+    },
+    Reach {
+        verb: "object.follow",
+        control: "the card's `Follow`, and `Stop following` to let go",
+    },
+    Reach {
+        verb: "workspace.focus",
+        control: "a press on a workspace chip",
+    },
+    Reach {
+        verb: "workspace.new",
+        control: "the header's `+`",
+    },
+    Reach {
+        verb: "map.camera",
+        control: "a pan or a wheel over a pane, when the hand stops",
+    },
+    Reach {
+        verb: "menu.focus",
+        control: "Down or Up in an open menu",
+    },
+    Reach {
+        verb: "menu.submenu",
+        control: "Right or Left in an open menu",
+    },
+    Reach {
+        verb: "menu.choose",
+        control: "Enter in an open menu",
+    },
+    Reach {
+        verb: "pair.begin",
+        control: "the settings sheet's `Pair a phone`",
+    },
+    Reach {
+        verb: "pair.forget",
+        control: "the settings sheet's `Forget` beside a paired phone",
+    },
+    Reach {
+        verb: "surface.settings",
+        control: "the header's `settings`",
+    },
+    Reach {
+        verb: "surface.close",
+        control: "Escape, the sheet's `Close`, or a press on the picture",
+    },
+];
+
+/// **Every verb the glass can produce**, as the names `Intent::verb()` gives them.
+///
+/// The table above is the list; this is the shape the test over `control::vocabulary()` compares with, so a verb
+/// is reached or explained and never merely absent (#240).
+pub fn reaches() -> Vec<&'static str> {
+    REACHES.iter().map(|reach| reach.verb).collect()
+}
+
+/// **Verbs the glass deliberately cannot produce, and why** (#240).
+///
+/// An entry here is a **decision**, not an omission: the reason says what about a hand makes the verb impossible,
+/// so the next reader can tell a choice from a gap. A verb that is in neither this table nor [`REACHES`] is the
+/// bug this ticket exists to catch — a wall that accepts over the socket what nobody at the glass can ask for.
+pub const REMOTE_ONLY: &[(&str, &str)] = &[
+    (
+        "pane.split",
+        "a hand splits the pane it is in, and the menu sends `pane.split_at` (the water the pointer clicked); \
+         naming a pane and a kind without a frame is a client's sentence",
+    ),
+    (
+        "cursor.move",
+        "the wall's pointer is the wall's own hand: a cursor is a *client's* pointer, drawn so a remote's hand is \
+         visible at the glass (#167)",
+    ),
+    (
+        "cursor.press",
+        "a client's press arrives as a cursor on the wall; at the glass the pointer presses the hull itself",
+    ),
+    (
+        "cursor.release",
+        "a cursor fades on its own, and the glass has no cursor to release",
+    ),
+    (
+        "pair.claim",
+        "a phone claims the code, and the key travels back through its carrier: a wall that could type its own \
+         code could pair itself (#194)",
+    ),
+];
+
 /// What the workspace rename sheet is called (#139). The pane's keeps its own words.
 pub const RENAME_WORKSPACE_TITLE: &str = "Name this workspace";
 /// What the maximised pane's own close plate says, and the header's note about it (#85).
@@ -6538,26 +6897,29 @@ pub fn stop(state: &mut State, layout: &std::path::Path, arm: &dyn Fn()) {
     state.close_maps();
 }
 
+/// **One frame, headless** (`INV-11` in waiting): layout and paint with no display and no GPU, at the virtual
+/// clock's zero, so a test that asks the wall what it draws gets the same answer twice.
+///
+/// Shared by the test modules that press a control and then read the picture: a `#[cfg(test)]` helper rather than
+/// four copies, and outside `mod tests` because `settings_tests` and `reach_tests` are modules of their own.
+#[cfg(test)]
+fn frame_once(state: State) -> rune::Runtime<State> {
+    let mut rt = rune::Runtime::new(
+        state,
+        view,
+        tokens::WINDOW_SIZE,
+        rune::Env {
+            system_dark: true,
+            scale: 1.0,
+        },
+    );
+    rt.frame(0.0);
+    rt
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rune::{Env, Runtime};
-
-    fn frame_once(state: State) -> Runtime<State> {
-        // Headless: layout and paint with no display and no GPU. The virtual clock is 0.0, so a
-        // first frame is deterministic (INV-11 in waiting).
-        let mut rt = Runtime::new(
-            state,
-            view,
-            tokens::WINDOW_SIZE,
-            Env {
-                system_dark: true,
-                scale: 1.0,
-            },
-        );
-        rt.frame(0.0);
-        rt
-    }
 
     #[test]
     fn the_placeholder_panel_is_drawn_inside_the_window() {
@@ -8675,7 +9037,8 @@ mod tests {
                     submenus += 1;
                 }
             }
-            // A waterfall's leaves are rows too: each says something settled about *which* workspace.
+            // A waterfall's leaves are rows too, and each says something settled: the move's name a workspace,
+            // the reset's name what to keep (#240).
             for child in &item.children {
                 let intent = child.intent(&state, pane).unwrap_or_else(|| {
                     panic!(
@@ -8683,18 +9046,32 @@ mod tests {
                         child.label
                     )
                 });
-                assert_eq!(
-                    intent.verb(),
-                    "pane.move",
-                    "a waterfall leaf is `pane.move` and nothing else"
-                );
+                match item.key.as_str() {
+                    "menu-move" => assert_eq!(
+                        intent.verb(),
+                        "pane.move",
+                        "the move's waterfall leaves are `pane.move` and nothing else"
+                    ),
+                    _ => assert!(
+                        matches!(
+                            intent.verb(),
+                            "pane.close_others" | "workspace.close_others"
+                        ),
+                        "the reset's leaves are #166's two verbs, and {:?} is {}",
+                        child.label,
+                        intent.verb()
+                    ),
+                }
                 assert!(
                     !seen.contains(&intent.verb()),
                     "the leaves and the rows must not share a verb: the verbs are the vocabulary, not the menu"
                 );
             }
         }
-        assert_eq!(submenus, 1, "exactly one row opens a second surface");
+        assert_eq!(
+            submenus, 2,
+            "two rows open a second surface: the move's waterfall and the reset's (#140, #240)"
+        );
 
         // Every verb the menu produces is one the vocabulary's own table names, so a renamed intent cannot leave
         // a row pointing at a name nothing answers to.
@@ -8723,9 +9100,16 @@ mod tests {
                 .iter()
                 .map(|item| item.label.as_str())
                 .collect::<Vec<_>>(),
-            vec![MENU_SPLIT, MENU_NEW_WORKSPACE, MENU_RENAME, MENU_MOVE],
-            "the last pane cannot be closed, so the menu does not offer it; the waterfall is there \
-             because the wall has workspaces this pane is not in"
+            vec![
+                MENU_SPLIT,
+                MENU_NEW_WORKSPACE,
+                MENU_RENAME,
+                MENU_MOVE,
+                MENU_CLOSE_OTHERS
+            ],
+            "the last pane cannot be closed, so the menu does not offer it; the two waterfalls are there \
+             because the wall has workspaces this pane is not in, and because the wall's reset is a hand's \
+             control and not only a phone's (#240)"
         );
 
         let tiled = crate::scene::state_for("panes-menu");
@@ -8741,13 +9125,14 @@ mod tests {
                 MENU_NEW_WORKSPACE,
                 MENU_RENAME,
                 MENU_MOVE,
+                MENU_CLOSE_OTHERS,
                 MENU_CLOSE
             ]
         );
         assert_eq!(
             tokens::menu_size(items.len()),
-            (tokens::MENU_WIDTH, tokens::MENU_ROW * 5.0),
-            "five rows, not one row's box clipped"
+            (tokens::MENU_WIDTH, tokens::MENU_ROW * 6.0),
+            "six rows, not one row's box clipped"
         );
         // **The waterfall lists the workspaces this pane is not in**, by name (#140): three by default,
         // so two rows — and the trigger is the only row that opens a second surface.
@@ -9140,10 +9525,12 @@ mod close_all {
                 MENU_NEW_WORKSPACE,
                 MENU_RENAME,
                 MENU_MOVE,
+                MENU_CLOSE_OTHERS,
                 MENU_CLOSE,
                 MENU_CLOSE_ALL
             ],
-            "the destructive rows are last, and the most destructive one after `Close pane`"
+            "the destructive rows are last: the two resets behind their chevron (#240), `Close pane`, and \
+             the one that empties the workspace last of all"
         );
         let row = items.last().expect("the row");
         assert_eq!(row.action, MenuAction::CloseAll);
@@ -9153,9 +9540,13 @@ mod close_all {
             "a row the control plane cannot express is a control a socket cannot reach (#170)"
         );
         // The two verbs on offer answer two different requests, which is what makes two rows honest.
+        let close = items
+            .iter()
+            .find(|item| item.label == MENU_CLOSE)
+            .expect("a pane elsewhere allows `Close pane` too");
         assert_ne!(
             row.intent(&state, pane),
-            items[4].intent(&state, pane),
+            close.intent(&state, pane),
             "`Close all` and `Close pane` are not one press under two names"
         );
     }
@@ -9363,6 +9754,452 @@ mod rename_tests {
             state.pane(id).expect("the pane").title(),
             default_title(id),
             "an unnamed pane still has a title: its own number"
+        );
+    }
+}
+
+/// **The wall can do what it accepts** (#240): every verb the control plane answers is a verb a hand can produce,
+/// or a row in [`REMOTE_ONLY`] with the sentence that says why not.
+///
+/// This is the tripwire the ticket asks for, and it is a table over the vocabulary rather than a list somebody
+/// remembered to update: `control::vocabulary()` is exhaustive by construction (#165's rule), so a new verb
+/// arrives here on the same commit — reached, explained, or red.
+#[cfg(test)]
+mod reach_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    /// The vocabulary's verbs, as the wire names them.
+    fn vocabulary() -> BTreeSet<&'static str> {
+        crate::control::vocabulary()
+            .iter()
+            .map(crate::control::Intent::verb)
+            .collect()
+    }
+
+    /// **Every verb is reached or explained** (#240): a verb in neither table is a control that exists only over
+    /// the socket — a phone can tidy the wall and the operator at the glass cannot.
+    #[test]
+    fn every_verb_is_reached_or_explained() {
+        let known = vocabulary();
+        let reached: BTreeSet<&str> = reaches().into_iter().collect();
+        let remote: BTreeSet<&str> = REMOTE_ONLY.iter().map(|(verb, _)| *verb).collect();
+
+        let mut unaccounted: Vec<&str> = Vec::new();
+        for verb in &known {
+            if !reached.contains(verb) && !remote.contains(verb) {
+                unaccounted.push(verb);
+            }
+        }
+        assert!(
+            unaccounted.is_empty(),
+            "these verbs are in `control::vocabulary()` and in neither `ui::REACHES` nor `ui::REMOTE_ONLY` \
+             (#240): {unaccounted:?} — a control the wall accepts and a hand cannot produce. Build the control, \
+             or add the row that says why a hand cannot"
+        );
+    }
+
+    /// **Every entry names a verb the wall has**, and the two tables do not overlap: an exclusion for a verb
+    /// nothing answers is a reason nobody can act on, and a verb in both is one the test cannot decide about
+    /// (`NOT_PROVOKABLE`'s rule, for the same reason).
+    #[test]
+    fn every_row_names_a_real_verb_once() {
+        let known = vocabulary();
+        for Reach { verb, control } in REACHES {
+            assert!(
+                known.contains(verb),
+                "REACHES lists {verb:?} ({control}), which no intent in the vocabulary declares (#240)"
+            );
+            assert!(
+                !control.trim().is_empty(),
+                "REACHES lists {verb:?} without naming the control that produces it (#240)"
+            );
+        }
+        for (verb, reason) in REMOTE_ONLY {
+            assert!(
+                known.contains(verb),
+                "REMOTE_ONLY excuses {verb:?}, which is not a verb this wall has (#240): the vocabulary moved \
+                 and the reason did not"
+            );
+            assert!(
+                !REACHES.iter().any(|reach| reach.verb == *verb),
+                "{verb:?} is in both REACHES and REMOTE_ONLY (#240): a verb the glass produces and cannot is \
+                 a reason that shadows a control"
+            );
+            assert!(
+                reason.split_whitespace().count() >= 5,
+                "REMOTE_ONLY's reason for {verb:?} is {reason:?}, which is not a sentence about what makes the \
+                 verb impossible by hand (#240)"
+            );
+        }
+    }
+
+    /// **The card's one control is `object.follow`** (#240, #169): the row says `Follow` on a pane that is not
+    /// locked onto the hull, `Stop following` on one that is, and both presses are the same verb through the door.
+    /// Without the second the control is a one-way door, which is half a control.
+    #[test]
+    fn the_card_follows_a_hull_and_lets_it_go_through_the_door() {
+        let mut rt = frame_once(crate::scene::state_for("card-open"));
+        let pane = rt.state.focused();
+        let unit = rt
+            .state
+            .selected_in(pane)
+            .expect("the scene selects a hull, so it has a card");
+        let label = |rt: &rune::Runtime<State>| {
+            rt.elements()
+                .iter()
+                .find(|element| element.key.as_deref() == Some("card-follow-label"))
+                .and_then(|element| element.text.clone())
+        };
+        assert!(
+            rt.find("card-follow").is_some(),
+            "the card's one control is drawn where the hull is named"
+        );
+        assert_eq!(
+            label(&rt).as_deref(),
+            Some(unitcard::FOLLOW),
+            "a pane that is not following offers to"
+        );
+
+        // The press, the way an operator makes one: the row's own point, pressed and released.
+        let (x, y) = rt.find("card-follow").expect("the row");
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        assert_eq!(
+            rt.state.pane(pane).and_then(|pane| pane.follow),
+            Some(unit),
+            "a press on `Follow` is `object.follow {{ unit: {unit} }}` (#240)"
+        );
+        assert_eq!(
+            label(&rt).as_deref(),
+            Some(unitcard::STOP_FOLLOWING),
+            "and the row says what the next press does"
+        );
+
+        // `object.follow` with `unit: null` is the release, so the same row lets go.
+        let (x, y) = rt.find("card-follow").expect("the row");
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        assert_eq!(
+            rt.state.pane(pane).and_then(|pane| pane.follow),
+            None,
+            "a control that cannot be un-pressed is half a control (#240)"
+        );
+        assert_eq!(label(&rt).as_deref(), Some(unitcard::FOLLOW));
+    }
+
+    /// **`object.follow` is offered where it can be done** (#240, #169): a tree's post has a card and draws no map,
+    /// so its card carries no follow row — a control that is refused every time is a button the operator learns to
+    /// distrust. The map pane beside it offers the same verb the socket has.
+    #[test]
+    fn only_a_map_panes_card_offers_a_follow() {
+        let state = crate::scene::state_for("pane-tree");
+        let tree = state.focused();
+        let map = state
+            .panes()
+            .iter()
+            .find(|pane| pane.content.is_map())
+            .map(|pane| pane.id)
+            .expect("the scene puts a map beside the tree");
+        let hull = crate::scene::CARD_UNIT;
+
+        // A frame first, so the layout pass has given each pane the frame its markers project against: a card is
+        // drawn beside a **placed** marker, and a scene's first frame is where the frames come from (`INV-04`).
+        let mut rt = frame_once(crate::scene::state_for("pane-tree"));
+        rt.state.select_in(tree, hull);
+        rt.frame(0.0);
+        assert!(
+            rt.find("card").is_some(),
+            "a post that is a hull still draws the hull's card"
+        );
+        assert!(
+            rt.find("card-follow").is_none(),
+            "a tree pane draws no map, so `object.follow` there is refused: the card offers no row that \
+             cannot be pressed (#240)"
+        );
+
+        let mut rt = frame_once(crate::scene::state_for("pane-tree"));
+        rt.state.select_in(map, hull);
+        rt.frame(0.0);
+        assert!(
+            rt.find("card-follow").is_some(),
+            "the map pane beside it offers the verb the socket has"
+        );
+    }
+
+    /// **No verb is listed twice** — a duplicate is a row nobody reads the second copy of, and the count is the
+    /// only thing that would notice it.
+    #[test]
+    fn the_table_names_each_verb_once() {
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        for reach in REACHES {
+            assert!(
+                seen.insert(reach.verb),
+                "REACHES lists {} twice (#240)",
+                reach.verb
+            );
+        }
+        assert_eq!(
+            seen.len() + REMOTE_ONLY.len(),
+            crate::control::vocabulary().len(),
+            "the two tables are the vocabulary (#240): a verb is reached, or it is explained"
+        );
+    }
+}
+
+/// **The pane menu's own rows** (#240): the wall's two resets are controls at the glass, and every row a menu
+/// offers is a verb the glass lists.
+///
+/// The tripwire the ticket asks for lives here as well as in `reach_tests`: the table over the vocabulary cannot
+/// see *which* control produces a verb, so a row added without its verb in `REACHES` is caught by comparing the
+/// menu's own list with the table. A menu row that builds an intent `reaches()` does not list is a row nobody can
+/// find.
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+
+    /// The waterfall of everything-but-this pane: `Close others > Close other panes` and `> Close other
+    /// workspaces`, in that order, on the wall that has something to close.
+    #[test]
+    fn the_two_reset_rows_build_the_two_intents() {
+        let state = crate::scene::state_for("panes-menu");
+        let pane = state.focused();
+        let items = crate::ui::menu_items(&state, pane);
+        let row = items
+            .iter()
+            .find(|item| item.label == MENU_CLOSE_OTHERS)
+            .expect("the menu offers the wall's reset");
+        assert_eq!(
+            row.children
+                .iter()
+                .map(|child| child.label.as_str())
+                .collect::<Vec<_>>(),
+            vec![MENU_CLOSE_OTHER_PANES, MENU_CLOSE_OTHER_WORKSPACES],
+            "close the panes beside this one first, then the workspaces: the smaller reset is the nearer one"
+        );
+        assert_eq!(
+            row.children
+                .iter()
+                .map(|child| child.intent(&state, pane))
+                .collect::<Vec<_>>(),
+            vec![
+                Some(Intent::CloseOtherPanes),
+                Some(Intent::CloseOtherWorkspaces)
+            ],
+            "each leaf is #166's own verb, not a second spelling of closing a pane (#240)"
+        );
+        assert_eq!(row.action, MenuAction::Submenu("menu-close-others"));
+        assert!(
+            menu_key("menu-close-others").is_some(),
+            "a row a menu can open is a key a scene can name (#201)"
+        );
+        // The words are constants, so the row, the test and the documentation cannot drift apart.
+        assert_eq!(
+            row.children[0].label, MENU_CLOSE_OTHER_PANES,
+            "the leaf reads as the verb it sends"
+        );
+    }
+
+    /// **Every row the menu offers is a verb the glass lists** (#240) — the ticket's falsifier: a row that builds
+    /// an intent `reaches()` does not list is a control an operator can press and the reach table does not know
+    /// about, which is the drift the table exists to prevent.
+    #[test]
+    fn every_menu_row_is_a_verb_the_glass_lists() {
+        let state = crate::scene::state_for("panes-menu");
+        let pane = state.focused();
+        let reached = crate::ui::reaches();
+        let mut rows = 0;
+        for item in crate::ui::menu_items(&state, pane) {
+            for row in std::iter::once(&item).chain(item.children.iter()) {
+                let Some(intent) = row.intent(&state, pane) else {
+                    continue;
+                };
+                rows += 1;
+                assert!(
+                    reached.contains(&intent.verb()),
+                    "the menu's row {:?} sends {}, which `ui::REACHES` does not list (#240): a click the wall \
+                     accepts and the table of the glass's verbs does not have",
+                    row.label,
+                    intent.verb()
+                );
+            }
+        }
+        assert!(
+            rows >= 4,
+            "the scan found {rows} rows, so it is not reading the menu"
+        );
+    }
+}
+
+/// **The settings sheet's rows** (#82, #240): what the sheet offers, what a press on a row means, and the two rows
+/// #240 added — the door onto pairing and the `Forget` that revokes one phone.
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+    use crate::config::devices::{Device, Devices};
+    use rune::Runtime;
+
+    /// A wall with `names` paired, in memory only: a test may not write this machine's `devices.toml` (`INV-11`).
+    fn wall_with(names: &[&str]) -> State {
+        let mut state = crate::scene::state_for("settings");
+        state.headless = true;
+        let mut devices = Devices::default();
+        for name in names {
+            devices.append(Device {
+                name: (*name).to_string(),
+                // A hash, never a key: a fixed one, because a test that drew on the machine's entropy would be a
+                // test that can fail for a reason nobody can see (`INV-11`'s rule for files).
+                key: "0".repeat(64),
+                paired_at: "2026-01-01T00:00:00Z".to_string(),
+            });
+        }
+        state.devices = devices;
+        state
+    }
+
+    /// A press on a row, the way an operator makes one: the point the layout gave the row, pressed and released.
+    fn press(rt: &mut Runtime<State>, key: &str) {
+        let (x, y) = rt
+            .find(key)
+            .unwrap_or_else(|| panic!("no row keyed {key:?} is on the wall"));
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        // The wall answers on the frame: Rune runs a handler while it draws, which is why a press that changed
+        // nothing but the state would otherwise read as a press that reached nothing (#80's rule).
+        rt.frame(0.0);
+    }
+
+    /// **A wall with no phones says so**, and a wall with two lists two: the row list is the wall's own answer, and
+    /// the sheet's box is as tall as it (#240).
+    #[test]
+    fn the_sheet_is_a_pair_row_and_one_row_per_phone() {
+        assert_eq!(
+            settings_rows(&wall_with(&[])),
+            vec![
+                SettingRow::Gaps { on: false },
+                SettingRow::Pair,
+                SettingRow::NoDevices,
+                SettingRow::Close
+            ],
+            "a wall nobody has paired with says so in words, rather than drawing a list that is not there"
+        );
+        let two = wall_with(&["phone", "tablet"]);
+        assert_eq!(
+            settings_rows(&two),
+            vec![
+                SettingRow::Gaps { on: false },
+                SettingRow::Pair,
+                SettingRow::Device("phone".to_string()),
+                SettingRow::Device("tablet".to_string()),
+                SettingRow::Close
+            ],
+            "one row per phone, in the order they paired — the order `devices.toml` keeps"
+        );
+        // As tall as its rows, one row at a time: a sheet sized for one setting clips the second (#81, #240).
+        assert_ne!(
+            tokens::settings_size(settings_rows(&two).len()),
+            tokens::settings_size(settings_rows(&wall_with(&[])).len()),
+            "two phones take more of the wall than none"
+        );
+    }
+
+    /// **Every row that is a verb is a verb the glass lists** (#240), and every one of them is in the vocabulary:
+    /// the `MenuItem::intent` rule, at the other surface #240 opens.
+    #[test]
+    fn every_settings_row_that_is_a_verb_is_one_the_glass_lists() {
+        let state = wall_with(&["phone"]);
+        let known: Vec<&'static str> = crate::control::vocabulary()
+            .iter()
+            .map(crate::control::Intent::verb)
+            .collect();
+        let reached = crate::ui::reaches();
+        let mut verbs = 0;
+        for row in settings_rows(&state) {
+            let Some(intent) = row.intent() else {
+                continue;
+            };
+            verbs += 1;
+            assert!(
+                known.contains(&intent.verb()),
+                "the settings row {:?} sends {}, which no intent in the vocabulary declares (#240)",
+                row.key(),
+                intent.verb()
+            );
+            assert!(
+                reached.contains(&intent.verb()),
+                "the settings row {:?} sends {}, which `ui::REACHES` does not list (#240)",
+                row.key(),
+                intent.verb()
+            );
+        }
+        assert_eq!(
+            verbs, 3,
+            "the pair row, the phone's Forget, and the way out"
+        );
+        // And the pairing row's verb is the one #194 named, so the row cannot be a second way into pairing.
+        assert_eq!(
+            SettingRow::Pair.intent().map(|intent| intent.verb()),
+            Some("pair.begin")
+        );
+        assert_eq!(
+            SettingRow::Device("phone".to_string())
+                .intent()
+                .map(|intent| intent.verb()),
+            Some("pair.forget")
+        );
+    }
+
+    /// **A press on `Pair a phone` draws the code** (#194, #240): the row goes through `control::apply`, the wall
+    /// has a live code, and the sheet gives it the wall — a code is a picture for the room, not a row under a
+    /// setting.
+    #[test]
+    fn pressing_the_pair_row_puts_a_code_on_the_wall() {
+        let mut rt = frame_once(wall_with(&[]));
+        assert!(
+            rt.find("setting-pair").is_some(),
+            "the sheet offers the door onto pairing"
+        );
+        assert!(
+            rt.state.pairing().is_none(),
+            "no code is drawn until somebody asks for one"
+        );
+        press(&mut rt, "setting-pair");
+        assert!(
+            rt.state.pairing().is_some(),
+            "a press on `Pair a phone` is `pair.begin` (#240)"
+        );
+        assert!(
+            !rt.state.settings_open(),
+            "the code takes the wall: two surfaces where the room reads six digits is one too many"
+        );
+        rt.frame(0.0);
+        assert!(
+            rt.find("pairing-code").is_some(),
+            "and the digits are drawn where two people in the room can read them"
+        );
+    }
+
+    /// **A press on `Forget` revokes the phone it names, and only that phone** (#194, #240): the row carries the
+    /// name, so a hand at the glass can revoke what a hand at the glass can see.
+    #[test]
+    fn pressing_forget_revokes_the_phone_it_names_and_not_its_neighbour() {
+        let mut rt = frame_once(wall_with(&["phone", "tablet"]));
+        assert!(
+            rt.find("setting-device-phone").is_some(),
+            "each paired phone is a row of its own"
+        );
+        press(&mut rt, "setting-device-phone");
+        assert_eq!(
+            rt.state.devices().names(),
+            vec!["tablet"],
+            "the row revoked the phone it names; a `Forget` that took the list would take its neighbour too"
+        );
+        rt.frame(0.0);
+        assert!(
+            rt.find("setting-device-phone").is_none(),
+            "and the row is gone from the sheet in the frame that answered"
         );
     }
 }

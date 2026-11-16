@@ -139,6 +139,26 @@ rule's own name, because an intent is a settled change and not a prefix of one.
 workspace with nothing where the operator's panes were, and the wall's own menu is where a reset is asked for
 deliberately. The verb is on the wire for a client that means it; that screen does not put it under a thumb.
 
+### The glass has every one of them, or a reason it cannot
+
+**A verb only a socket can send is a bug, not a feature** (#240): a phone that can tidy a wall the operator at the
+glass cannot, or a `ctl` that can follow a hull while the wall's own card cannot, is the same failure one layer
+down from "a glyph nobody can name is a button nobody presses".
+
+`ui::REACHES` is every verb a hand at the wall can produce, each with the control that produces it, and
+`ui::REMOTE_ONLY` is the difference — one row per verb with the sentence that says what about a hand makes it
+impossible: `pane.split` (a hand splits the pane it is in, and the menu sends `pane.split_at` — the water the
+pointer clicked), the three `cursor.*` verbs (the wall's pointer is the wall's own hand), and `pair.claim` (a phone
+claims the code; a wall that could type its own could pair itself, `INV-08`). `cargo test ui::reach` holds the two
+tables against `control::vocabulary()` in both directions, `cargo test ui::menu` and `cargo test ui::settings` hold
+the menu's rows and the sheet's rows against them, and the card's own button is in the first of those — so a control
+added without its verb, or a verb in neither table, is red rather than silently remote.
+
+The five that were missing until #240, and where they went: `pane.close_others` and `workspace.close_others` are
+the pane menu's `Close others >` waterfall, `object.follow` is the card's `Follow` / `Stop following` (a control
+that cannot be un-pressed is half a control, so the release is the same row), and `pair.begin` / `pair.forget` are
+the settings sheet's `Pair a phone` and a `Forget` beside each row of `devices.toml`.
+
 ### Field shapes
 
 | field | shape | example |
