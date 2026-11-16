@@ -1,6 +1,6 @@
 //! **Doc drift** — claims that can be checked are checked, so they do not age silently.
 //!
-//! Four claims, each of which has been true-by-prose in other projects and false-by-code within a
+//! Five claims, each of which has been true-by-prose in other projects and false-by-code within a
 //! month:
 //!
 //! 1. **Rune is pinned to a rev, and ADR-0001 quotes the same one.** A bump is a deliberate commit,
@@ -12,6 +12,9 @@
 //! 4. **ADR-0005's socket is `src/control.rs`'s socket** (#171): the name, the mode and the protocol
 //!    version a client is told are the ones the code defines. This is the one wire a document is
 //!    most tempted to invent in a different shape from the code's.
+//! 5. **ADR-0008 names the protocol the phone speaks, the corpus that holds it, and every framework it
+//!    rejects** (#223). A framework decision is the document most likely to age silently, so its
+//!    falsifier — *an ADR that recommends a framework without naming the rejected one* — is a test.
 //!
 //! Plus the gate's own claim: CI runs `scripts/verify.sh` and never its individual parts.
 
@@ -939,5 +942,81 @@ fn the_control_plane_adr_quotes_the_wire_the_code_uses() {
     assert!(
         source.contains("docs/adr/0005-control-plane.md"),
         "src/control.rs must name the ADR that is its prose (#171)"
+    );
+}
+
+/// **ADR-0008 names the protocol the phone speaks, the corpus that holds it, and every framework it rejects**
+/// (#223).
+///
+/// A framework ADR is the document most likely to age silently: the framework changes, or the reason given for it
+/// stops being true, and the prose keeps its authority. Two of these claims are about the code (`PROTOCOL`, the
+/// corpus's existence), which is what makes the rest checkable — and three are about the ADR's own falsifier, which
+/// the ticket states outright: *an ADR that recommends a framework without naming the rejected one*.
+#[test]
+fn the_phone_adr_names_the_protocol_the_corpus_and_the_frameworks_it_rejects() {
+    use arcons_cc::control::PROTOCOL;
+
+    let adr = read("docs/adr/0008-the-phones-framework.md");
+
+    // 1. The version a phone is told, as the code defines it. A phone with the wrong number is not a client.
+    assert!(
+        adr.contains(&format!("\"v\": {PROTOCOL}")),
+        "docs/adr/0008-the-phones-framework.md must quote the protocol version the code speaks \
+         (\"v\": {PROTOCOL}, src/control.rs): a phone's first read carries it"
+    );
+
+    // 2. The corpus is the contract, so the ADR has to point at the file that exists and the script that replays it.
+    for path in [
+        "fixtures/control/session.jsonl",
+        "fixtures/control/tiling/",
+        "scripts/conformance.sh",
+    ] {
+        assert!(
+            adr.contains(path),
+            "docs/adr/0008-the-phones-framework.md does not name {path}: decision 3 is that the wire is the \
+             contract, and a contract has an address"
+        );
+        assert!(
+            root().join(path).exists(),
+            "docs/adr/0008-the-phones-framework.md names {path}, which is not on disk: the phone's contract \
+             moved and the ADR did not (#223)"
+        );
+    }
+
+    // 3. Every alternative, named — the ticket's own falsifier, and the reason the rejection is worth reading.
+    for rejected in [
+        "Rune",
+        "egui",
+        "Slint",
+        "Makepad",
+        "Compose Multiplatform",
+        "SwiftUI",
+        "progressive web app",
+    ] {
+        assert!(
+            adr.contains(rejected),
+            "docs/adr/0008-the-phones-framework.md does not name {rejected}, which is rejected by decision: an \
+             ADR that recommends a framework without naming the rejected one is the falsifier #223 names"
+        );
+    }
+
+    // 4. The one thing the ADR says is not negotiable: where the device key lives.
+    for store in ["Keystore", "Keychain"] {
+        assert!(
+            adr.contains(store),
+            "docs/adr/0008-the-phones-framework.md does not say the key lives in {store} (decision 4): \
+             `pair.claim` hands a phone a key once, and this is the only place it can live"
+        );
+    }
+
+    // 5. The framework it took, and the escape hatch's shape — a second UI must stay a defect, not a preference.
+    assert!(
+        adr.contains("Flutter"),
+        "the ADR must name the framework this repository chose (#223)"
+    );
+    assert!(
+        adr.contains("a second UI is a second vocabulary"),
+        "docs/adr/0008-the-phones-framework.md must keep the rule that a screen moving to SwiftUI for polish \
+         repeals the decision: it is `mobile-ui.md`'s rule too, said where the framework is chosen"
     );
 }
