@@ -1990,6 +1990,65 @@ impl State {
         Some(closed)
     }
 
+    /// **May the workspace on screen be emptied?** (#241) — yes when the wall holds a pane somewhere else, because
+    /// then #141's rule keeps the wall's last one and this workspace's panes are its own to close.
+    ///
+    /// It is [`State::close_all_panes`]'s precondition and the half of the menu row's that the action owns; the row is
+    /// narrower by one pane ([`State::offers_close_all`]), because a workspace that holds one pane is already emptied
+    /// by the `Close pane` row beside it.
+    pub fn can_empty_workspace(&self) -> bool {
+        self.workspaces
+            .iter()
+            .enumerate()
+            .any(|(index, workspace)| index != self.active && !workspace.panes.is_empty())
+    }
+
+    /// **Is `Close all panes` worth a row?** (#241) — where pressing it would change the wall **and** would change
+    /// more than the rows already there. Two panes to clear, and a pane elsewhere so the one with the keys goes too:
+    /// one pane here is what `Close pane` already does, and every pane on the wall is what the wall refuses (#141).
+    ///
+    /// The menu's own rule is #81's — a row that does nothing is a row the operator learns to distrust — and the
+    /// ticket's cost is the other half of it: two rows that differ by one pane is a question nobody can answer from a
+    /// menu, so the row is drawn only where the difference is visible as *which panes are gone*.
+    pub fn offers_close_all(&self) -> bool {
+        self.active().panes.len() > 1 && self.can_empty_workspace()
+    }
+
+    /// **Close every pane in the workspace on screen** (#241).
+    ///
+    /// One at a time, through [`State::close_pane`]: the refusal, the map thread's join, the surface that was on the
+    /// pane and the cadence are that function's, so a bulk shortcut cannot be a second copy of all four. The workspace
+    /// is left **empty and on the chips** with `No panes yet.` where the water was (#141), and the wall lands on the
+    /// nearest previous workspace that still has a pane.
+    ///
+    /// **The wall's last pane is the one thing this cannot do** (#141), and the refusal is the request's, not a
+    /// pane's: where the workspace on screen holds every pane the wall has, closing them all is closing the wall, so
+    /// `None` answers "no" **whole** — half a reset is a wall nobody asked for. An empty workspace is already the
+    /// answer, so it is `Some(0)` rather than a refusal.
+    pub fn close_all_panes(&mut self) -> Option<usize> {
+        let here = self.active;
+        let doomed: Vec<ViewId> = self
+            .workspaces
+            .get(here)
+            .map(|workspace| workspace.panes.iter().map(|pane| pane.id).collect())
+            .unwrap_or_default();
+        if doomed.is_empty() {
+            return Some(0);
+        }
+        // **An intent is a settled change**: the rule is asked before the first pane goes, so a refusal leaves the
+        // wall it found rather than one with two panes missing and the third still there.
+        if !self.can_empty_workspace() {
+            return None;
+        }
+        let mut closed = 0;
+        for id in doomed {
+            if self.close_pane(id) {
+                closed += 1;
+            }
+        }
+        Some(closed)
+    }
+
     /// **Close every workspace but the one on screen** (#166).
     ///
     /// The active workspace is never closed and never emptied: a client that has read the wall knows which one it is
@@ -4387,6 +4446,7 @@ impl MenuItem {
             MenuAction::NewWorkspace => Intent::SplitToWorkspace(pane),
             MenuAction::Rename => Intent::BeginRename(RenameTarget::Pane(pane)),
             MenuAction::Close => Intent::ClosePane(pane),
+            MenuAction::CloseAll => Intent::CloseAllPanes,
             MenuAction::MoveTo(target) => Intent::MovePane {
                 pane,
                 workspace: target,
@@ -4456,6 +4516,16 @@ pub fn menu_items(state: &State, pane: ViewId) -> Vec<MenuItem> {
     if state.can_close(pane) {
         items.push(MenuItem::leaf(MENU_CLOSE, "menu-close", MenuAction::Close));
     }
+    // **`Close all panes` only where it differs from the rows above** (#241): the workspace on screen holds more than
+    // one pane, and a pane elsewhere on the wall keeps the wall's last one — so pressing it closes the pane with the
+    // keys too, which neither `Close pane` nor `Close others` (#166) does on this wall.
+    if state.offers_close_all() {
+        items.push(MenuItem::leaf(
+            MENU_CLOSE_ALL,
+            "menu-close-all",
+            MenuAction::CloseAll,
+        ));
+    }
     items
 }
 
@@ -4487,6 +4557,9 @@ pub const MENU_NEW_WORKSPACE: &str = "Focus on new workspace";
 pub const MENU_MOVE: &str = "Move to workspace";
 pub const MENU_RENAME: &str = "Name this pane…";
 pub const MENU_CLOSE: &str = "Close pane";
+/// **Empty this workspace on the wall's chips** (#241) — the row that goes one pane further than `Close pane` and
+/// one workspace further than a reset that keeps the pane with the keys (#166).
+pub const MENU_CLOSE_ALL: &str = "Close all panes";
 
 /// **Every row key a menu can open, as a literal** (#140, #201).
 ///
@@ -4494,12 +4567,13 @@ pub const MENU_CLOSE: &str = "Close pane";
 /// carries it as text, so it needs the literal back. A key with an index in it (`menu-move-2`, one per workspace)
 /// is deliberately absent: reopening a waterfall from a scene would be a scene inventing which workspace it means,
 /// so a scene that names one opens the first surface instead, and a test keeps this list in step with the rows.
-pub const MENU_KEYS: [&str; 5] = [
+pub const MENU_KEYS: [&str; 6] = [
     "menu-split",
     "menu-new-workspace",
     "menu-rename",
     "menu-move",
     "menu-close",
+    "menu-close-all",
 ];
 
 /// The literal a scene's row key names, or `None` for a name the wall does not have.
@@ -4514,6 +4588,8 @@ pub enum MenuAction {
     NewWorkspace,
     Rename,
     Close,
+    /// **Empty the workspace on screen** (#241): every pane in it goes, and the emptied workspace keeps its chip.
+    CloseAll,
     /// Move this pane to the workspace at that index.
     MoveTo(usize),
     /// A row with a second surface: its children draw beside it, and this is the key that opens them.
@@ -8963,6 +9039,176 @@ mod workspace_close_tests {
         assert!(state.menu().is_none(), "the menu closed with its pane");
         assert!(state.maximised().is_none(), "and nothing is maximised");
         assert_eq!(state.pane_count(), 1);
+    }
+}
+
+/// **`Close all panes` and the state behind it** (#241): the menu row, the predicate it is drawn from, and the one
+/// reset the wall refuses.
+///
+/// The menu's own rule is #81's — a row that does nothing is a row the operator learns to distrust — and this verb
+/// adds one clause to it: the row is drawn only where pressing it would change the wall **and** where it would
+/// change more than `Close others` (#166), because two rows that differ by one pane is a question nobody can answer
+/// from a menu. That is why `can_empty_workspace` and `offers_close_all` are two answers and not one: the action
+/// needs a wall that keeps a pane after it, and the row needs two panes to clear *and* a pane elsewhere.
+#[cfg(test)]
+mod close_all {
+    use super::*;
+
+    /// A wall with panes in **two workspaces**: workspace 1 holds two panes, workspace 2 holds one, and workspace 1
+    /// is on screen with the keys on its second pane.
+    fn two_workspaces() -> (State, ViewId, ViewId, ViewId) {
+        let mut state = State::default();
+        let first = state.focused();
+        let second = state
+            .split_pane_as(first, Camera::START, PaneContent::Map)
+            .expect("a second pane");
+        let third = state
+            .split_pane_as(first, Camera::START, PaneContent::Map)
+            .expect("a third pane");
+        assert!(crate::ui::move_pane_to(&mut state, third, 1));
+        assert!(state.switch_to(0));
+        state.focus_pane(second);
+        (state, first, second, third)
+    }
+
+    /// **Closing every pane in the workspace on screen** empties it and nothing else: the other workspace keeps its
+    /// pane and its chip row entry, and the wall lands where #141 says an emptied workspace leaves it.
+    #[test]
+    fn closing_all_panes_empties_the_workspace_on_screen_only() {
+        let (mut state, first, second, third) = two_workspaces();
+        assert_eq!(state.workspaces[0].panes.len(), 2);
+        assert_eq!(state.close_all_panes(), Some(2), "both panes went");
+        assert!(state.pane(first).is_none() && state.pane(second).is_none());
+        assert!(
+            state.pane(third).is_some(),
+            "the wall's last pane is not this workspace's"
+        );
+        assert_eq!(
+            state.active, 1,
+            "the nearest previous workspace with a pane"
+        );
+        assert_eq!(state.focused(), third);
+        assert_eq!(
+            state.workspaces.len(),
+            3,
+            "the emptied workspace keeps its chip"
+        );
+    }
+
+    /// **The wall's last pane is refused** (#141): a workspace that holds every pane the wall has cannot be emptied,
+    /// and the answer is the rule's name rather than a half-done close — including the case where the only pane is
+    /// the lone one.
+    #[test]
+    fn emptying_a_workspace_that_holds_every_pane_is_refused() {
+        let mut state = State::default();
+        let first = state.focused();
+        let second = state
+            .split_pane_as(first, Camera::START, PaneContent::Map)
+            .expect("a second pane");
+        assert!(state.workspaces[1..].iter().all(|w| w.panes.is_empty()));
+        assert!(!state.can_empty_workspace());
+        assert_eq!(
+            state.close_all_panes(),
+            None,
+            "two panes, and closing both would leave the wall with nothing"
+        );
+        assert_eq!(state.pane_count(), 2, "a refusal is not half-applied");
+        assert!(state.pane(first).is_some() && state.pane(second).is_some());
+    }
+
+    /// **A pane elsewhere is what allows it** — the same shape #141 gives `Close pane`, one verb out.
+    #[test]
+    fn a_pane_on_another_workspace_allows_the_workspace_to_be_emptied() {
+        let (state, ..) = two_workspaces();
+        assert!(state.can_empty_workspace());
+        assert!(state.offers_close_all());
+    }
+
+    /// **The row is drawn where it would differ from `Close others`** (#241): two rows that differ by one pane, and
+    /// a table saying when each is worth a row — the pane with the keys goes too because the wall's last pane is
+    /// somewhere else.
+    #[test]
+    fn the_menu_offers_close_all_where_it_differs_from_close_others() {
+        let (state, _first, _second, _third) = two_workspaces();
+        let pane = state.focused();
+        let items = menu_items(&state, pane);
+        let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                MENU_SPLIT,
+                MENU_NEW_WORKSPACE,
+                MENU_RENAME,
+                MENU_MOVE,
+                MENU_CLOSE,
+                MENU_CLOSE_ALL
+            ],
+            "the destructive rows are last, and the most destructive one after `Close pane`"
+        );
+        let row = items.last().expect("the row");
+        assert_eq!(row.action, MenuAction::CloseAll);
+        assert_eq!(
+            row.intent(&state, pane).map(|intent| intent.verb()),
+            Some("pane.close_all"),
+            "a row the control plane cannot express is a control a socket cannot reach (#170)"
+        );
+        // The two verbs on offer answer two different requests, which is what makes two rows honest.
+        assert_ne!(
+            row.intent(&state, pane),
+            items[4].intent(&state, pane),
+            "`Close all` and `Close pane` are not one press under two names"
+        );
+    }
+
+    /// **Not drawn where the wall holds every pane** (#241, #141): the verb would be refused, and the two rows would
+    /// close the same panes — so neither the refusal nor the second name is offered. `panes-menu` is that wall.
+    #[test]
+    fn the_menu_does_not_offer_close_all_where_the_wall_holds_every_pane() {
+        let state = crate::scene::state_for("panes-menu");
+        let pane = state.focused();
+        assert!(state.pane_count() > 1, "the scene tiles more than one pane");
+        assert!(
+            state.workspaces[1..].iter().all(|w| w.panes.is_empty()),
+            "and every one of them is in the workspace on screen"
+        );
+        assert!(state.can_close(pane), "`Close pane` is still offered");
+        assert!(
+            !state.offers_close_all(),
+            "`Close all` is refused here, and refusing a row is a row that does nothing"
+        );
+        assert!(
+            menu_items(&state, pane)
+                .iter()
+                .all(|item| item.label != MENU_CLOSE_ALL),
+            "so the row is not built"
+        );
+    }
+
+    /// **Not drawn where `Close pane` already empties the workspace** (#241): a workspace with one pane and a pane
+    /// elsewhere closes to the same wall whichever row is pressed, so the second name is not offered — the menu's
+    /// rule, one step further than "a row that does nothing".
+    #[test]
+    fn the_menu_does_not_offer_close_all_where_close_pane_already_empties_it() {
+        let (mut state, first, second, _third) = two_workspaces();
+        // The first pane of workspace 1 goes next door, leaving that workspace with one pane — `second`.
+        assert!(crate::ui::move_pane_to(&mut state, first, 1));
+        assert!(state.switch_to(0));
+        assert_eq!(state.focused(), second, "the pane that stayed has the keys");
+        assert_eq!(state.workspaces[0].panes.len(), 1);
+        assert!(state.can_close(second), "a pane elsewhere allows the close");
+        assert!(
+            state.can_empty_workspace(),
+            "and it allows the empty workspace too"
+        );
+        assert!(
+            !state.offers_close_all(),
+            "but `Close pane` on this wall is the same press"
+        );
+        assert!(
+            menu_items(&state, second)
+                .iter()
+                .all(|item| item.label != MENU_CLOSE_ALL)
+        );
     }
 }
 

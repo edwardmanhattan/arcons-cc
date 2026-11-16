@@ -214,6 +214,12 @@ pub fn exchanges() -> Vec<Request> {
         ),
         // ---- workspaces: a pane of its own, a new empty one, and a pane carried into it (#138, #140)
         send(json!({ "v": 1, "intent": { "verb": "workspace.from_pane", "pane": 1 } })),
+        // ---- **the workspace on screen emptied on purpose** (#241): the workspace `from_pane` just made holds one
+        // pane and the wall holds others, so `pane.close_all` closes it and #141 lands the wall on the nearest
+        // previous workspace with a pane. The read is the claim: the emptied workspace is still in the list, with
+        // `empty: true`, which is the state this verb exists to let a client ask for.
+        send(json!({ "v": 1, "intent": { "verb": "pane.close_all" } })),
+        send(json!({ "v": 1, "read": "wall" })),
         send(json!({ "v": 1, "intent": { "verb": "workspace.new" } })),
         send(json!({ "v": 1, "intent": { "verb": "pane.close_others" } })),
         send(json!({ "v": 1, "intent": { "verb": "pane.move", "pane": 4, "workspace": 4 } })),
@@ -262,6 +268,9 @@ pub fn exchanges() -> Vec<Request> {
         send(json!({ "v": 1, "intent": { "verb": "pane.close_others" } })),
         send(json!({ "v": 1, "intent": { "verb": "workspace.close_others" } })),
         send(json!({ "v": 1, "intent": { "verb": "pane.close", "pane": 2 } })),
+        // ---- and the same rule on the verb that asks for the whole workspace at once (#241): the wall's last pane
+        // is not the workspace's to close, and the refusal names the wall rather than this workspace.
+        send(json!({ "v": 1, "intent": { "verb": "pane.close_all" } })),
         send(json!({ "v": 1, "read": "wall" })),
         // ---- every rule a request can break
         send(json!({ "v": 1, "intent": { "verb": "pane.focus", "pane": 99 } })),
