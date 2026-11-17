@@ -62,7 +62,11 @@ reads before it acts, a connection that comes back knows nothing, and a refusal 
 from its sentence. `cargo test control::client` drives all four over the wall's own session loop — read/act/read, a
 drop that sends nothing it queued, a wall changed by another client and read rather than corrected, and a version the
 wall does not speak, which is a stop and an update rather than a retry. A phone in another room and a loopback pair
-in this process hold the same client to the same rules; that is what makes "a client is a client" a test.
+in this process hold the same client to the same rules; that is what makes "a client is a client" a test. **The phone
+is the second copy of those rules** (#250): `clients/phone/lib/client.dart` is the same client over `Carrier` in Dart,
+and `dart test test/client_test.dart` drives the same four claims over a fake carrier — plus the fifth, that a refusal is
+mapped from its `kind` and never from its sentence — in the language the app is written in rather than in a paragraph
+about the Rust one.
 
 ### 2. The wall dials out; a phone never dials the wall
 
