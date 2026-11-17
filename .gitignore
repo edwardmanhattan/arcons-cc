@@ -8,3 +8,7 @@
 /.env
 # The stub is Python, and pycache is a build artefact of a test tool.
 __pycache__/
+
+# The phone package: dependency and analysis caches, never the lockfile — `pubspec.lock` is what
+# makes the phone suite reproducible in CI.
+/clients/phone/.dart_tool/

@@ -205,3 +205,30 @@ jobs:
           name: captures
           path: out/*.png
           if-no-files-found: ignore
+
+  # The phone's own suite (#217, ADR-0008 decision 2 and 3). It is **not** the wall's gate and does not run it: the
+  # two are held together by `fixtures/control/`, which this package reads by path — the same recording
+  # `scripts/verify.sh` replays, read as the client's truth rather than the wall's. No Flutter here on purpose: the
+  # wire, the tiling arithmetic and the client's rules are plain Dart, and a toolchain that a screen needs is not
+  # needed to prove them.
+  phone:
+    name: phone
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: clients/phone
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: dependencies
+        run: dart pub get
+
+      - name: the phone's claims
+        run: |
+          dart analyze --fatal-infos
+          dart test
