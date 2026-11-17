@@ -1,6 +1,6 @@
 # The phone — `clients/phone/`
 
-**A Dart package, and only the wire so far.** It is the phone that shows the wall's arrangement and rearranges it
+**A Dart package, and no screen yet.** It is the phone that shows the wall's arrangement and rearranges it
 (epic [#217](https://github.com/edwardmanhattan/arcons-cc/issues/217)), and the framework decision is
 [ADR-0008](../docs/adr/0008-the-phones-framework.md): **Flutter**, one codebase for both phones.
 
@@ -23,7 +23,9 @@ client's truth rather than the wall's.
 | file | what it is |
 | --- | --- |
 | `lib/wire.dart` | the answers a client acts on: `changed`, a projection, a refusal with one of the four kinds. `src/control/wire.rs` is the encoder and `docs/control.md` the reference; neither is duplicated here |
+| `lib/client.dart` | **a client's rules**, over a `Carrier` of three methods: it reads before it acts, a connection that comes back knows nothing, a wall changed elsewhere is read rather than corrected, and a version it cannot speak is a stop (#250). The wall's own client is `src/control/client.rs` (#197) |
 | `test/corpus_test.dart` | the recording, line by line: every answer parses, every tiling leaf is a pane id the workspace holds, every ratio is inside the wall's clamp, every refusal kind has an action |
+| `test/client_test.dart` | the four rules as four named tests over a fake carrier, and the fifth: **a refusal is mapped from its `kind`, never from its sentence** (#198, #250). No socket, no network, no clock it does not control |
 
 ## What is not here yet, and why
 
@@ -31,8 +33,8 @@ client's truth rather than the wall's.
   image, and not before.
 - **The tiling arithmetic** (#249) — `Layout::cells` ported and proved against the nine cases in
   `fixtures/control/tiling/`.
-- **The client's four rules** (#250) — read before acting, a reconnection that knows nothing, a wall changed elsewhere
-  read rather than corrected, and a version that stops instead of retrying.
+- **A watch** (#221). `lib/client.dart` asks for none and resumes none: `lib/wire.dart` refuses a grant by name until
+  the relay's fixtures type one, so "never resumes a watch" is proved as "never asks for one" here.
 
 ## Rules this package keeps
 
