@@ -19,6 +19,19 @@ from this file, or when a copyleft crate appears in the lockfile unnamed.
 | **Inter**, **IBM Plex Mono** | SIL Open Font License 1.1 | Typefaces bundled with Rune. |
 | **milsymbol** (`spatialillusions/milsymbol`) | MIT — © 2017 Mans Beckman | NATO/APP-6 icon geometry, pinned by the sister project at `f5134380…` v3.0.5. **Not linked or vendored yet**: `docs/research/sheets/wall-symbol-icons.svg` is derived from it (#33), and lifting the module needs this row to stay and the licence text to travel with the copy. |
 
+## The phone's package (`clients/phone/`, Dart)
+
+Not part of the wall and not built into it: the phone is its own program (ADR-0008), and its dependencies are resolved
+by `dart pub` from `clients/phone/pubspec.lock`. The direct ones, all development-only:
+
+| crate | licence | role |
+| --- | --- | --- |
+| `test` | BSD-3-Clause | the test runner (`dart test`) |
+| `lints` | BSD-3-Clause | the analysis rules `dart analyze` enforces |
+
+The transitive set is `pubspec.lock`'s, and none of it ships in the wall. A runtime dependency arrives with the first
+screen, and its row arrives with it.
+
 ## The wall's own dependencies
 
 | crate | licence | role |

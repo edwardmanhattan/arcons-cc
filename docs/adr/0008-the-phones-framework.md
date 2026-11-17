@@ -169,16 +169,20 @@ A screen Flutter cannot make accessible **at all** is SwiftUI, and that is a def
 **a second UI is a second vocabulary**, which is why the first time one screen moves to SwiftUI for polish, this ADR
 is repealed by habit.
 
-## Where the app lives — recorded as the next decision, not taken here
+## Where the app lives — `clients/phone/`, taken in #248
 
-Two shapes, and this ADR does not pick one:
+Two shapes were possible, and the second is rejected by name:
 
-- **`clients/phone/` in this repository.** The corpus is consumed by path, and a fourth CI job (`flutter test` on
-  ubuntu) runs the phone's suite beside the wall's.
-- **Its own repository.** The corpus is vendored or fetched at a pinned tag, which is a second copy of the truth.
+- **`clients/phone/` in this repository** — taken. The corpus is read **by path** (`../../fixtures/control/`), so a
+  change to the wall's wire is a red phone test in the same push, and CI gains a fourth job (`phone`: `dart pub get`,
+  `dart analyze --fatal-infos`, `dart test` on ubuntu) that is *not* the gate and does not run it.
+- **Its own repository** — rejected. It buys nothing and costs the one thing the corpus was built for:
+  `fixtures/control/` is the phone's specification *and* the wall's recording, and a copy of it elsewhere is a second
+  copy of the truth, which can drift while both sides pass.
 
-The recommendation is the first, for the reason the corpus was built here at all: `fixtures/control/` is the phone's
-specification *and* the wall's recording, and a copy of it in another repository is a specification that can drift.
+**The toolchain arrives in two steps, on purpose.** Today the package is plain Dart — the wire, the tiling arithmetic
+and the client's rules are all provable without a UI toolkit, and `dart test` is a two-second command. Flutter enters
+CI with the first golden image, when there is a canvas to render; a screen is the only thing that needs one.
 
 ## Consequences
 
@@ -186,8 +190,9 @@ specification *and* the wall's recording, and a copy of it in another repository
   projection and the watch are the whole interface.
 - **The gate stays Rust.** `scripts/verify.sh` gains nothing and loses nothing; the phone's command is `flutter test`,
   and it is the phone's gate, not the wall's. The two are held together by the corpus, not by a shared test runner.
-- **A toolchain becomes part of the project**: the Flutter SDK pinned for the app, Xcode for iOS builds, the Android SDK
-  for the store. That is a toll on every machine and every CI run, and it is the price of one UI for two phones.
+- **A toolchain becomes part of the project**, in two steps: the Dart SDK for `clients/phone/` today, then the Flutter
+  SDK pinned for the app, Xcode for iOS builds and the Android SDK for the store. That is a toll on every machine and
+  every CI run, and it is the price of one UI for two phones.
 - **`mobile-ui.md` gains one honest sentence**: its controls are drawn, so each one carries its own semantics node, and
   the spoken path in that note is not a fallback.
 

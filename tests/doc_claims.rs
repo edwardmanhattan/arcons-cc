@@ -1020,3 +1020,72 @@ fn the_phone_adr_names_the_protocol_the_corpus_and_the_frameworks_it_rejects() {
          repeals the decision: it is `mobile-ui.md`'s rule too, said where the framework is chosen"
     );
 }
+
+/// **The phone's tree is where ADR-0008 says, and its corpus is the wall's** (#248).
+///
+/// The ADR took the decision that the app lives in this repository, so the path it names is a claim like any other: a
+/// client tree that moved, or a package that reads a copy of the corpus instead of the wall's recording, is the drift
+/// this file exists to catch. The second half is the one that matters — a phone held to its own copy of
+/// `fixtures/control/` would pass while disagreeing with the wall.
+#[test]
+fn the_phone_reads_the_walls_corpus_by_path() {
+    let adr = read("docs/adr/0008-the-phones-framework.md");
+    assert!(
+        adr.contains("clients/phone/"),
+        "docs/adr/0008-the-phones-framework.md does not name where the phone lives: the ADR took that decision (#248) \
+         and a decision a reader cannot find is not one"
+    );
+    for path in ["clients/phone/pubspec.yaml", "clients/phone/lib/wire.dart"] {
+        assert!(
+            root().join(path).exists(),
+            "the ADR says the phone lives in clients/phone/, and {path} is not on disk (#248)"
+        );
+    }
+
+    // It reads the repository's corpus, by the path that leads back out of its own package.
+    let corpus = root().join("fixtures/control/session.jsonl");
+    assert!(
+        corpus.exists(),
+        "fixtures/control/session.jsonl is gone: the phone's spec is the wall's recording"
+    );
+    let suite = read("clients/phone/test/corpus_test.dart");
+    assert!(
+        suite.contains("../../fixtures/control/session.jsonl"),
+        "clients/phone/test/corpus_test.dart does not read ../../fixtures/control/session.jsonl: the phone must be held \
+         to the wall's recording by path, never to a copy of it (#248)"
+    );
+
+    // And no second copy of the recording exists anywhere in the client tree.
+    let copied = walk(&root().join("clients"), &mut Vec::new())
+        .into_iter()
+        .filter(|path| path.file_name().and_then(|name| name.to_str()) == Some("session.jsonl"))
+        .collect::<Vec<_>>();
+    assert!(
+        copied.is_empty(),
+        "the phone has its own copy of the corpus: {copied:?}. The wall's recording is the specification, and a copy \
+         of it is a second truth (#248)"
+    );
+}
+
+/// Every file under `dir`, recursively, excluding build output. Used by the claim above to prove a *copy* is absent.
+fn walk(dir: &Path, into: &mut Vec<PathBuf>) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if name == ".dart_tool" || name == "target" || name == "out" {
+            continue;
+        }
+        if path.is_dir() {
+            walk(&path, into);
+        } else {
+            into.push(path);
+        }
+    }
+    into.clone()
+}
