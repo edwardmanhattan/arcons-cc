@@ -12,3 +12,5 @@ __pycache__/
 # The phone package: dependency and analysis caches, never the lockfile — `pubspec.lock` is what
 # makes the phone suite reproducible in CI.
 /clients/phone/.dart_tool/
+/clients/phone/app/.dart_tool/
+/clients/phone/app/build/

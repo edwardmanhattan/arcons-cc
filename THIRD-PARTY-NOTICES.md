@@ -29,6 +29,14 @@ by `dart pub` from `clients/phone/pubspec.lock`. The direct ones, all developmen
 | `test` | BSD-3-Clause | the test runner (`dart test`) |
 | `lints` | BSD-3-Clause | the analysis rules `dart analyze` enforces |
 
+The screen (`clients/phone/app/`) adds two more, and the Flutter SDK itself is a **toolchain**, not a package linked
+into either program:
+
+| package | licence | role |
+| --- | --- | --- |
+| `material_ui` | BSD-3-Clause | the widget set and the icon catalogue the screen draws with (`mobile-ui.md`) |
+| `flutter_test` | BSD-3-Clause | widget tests and the golden harness (`flutter test`) |
+
 The transitive set is `pubspec.lock`'s, and none of it ships in the wall. A runtime dependency arrives with the first
 screen, and its row arrives with it.
 

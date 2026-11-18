@@ -225,10 +225,23 @@ jobs:
         with:
           sdk: stable
 
-      - name: dependencies
-        run: dart pub get
-
       - name: the phone's claims
         run: |
+          dart pub get
           dart analyze --fatal-infos
           dart test
+
+      # The screen (#255). Flutter arrives here with its first golden and not before: a picture the engine renders on
+      # this runner is a picture that cannot pass by looking plausible in a review. The app depends on the package
+      # above by path, so the wire, the tiling and the client's rules are the same code the job above just proved.
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: the phone's screen
+        working-directory: clients/phone/app
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test

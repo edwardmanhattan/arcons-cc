@@ -1,0 +1,25 @@
+name: arcons_phone_app
+description: >-
+  The phone's screen: the wall's arrangement as a diagram you can press. ADR-0008, epic #217.
+publish_to: none
+version: 0.0.1
+environment:
+  sdk: ^3.14.0
+  flutter: ">=3.50.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # The wire, the tiling arithmetic and the client's rules. One copy, tested without a screen (#248, #249, #250).
+  arcons_phone:
+    path: ../
+  material_ui: ^1.11.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  lints: ^6.0.0
+
+flutter:
+  # The glyphs are the framework's own catalogue (`mobile-ui.md`), which is what this flag makes available.
+  uses-material-design: true

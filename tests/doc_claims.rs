@@ -1064,6 +1064,21 @@ fn the_phone_reads_the_walls_corpus_by_path() {
          to the wall's recording by path, never to a copy of it (#248)"
     );
 
+    // The screen's suite reads the same corpus by the path that leads out of *its* package, and the app is built from
+    // the package beside it rather than from a second copy of the wire (#255).
+    let screen = read("clients/phone/app/test/overview_test.dart");
+    assert!(
+        screen.contains("../../../fixtures/control/session.jsonl"),
+        "clients/phone/app/test/overview_test.dart does not read the corpus by path: the screen must be proved against \
+         the wall's recording, not against a projection a test made up (#255)"
+    );
+    let app = read("clients/phone/app/pubspec.yaml");
+    assert!(
+        app.contains("path: ../"),
+        "clients/phone/app/pubspec.yaml does not depend on `arcons_phone` by path: the app would carry a second copy \
+         of the wire, the tiling and the client's rules (#255)"
+    );
+
     // And no second copy of the recording exists anywhere in the client tree.
     let copied = walk(&root().join("clients"), &mut Vec::new())
         .into_iter()
