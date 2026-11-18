@@ -74,6 +74,9 @@ pub fn to_wire(intent: &Intent) -> Value {
             object.insert("ratio".into(), ratio_json(*ratio));
         }
         Intent::CloseOtherPanes | Intent::CloseAllPanes | Intent::CloseOtherWorkspaces => {}
+        Intent::CloseWorkspace(index) => {
+            object.insert("index".into(), json!(index));
+        }
         Intent::OpenPane(content) => {
             object.insert("content".into(), content_json(content));
         }
@@ -206,6 +209,7 @@ pub fn from_wire(value: &Value) -> Result<Intent, Refused> {
         "pane.close_others" => Intent::CloseOtherPanes,
         "pane.close_all" => Intent::CloseAllPanes,
         "workspace.close_others" => Intent::CloseOtherWorkspaces,
+        "workspace.close" => Intent::CloseWorkspace(integer(object, "index")? as usize),
         "pane.open" => Intent::OpenPane(content(object)?),
         "object.follow" => Intent::Follow {
             pane: pane(object)?,

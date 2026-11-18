@@ -516,6 +516,10 @@ fn surface_of(interaction: &Interaction) -> Surface {
             row: open.map(str::to_string),
             ring: *ring,
         },
+        Interaction::WorkspaceMenu { index, at } => Surface::Workspacemenu {
+            index: *index,
+            at: *at,
+        },
         Interaction::Filtering { pane } => Surface::Filtering { pane: *pane },
         Interaction::Renaming(rename) => Surface::Renaming {
             target: match rename.target {
@@ -548,6 +552,10 @@ fn interaction_of(surface: &Surface) -> Interaction {
             // leaking a string for the life of the process, and a row key is not a value a client may invent.
             open: row.as_deref().and_then(crate::ui::menu_key),
             ring: *ring,
+        },
+        Surface::Workspacemenu { index, at } => Interaction::WorkspaceMenu {
+            index: *index,
+            at: *at,
         },
         Surface::Filtering { pane } => Interaction::Filtering { pane: *pane },
         Surface::Renaming {

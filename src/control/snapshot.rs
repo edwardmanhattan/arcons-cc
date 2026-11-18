@@ -319,6 +319,11 @@ pub enum Surface {
         /// The row the keyboard is on (#164), or `null` when no row has the ring.
         ring: Option<usize>,
     },
+    /// **A workspace chip's menu** (#242), anchored at a point in window points.
+    Workspacemenu {
+        index: usize,
+        at: (f32, f32),
+    },
     Filtering {
         pane: ViewId,
     },

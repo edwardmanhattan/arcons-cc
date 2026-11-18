@@ -1024,6 +1024,15 @@ impl State {
         }
     }
 
+    /// **The workspace chip's menu** (#242): the chip it was opened on and the point it was asked at, in
+    /// window points. `None` when no workspace menu is open.
+    pub fn workspace_menu(&self) -> Option<(usize, (f32, f32))> {
+        match self.interaction {
+            Interaction::WorkspaceMenu { index, at } => Some((index, at)),
+            _ => None,
+        }
+    }
+
     /// The pane whose filter panel is open — `None` when no panel is. The panel is anchored to that
     /// pane's toggle, so the pane is all the state needs.
     pub fn filtering(&self) -> Option<ViewId> {
@@ -1103,6 +1112,7 @@ impl State {
                 // ring nobody put there would be a second answer to "which row" (#164).
                 ring: None,
             },
+            Begin::WorkspaceMenu { index, at } => Interaction::WorkspaceMenu { index, at },
             Begin::Filter { pane } => Interaction::Filtering { pane },
             Begin::Rename(rename) => Interaction::Renaming(rename),
             Begin::Settings => Interaction::Settings,
@@ -1269,15 +1279,13 @@ impl State {
         }
     }
 
-    /// Remove a pane from the active workspace: its slot collapses and its map thread is dropped.
-    ///
-    /// **The last pane of a workspace is still refused** — closing a workspace's last pane and landing
-    /// the focus on another workspace is #141's rule, and it is a different ticket. What #138 makes
-    /// expressible is a workspace that was *never* given a pane, or whose panes were moved away by the
-    /// move ticket: `Workspace::empty` is a valid state, and `layout()` answers `None` for it.
     /// **May this pane be closed?** (#141) — a pane with a sibling in its workspace, or a pane somewhere
     /// else on the wall. The menu row and the action read this one answer, so the control and the action
     /// cannot disagree about the last pane.
+    ///
+    /// **An emptied workspace stays** (#141): this refuses the wall's last pane, never a workspace's last
+    /// one, because an empty workspace is a valid state (`layout()` is `None`) and its name and chip stay
+    /// until `workspace.close` (#242) is asked for deliberately.
     pub fn can_close(&self, id: ViewId) -> bool {
         let Some(index) = self.workspace_of(id) else {
             return false;
@@ -2049,6 +2057,85 @@ impl State {
         Some(closed)
     }
 
+    /// **May this workspace be closed?** (#242) — the row's answer, beside `can_empty_workspace` and
+    /// `offers_close_all` (#241), and the same rule [`State::close_workspace`] applies. A workspace is closable
+    /// when it is **empty** (an arrangement is not reconstructible from the wire) and it is **not the wall's
+    /// last** (a wall with no workspace is not a wall), the rule `pane.close` keeps one level down.
+    ///
+    /// The index is the wire's address for a workspace, so a chip menu can ask about the chip it was opened
+    /// on. `offers_close_workspace` is the active workspace's answer, which is where a pane menu would ask.
+    pub fn offers_close_workspace(&self) -> bool {
+        self.offers_close_workspace_at(self.active)
+    }
+
+    /// The same rule for any workspace, by its index.
+    pub fn offers_close_workspace_at(&self, index: usize) -> bool {
+        index < self.workspaces.len()
+            && self.workspaces[index].panes.is_empty()
+            && self.workspaces.len() > 1
+    }
+
+    /// **Close an empty workspace** (#242). Refused with the rule's own name when it still holds panes
+    /// (`WORKSPACE_HAS_PANES`) or when it is the wall's last (`LAST_WORKSPACE`) — the two refusals the
+    /// vocabulary names, so the row and the action cannot disagree.
+    ///
+    /// **The landing is `pane.close`'s** (#141): closing the active workspace lands on
+    /// [`State::nearest_previous_non_empty`], and when every remaining workspace is empty it lands on the
+    /// previous index. Closing another workspace keeps the wall where it is and shifts the active index if the
+    /// removed one was below it.
+    pub fn close_workspace(&mut self, index: usize) -> Result<bool, &'static str> {
+        if index >= self.workspaces.len() {
+            return Err("no such workspace");
+        }
+        if !self.workspaces[index].panes.is_empty() {
+            return Err(crate::control::WORKSPACE_HAS_PANES);
+        }
+        if self.workspaces.len() == 1 {
+            return Err(crate::control::LAST_WORKSPACE);
+        }
+        let was_active = index == self.active;
+        // **The landing is asked before the workspace goes** (#141): the scan is over the wall as the operator
+        // saw it, and the empty workspace being closed is not a place to land.
+        let landing = was_active
+            .then(|| self.nearest_previous_non_empty(index))
+            .flatten();
+        self.workspaces.remove(index);
+        if was_active {
+            self.active = match landing {
+                // The nearest previous workspace below the removed one keeps its index; one above it moves down
+                // with everything after the hole.
+                Some(target) if target < index => target,
+                Some(target) => target - 1,
+                // Every workspace left is empty: the previous index, or the first when the closed one was first.
+                None => index.saturating_sub(1).min(self.workspaces.len() - 1),
+            };
+        } else if index < self.active {
+            self.active -= 1;
+        }
+        // **A surface naming the workspace goes with it** (#242). A rename sheet on the closed workspace is the
+        // only surface a workspace can hold; a sheet on a later one follows the index down.
+        let renaming = match &self.interaction {
+            Interaction::Renaming(Rename {
+                target: RenameTarget::Workspace(target),
+                ..
+            }) => Some(*target),
+            _ => None,
+        };
+        if let Some(target) = renaming {
+            if target == index {
+                self.end();
+            } else if target > index {
+                if let Interaction::Renaming(rename) = &mut self.interaction {
+                    rename.target = RenameTarget::Workspace(target - 1);
+                }
+                self.layout_dirty = true;
+            }
+        }
+        self.arranged();
+        self.layout_dirty = true;
+        Ok(true)
+    }
+
     /// **Close every workspace but the one on screen** (#166).
     ///
     /// The active workspace is never closed and never emptied: a client that has read the wall knows which one it is
@@ -2210,6 +2297,10 @@ pub enum Interaction {
         /// or the waterfall when one is. `None` is no ring, which is where a pointer-opened menu starts.
         ring: Option<usize>,
     },
+    /// **A workspace chip's menu is open** (#242): the workspace it was asked on and the point, in window
+    /// points. Passive like a pane's menu — it holds nothing, so the next press dismisses it — and it is where
+    /// `Close workspace` lives, because closing a workspace is a question about the place and not about a pane.
+    WorkspaceMenu { index: usize, at: (f32, f32) },
     /// A pane's filter panel is open (#111). **The pointer is the panel's**, but it is not modal: the
     /// picture stays visible behind it, and a press outside dismisses it.
     Filtering { pane: ViewId },
@@ -2226,8 +2317,18 @@ pub enum Interaction {
 pub enum Begin {
     Lift(PaneDrag),
     Resize(view::Border),
-    Menu { pane: ViewId, at: (f32, f32) },
-    Filter { pane: ViewId },
+    Menu {
+        pane: ViewId,
+        at: (f32, f32),
+    },
+    /// A workspace chip's menu (#242), anchored at a point in window points.
+    WorkspaceMenu {
+        index: usize,
+        at: (f32, f32),
+    },
+    Filter {
+        pane: ViewId,
+    },
     Rename(Rename),
     Settings,
 }
@@ -2244,24 +2345,41 @@ impl Begin {
         match (self, now) {
             // A gesture starts from nothing, or from a surface that holds nothing and can be dismissed by
             // the press that starts it.
-            (Begin::Lift(_) | Begin::Resize(_), Interaction::Idle | Interaction::Menu { .. }) => {
-                true
-            }
+            (
+                Begin::Lift(_) | Begin::Resize(_),
+                Interaction::Idle | Interaction::Menu { .. } | Interaction::WorkspaceMenu { .. },
+            ) => true,
             // A menu opens where nothing has the pointer; from another menu it moves.
-            (Begin::Menu { .. }, Interaction::Idle | Interaction::Menu { .. }) => true,
+            (
+                Begin::Menu { .. },
+                Interaction::Idle | Interaction::Menu { .. } | Interaction::WorkspaceMenu { .. },
+            ) => true,
+            // **The chip menu** (#242): opened from nothing, or from a menu that holds nothing. Asking again
+            // moves it to the chip that was pressed.
+            (
+                Begin::WorkspaceMenu { .. },
+                Interaction::Idle | Interaction::Menu { .. } | Interaction::WorkspaceMenu { .. },
+            ) => true,
             // A filter panel is a hold, but not a modal one: it opens from nothing or from a menu (which
             // holds nothing), and a second ask moves it. Once it is open the pointer is its.
             (
                 Begin::Filter { .. },
                 Interaction::Idle | Interaction::Menu { .. } | Interaction::Filtering { .. },
             ) => true,
-            // Naming comes from the menu ("Name this pane…") and from the wall, never from behind a sheet.
-            (Begin::Rename(_), Interaction::Idle | Interaction::Menu { .. }) => true,
+            // Naming comes from the menu ("Name this pane…"), a workspace chip's menu, and from the wall,
+            // never from behind a sheet.
+            (
+                Begin::Rename(_),
+                Interaction::Idle | Interaction::Menu { .. } | Interaction::WorkspaceMenu { .. },
+            ) => true,
             // The settings sheet replaces a menu — the header's own control is the way in — and replaces
             // itself, so pressing it twice is not two sheets.
             (
                 Begin::Settings,
-                Interaction::Idle | Interaction::Menu { .. } | Interaction::Settings,
+                Interaction::Idle
+                | Interaction::Menu { .. }
+                | Interaction::WorkspaceMenu { .. }
+                | Interaction::Settings,
             ) => true,
             _ => false,
         }
@@ -2276,6 +2394,7 @@ impl std::fmt::Debug for Interaction {
             Interaction::Lifted(_) => "Lifted",
             Interaction::Resizing(_) => "Resizing",
             Interaction::Menu { .. } => "Menu",
+            Interaction::WorkspaceMenu { .. } => "WorkspaceMenu",
             Interaction::Filtering { .. } => "Filtering",
             Interaction::Renaming(_) => "Renaming",
             Interaction::Settings => "Settings",
@@ -2515,6 +2634,8 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
     // **Only when open**: an empty child is still a child, and the root's own gap would take 8 pt off the
     // picture to lay it out — which is what a capture noticed (#82) before a golden was regenerated.
     let mut root = root.child(picture(state, scale));
+    // **The workspace chip's menu** (#242), over the header it was opened from.
+    root = workspace_menu_view(state, root);
     // The filter panel is a popover, not a child of the pane: a pane clips its picture, so an overlay
     // inside it would be cut off at the pane's edge and a panel next to the right-hand pane would be a
     // sliver. It is attached here, after its anchor, so Rune can place it beside the toggle.
@@ -2640,6 +2761,9 @@ fn workspace_chips(state: &State) -> El {
                 .checked(active)
                 .label(state.workspaces[index].name.clone())
                 .on_press(move |state: &mut State| {
+                    // A chip press starts the next surface: the workspace menu, if one is open, goes before the
+                    // wall switches.
+                    control::apply(state, Intent::CloseSurfaces).ok();
                     control::apply(state, Intent::FocusWorkspace(index)).ok();
                 })
                 // **Name a workspace that is not on screen** (#154): a right-click on a chip opens the
@@ -2649,8 +2773,16 @@ fn workspace_chips(state: &State) -> El {
                 //
                 // No menu in between: a one-row surface over a chip would be a second thing to learn for
                 // a thing the title already teaches, and `Interaction::Menu` is anchored to a pane.
-                .on_secondary_press(move |state: &mut State, _at, _tx: &mut rune::Tx| {
-                    control::apply(state, Intent::BeginRename(RenameTarget::Workspace(index))).ok();
+                .on_secondary_press(move |state: &mut State, at, _tx: &mut rune::Tx| {
+                    // **The active chip's menu is the workspace menu** (#242): it holds the place's own actions,
+                    // and `Close workspace` is drawn there only where closing it can succeed. Another chip keeps
+                    // #154's direct rename, where the gesture names *that* workspace without switching to it.
+                    if index == state.active {
+                        open_workspace_menu(state, index, (at.x, at.y));
+                    } else {
+                        control::apply(state, Intent::BeginRename(RenameTarget::Workspace(index)))
+                            .ok();
+                    }
                 })
                 .help("Rename this workspace")
                 .child(
@@ -4607,6 +4739,7 @@ impl MenuItem {
             MenuAction::Rename => Intent::BeginRename(RenameTarget::Pane(pane)),
             MenuAction::Close => Intent::ClosePane(pane),
             MenuAction::CloseAll => Intent::CloseAllPanes,
+            MenuAction::CloseWorkspace(index) => Intent::CloseWorkspace(index),
             // **The wall's two resets** (#166, #240): the same verbs a `ctl` types, on the pane the menu was asked
             // on. The refusal is the intent's own — `no pane has the keys` on a workspace with no focus — so the
             // row and the action cannot disagree.
@@ -4710,7 +4843,82 @@ pub fn menu_items(state: &State, pane: ViewId) -> Vec<MenuItem> {
             MenuAction::CloseAll,
         ));
     }
+    // **`Close workspace` only where it can succeed** (#242, #81): the active workspace is empty and the wall
+    // holds another one. A pane menu cannot normally be on an empty workspace — the row lives on the chip's menu
+    // — but the two surfaces read one predicate, so the row and the action cannot disagree wherever they are
+    // built.
+    if state.offers_close_workspace() {
+        items.push(MenuItem::leaf(
+            MENU_CLOSE_WORKSPACE,
+            "menu-close-workspace",
+            MenuAction::CloseWorkspace(state.active),
+        ));
+    }
     items
+}
+
+/// **Open the active chip's workspace menu** (#242): a surface anchored to a pointer, like the pane menu's
+/// `open_menu`. A handler calls this rather than `State::begin`, because the machine is the door's and the
+/// window's (#173).
+pub(crate) fn open_workspace_menu(state: &mut State, index: usize, at: (f32, f32)) -> bool {
+    state.begin(Begin::WorkspaceMenu { index, at })
+}
+
+/// **The rows of the workspace chip's menu** (#242) — one function for the drawing and for a test, the rule
+/// `menu_items` keeps (#81). `Close workspace` is present only where [`State::offers_close_workspace_at`] says
+/// the close can succeed, so a row an operator can press and a rule the wall would refuse cannot drift apart.
+pub fn workspace_menu_rows(state: &State, index: usize) -> Vec<(&'static str, &'static str)> {
+    let mut rows = vec![(MENU_RENAME_WORKSPACE, "workspace-menu-rename")];
+    if state.offers_close_workspace_at(index) {
+        rows.push((MENU_CLOSE_WORKSPACE, "workspace-menu-close"));
+    }
+    rows
+}
+
+/// **The workspace chip's menu** (#242): the active workspace's own actions, at the point its chip was
+/// right-clicked. It is a menu, not a sheet: it holds nothing, so the press that starts the next thing dismisses
+/// it, and the picture stays visible behind it.
+fn workspace_menu_view(state: &State, body: El) -> El {
+    let Some((index, at)) = state.workspace_menu() else {
+        return body;
+    };
+    let rows = workspace_menu_rows(state, index);
+    let (w, h) = tokens::menu_size(rows.len());
+    let (width, height) = state.panel.unwrap_or(tokens::WINDOW_SIZE);
+    let x = at.0.clamp(0.0, (width - w).max(0.0));
+    let y = at.1.clamp(0.0, (height - h).max(0.0));
+    let mut surface = col()
+        .key("workspace-menu")
+        .absolute(x, y)
+        .size(w, h)
+        .radius(tokens::PANEL_RADIUS)
+        .border(tokens::HAIRLINE, tokens::card_edge())
+        .fill(tokens::bg())
+        .role("menu")
+        .label("Workspace menu");
+    for (label, key) in rows {
+        let mut row = row()
+            .key(key)
+            .h(tokens::MENU_ROW)
+            .w_full()
+            .items_center()
+            .px(tokens::GAP)
+            .role("menuitem")
+            .label(label)
+            .child(text(label).font(tokens::LABEL).color(tokens::ink()));
+        let closing = label == MENU_CLOSE_WORKSPACE;
+        row = row.on_press(move |state: &mut State| {
+            // The press that starts the next intent dismisses the menu first, through the control plane.
+            control::apply(state, Intent::CloseSurfaces).ok();
+            if closing {
+                control::apply(state, Intent::CloseWorkspace(index)).ok();
+            } else {
+                control::apply(state, Intent::BeginRename(RenameTarget::Workspace(index))).ok();
+            }
+        });
+        surface = surface.child(row);
+    }
+    body.child(surface)
 }
 
 /// Where the menu's top-left corner goes for a click at `at` in its pane, in the pane's own points.
@@ -4751,6 +4959,12 @@ pub const MENU_CLOSE: &str = "Close pane";
 /// **Empty this workspace on the wall's chips** (#241) — the row that goes one pane further than `Close pane` and
 /// one workspace further than a reset that keeps the pane with the keys (#166).
 pub const MENU_CLOSE_ALL: &str = "Close all panes";
+/// **Close an empty workspace** (#242) — the chip menu's row, and the place's own destructive action. Drawn only
+/// where the workspace is empty and is not the wall's last, so it cannot be a row that always refuses.
+pub const MENU_CLOSE_WORKSPACE: &str = "Close workspace";
+/// **The workspace chip menu's other row** (#242): the active workspace can still be named from the same
+/// surface that can close it, so the menu is not a one-row surface for a thing the title already teaches.
+pub const MENU_RENAME_WORKSPACE: &str = "Rename workspace";
 
 /// **Every row key a menu can open, as a literal** (#140, #201).
 ///
@@ -4758,7 +4972,7 @@ pub const MENU_CLOSE_ALL: &str = "Close all panes";
 /// carries it as text, so it needs the literal back. A key with an index in it (`menu-move-2`, one per workspace)
 /// is deliberately absent: reopening a waterfall from a scene would be a scene inventing which workspace it means,
 /// so a scene that names one opens the first surface instead, and a test keeps this list in step with the rows.
-pub const MENU_KEYS: [&str; 7] = [
+pub const MENU_KEYS: [&str; 8] = [
     "menu-split",
     "menu-new-workspace",
     "menu-rename",
@@ -4766,6 +4980,7 @@ pub const MENU_KEYS: [&str; 7] = [
     "menu-close-others",
     "menu-close",
     "menu-close-all",
+    "menu-close-workspace",
 ];
 
 /// The literal a scene's row key names, or `None` for a name the wall does not have.
@@ -4782,6 +4997,8 @@ pub enum MenuAction {
     Close,
     /// **Empty the workspace on screen** (#241): every pane in it goes, and the emptied workspace keeps its chip.
     CloseAll,
+    /// **Close an empty workspace** (#242): the chip menu's row, on the workspace it was opened for.
+    CloseWorkspace(usize),
     /// Move this pane to the workspace at that index.
     MoveTo(usize),
     /// Close every pane in this workspace but the one with the keys (#166).
@@ -4823,7 +5040,7 @@ pub const REACHES: &[Reach] = &[
     },
     Reach {
         verb: "rename.begin",
-        control: "a pane's plate, the menu's `Name this pane…`, the header's title, a right-click on a chip",
+        control: "a pane's plate, the menu's `Name this pane…`, the header's title, a right-click on another workspace's chip, or the active chip menu's `Rename workspace`",
     },
     Reach {
         verb: "rename.set",
@@ -4860,6 +5077,11 @@ pub const REACHES: &[Reach] = &[
     Reach {
         verb: "workspace.close_others",
         control: "the pane menu's `Close others > Close other workspaces`",
+    },
+    Reach {
+        verb: "workspace.close",
+        control: "the active chip's menu, `Close workspace`, drawn only where the workspace is empty and is \
+                  not the wall's last (#242)",
     },
     Reach {
         verb: "pane.open",
@@ -9424,6 +9646,86 @@ mod workspace_close_tests {
         assert!(state.menu().is_none(), "the menu closed with its pane");
         assert!(state.maximised().is_none(), "and nothing is maximised");
         assert_eq!(state.pane_count(), 1);
+    }
+    /// **The landing when every remaining workspace is empty** (#242): a pane close would find nothing to land
+    /// on, so the wall lands on the previous index — the same "the wall stays somewhere it was" rule, one object
+    /// over. The workspace on screen is empty, which is the only kind `workspace.close` accepts.
+    #[test]
+    fn closing_an_empty_workspace_lands_on_the_previous_index_when_none_has_panes() {
+        let mut state = State::default();
+        // A wall of empty workspaces: every workspace the default opened with, with no pane anywhere.
+        for workspace in &mut state.workspaces {
+            workspace.layout = None;
+            workspace.panes.clear();
+        }
+        state.active = 1;
+        assert!(state.offers_close_workspace(), "empty, and not the last");
+        assert_eq!(state.close_workspace(1), Ok(true));
+        assert_eq!(state.workspaces.len(), 2);
+        assert_eq!(
+            state.active, 0,
+            "the previous index, because no workspace has a pane to land on"
+        );
+    }
+
+    /// **Closing another workspace shifts the active index with it** (#242): the wall does not move to a place
+    /// the operator was not looking at, and `active` still names the same workspace after the hole closes.
+    #[test]
+    fn closing_a_workspace_below_the_active_one_keeps_the_wall_on_its_workspace() {
+        let mut state = State::default();
+        assert_eq!(state.workspaces.len(), 3);
+        state.switch_to(2);
+        let active = &state.workspaces[2];
+        assert_eq!(active.name, "Workspace 3");
+        assert_eq!(state.close_workspace(1), Ok(true));
+        assert_eq!(state.workspaces.len(), 2);
+        assert_eq!(state.active, 1, "the index followed the workspace down");
+        assert_eq!(
+            state.active().name,
+            "Workspace 3",
+            "and the wall is still looking at the same place"
+        );
+    }
+
+    /// **The row and the action read one predicate** (#242): `Close workspace` is drawn only where the workspace
+    /// is empty and is not the wall's last, which is exactly where `State::close_workspace` will not refuse.
+    #[test]
+    fn close_workspace_is_offered_only_where_it_can_succeed() {
+        let mut state = State::default();
+        assert!(
+            !state.offers_close_workspace(),
+            "the active workspace holds the wall's pane"
+        );
+        state.switch_to(1);
+        assert!(
+            state.offers_close_workspace(),
+            "workspace 2 is empty, and the wall has another workspace"
+        );
+        let rows = workspace_menu_rows(&state, 1);
+        assert_eq!(
+            rows.iter().map(|(label, _)| *label).collect::<Vec<_>>(),
+            vec![MENU_RENAME_WORKSPACE, MENU_CLOSE_WORKSPACE],
+            "the chip menu offers the place's rename and, where it can work, its close"
+        );
+        // The wall's last workspace, even empty, is not offered — the same rule `pane.close` keeps.
+        let mut one = State::default();
+        let only = one.focused();
+        one.workspaces[0].close(only);
+        one.workspaces.truncate(1);
+        one.active = 0;
+        assert!(one.workspaces[0].panes.is_empty());
+        assert!(
+            !one.offers_close_workspace(),
+            "a wall with no workspace is not a wall (#242)"
+        );
+        assert_eq!(
+            workspace_menu_rows(&one, 0)
+                .iter()
+                .map(|(label, _)| *label)
+                .collect::<Vec<_>>(),
+            vec![MENU_RENAME_WORKSPACE],
+            "the row is absent where it would always refuse"
+        );
     }
 }
 

@@ -45,6 +45,7 @@ pub enum Interaction {
     Lifted(PaneDrag),                       // a pane is in the air (#70, #84)
     Resizing(view::Border),                 // a border is held (#69)
     Menu { pane: ViewId, at: (f32, f32) },  // a pane's menu (#77, #81, #83)
+    WorkspaceMenu { index: usize, at: (f32, f32) }, // a workspace chip's menu (#242)
     Filtering { pane: ViewId },             // a pane's filter panel (#111)
     Renaming(Rename),                       // a name sheet (#83)
     Settings,                               // the settings sheet (#82, #98)
@@ -71,15 +72,16 @@ here: they live on the pane (`PaneView`, #99), because a wall has one interactio
 `+` is taken, `·` is refused. Read a row as "the wall is in this state"; a column as "the operator asks for
 this".
 
-| from \ begin | Lift | Resize | Menu | Filter | Rename | Settings |
-| --- | --- | --- | --- | --- | --- | --- |
-| **Idle** | + | + | + | + | + | + |
-| **Lifted** | + (re-aim) | · | · | · | · | · |
-| **Resizing** | · | + (re-grip) | · | · | · | · |
-| **Menu** | + | + | + (move) | + | + | + |
-| **Filtering** | · | · | · | + (move) | · | · |
-| **Renaming** | · | · | · | · | + | · |
-| **Settings** | · | · | · | · | · | + |
+| from \ begin | Lift | Resize | Menu | Workspace menu | Filter | Rename | Settings |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **Idle** | + | + | + | + | + | + | + |
+| **Lifted** | + (re-aim) | · | · | · | · | · | · |
+| **Resizing** | · | + (re-grip) | · | · | · | · | · |
+| **Menu** | + | + | + (move) | + | + | + | + |
+| **WorkspaceMenu** | + | + | + | + (move) | · | + | + |
+| **Filtering** | · | · | · | · | + (move) | · | · |
+| **Renaming** | · | · | · | · | · | + | · |
+| **Settings** | · | · | · | · | · | · | + |
 
 The rules behind the cells:
 

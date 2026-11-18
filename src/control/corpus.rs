@@ -176,6 +176,10 @@ pub fn exchanges() -> Vec<Request> {
     vec![
         // ---- the wall, before any change, and after one (#181)
         send(json!({ "v": 1, "read": "wall" })),
+        // ---- **closing a workspace that holds panes is refused by name** (#242): the arrangement is not
+        // reconstructible from the wire, so this is the first rule a client meets. The empty one closed below is
+        // the verb's one success.
+        send(json!({ "v": 1, "intent": { "verb": "workspace.close", "index": 0 } })),
         send(json!({ "v": 1, "intent": { "verb": "pane.focus", "pane": 2 } })),
         send(json!({ "v": 1, "read": "wall" })),
         // ---- a pane drawn over the wall, and put back (#85)
@@ -272,9 +276,24 @@ pub fn exchanges() -> Vec<Request> {
         // is not the workspace's to close, and the refusal names the wall rather than this workspace.
         send(json!({ "v": 1, "intent": { "verb": "pane.close_all" } })),
         send(json!({ "v": 1, "read": "wall" })),
+        // ---- **the composition this ticket's decision names** (#242): a workspace made by `from_pane`, emptied
+        // by `pane.close_all` (#241), and then **closed** by `workspace.close`. The close lands where a pane close
+        // lands — the workspace that still has a pane — and the read is the claim that the place is gone.
+        send(json!({ "v": 1, "intent": { "verb": "workspace.from_pane", "pane": 2 } })),
+        send(json!({ "v": 1, "intent": { "verb": "pane.close_all" } })),
+        send(json!({ "v": 1, "intent": { "verb": "workspace.close", "index": 1 } })),
+        send(json!({ "v": 1, "read": "wall" })),
+        // ---- and the other refusal: a wall with one workspace, even an empty one, has no workspace to give up
+        // (#242). `workspace.close_others` leaves the new empty one on the wall so the request is refused by the
+        // rule rather than by a pane it still holds.
+        send(json!({ "v": 1, "intent": { "verb": "workspace.new" } })),
+        send(json!({ "v": 1, "intent": { "verb": "workspace.close_others" } })),
+        send(json!({ "v": 1, "intent": { "verb": "workspace.close", "index": 0 } })),
+        send(json!({ "v": 1, "read": "wall" })),
         // ---- every rule a request can break
         send(json!({ "v": 1, "intent": { "verb": "pane.focus", "pane": 99 } })),
         send(json!({ "v": 1, "intent": { "verb": "workspace.focus", "index": 9 } })),
+        send(json!({ "v": 1, "intent": { "verb": "workspace.close", "index": 9 } })),
         send(json!({ "v": 1, "intent": { "verb": "pane.focus", "pane": "two" } })),
         send(json!({ "v": 1, "intent": { "verb": "pane.focus" } })),
         send(json!({ "v": 1, "intent": { "verb": "pane.split", "pane": 1 } })),

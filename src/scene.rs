@@ -1263,6 +1263,28 @@ fn workspaces_menu(state: &mut State) {
     crate::ui::open_submenu(state, "menu-move");
 }
 
+/// Where the `workspaces-close-menu` scene asks the active chip's menu, in window points: below the chip
+/// row, so the menu does not cover the chip it was opened from.
+pub const WORKSPACE_MENU_AT: (f32, f32) = (146.0, 60.0);
+
+/// The `workspaces-close-menu` scene: **workspace 2 active, empty, and its chip menu open.**
+///
+/// The menu is a workspace's own: `Rename workspace`, and `Close workspace` because this workspace is empty
+/// and the wall holds another one (#242). The row is drawn from `State::offers_close_workspace_at`, the same
+/// predicate the action uses, so a capture cannot show a row the verb would refuse.
+fn workspaces_close_menu(state: &mut State) {
+    workspaces(state);
+    state.switch_to(1);
+    assert!(
+        state.offers_close_workspace(),
+        "workspace 2 is empty, and the wall has another one"
+    );
+    state.begin(crate::ui::Begin::WorkspaceMenu {
+        index: 1,
+        at: WORKSPACE_MENU_AT,
+    });
+}
+
 /// The `workspaces-moved` scene: **a newsroom pane moved to workspace 2**, through the function the menu
 /// row calls (`ui::move_pane_to`) — so the capture is the move and not a second way of producing it.
 ///
@@ -1696,6 +1718,7 @@ pub const SCENES: &[Scene] = &[
     ("workspaces-named", workspaces_named),
     // Workspace actions (#140): the waterfall, a pane moved between workspaces, and a new workspace.
     ("workspaces-menu", workspaces_menu),
+    ("workspaces-close-menu", workspaces_close_menu),
     ("workspaces-moved", workspaces_moved),
     ("workspaces-new", workspaces_new),
     // Closing a workspace's last pane (#141): the wall lands on the nearest previous workspace, and focus
@@ -2176,6 +2199,7 @@ mod tests {
                 "workspaces-switch",
                 "workspaces-named",
                 "workspaces-menu",
+                "workspaces-close-menu",
                 "workspaces-moved",
                 "workspaces-new",
                 "workspaces-close",

@@ -400,7 +400,16 @@ fn the_wall_build_takes_the_precompiled_route() {
 fn the_interaction_table_names_every_state() {
     let adr = read("docs/adr/0004-interaction-state.md");
     // Each name appears in the table's own row, which is why they are checked as "\n| **Name** |".
-    for state in ["Idle", "Lifted", "Resizing", "Menu", "Renaming", "Settings"] {
+    for state in [
+        "Idle",
+        "Lifted",
+        "Resizing",
+        "Menu",
+        "WorkspaceMenu",
+        "Filtering",
+        "Renaming",
+        "Settings",
+    ] {
         let row = format!("| **{state}** |");
         assert!(
             adr.contains(&row),

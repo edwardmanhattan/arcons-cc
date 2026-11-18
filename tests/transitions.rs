@@ -56,6 +56,13 @@ fn every_state() -> Vec<(&'static str, Interaction)> {
             "Renaming",
             Interaction::Renaming(Rename::new(RenameTarget::Pane(1), None)),
         ),
+        (
+            "WorkspaceMenu",
+            Interaction::WorkspaceMenu {
+                index: 1,
+                at: (4.0, 4.0),
+            },
+        ),
         ("Settings", Interaction::Settings),
     ]
 }
@@ -98,6 +105,13 @@ fn every_begin() -> Vec<(&'static str, Begin)> {
         (
             "Rename",
             Begin::Rename(Rename::new(RenameTarget::Pane(1), None)),
+        ),
+        (
+            "WorkspaceMenu",
+            Begin::WorkspaceMenu {
+                index: 1,
+                at: (4.0, 4.0),
+            },
         ),
         ("Settings", Begin::Settings),
     ]
@@ -144,9 +158,9 @@ fn every_request_from_every_state_is_decided() {
             ));
         }
     }
-    // Seven states and six requests: the matrix is exhaustive over both enums, so this number moves when a
+    // Eight states and seven requests: the matrix is exhaustive over both enums, so this number moves when a
     // variant is added — which is a prompt to write its row in the ADR, not an annoyance.
-    assert_eq!(rows.len(), 42, "seven states × six requests");
+    assert_eq!(rows.len(), 56, "eight states × seven requests");
 }
 
 /// A state's name, for the failures a reader has to act on.
@@ -156,6 +170,7 @@ fn name_of(state: &Interaction) -> &'static str {
         Interaction::Lifted(_) => "Lifted",
         Interaction::Resizing(_) => "Resizing",
         Interaction::Menu { .. } => "Menu",
+        Interaction::WorkspaceMenu { .. } => "WorkspaceMenu",
         Interaction::Filtering { .. } => "Filtering",
         Interaction::Renaming(_) => "Renaming",
         Interaction::Settings => "Settings",
@@ -173,6 +188,7 @@ fn target_of(begin: &str) -> &'static str {
         "Lift" => "Lifted",
         "Resize" => "Resizing",
         "Menu" => "Menu",
+        "WorkspaceMenu" => "WorkspaceMenu",
         "Filter" => "Filtering",
         "Rename" => "Renaming",
         "Settings" => "Settings",
