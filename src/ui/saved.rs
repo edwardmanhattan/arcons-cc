@@ -556,6 +556,55 @@ mod tests {
         assert_eq!(ids[0], 1, "the ids are minted from one, on this wall");
     }
 
+    /// **A closed workspace does not come back from `layout.toml`** (#242). The file is a snapshot of the
+    /// workspaces the wall has, not a set of keyed records: closing one removes it from the next snapshot, and a
+    /// restore builds the wall the snapshot describes. The typed name is gone with it, which is the cost the
+    /// decision names — and it is not left behind as a tombstone the load would read.
+    #[test]
+    fn a_closed_workspace_is_not_in_the_next_snapshot_or_the_restored_wall() {
+        let mut state = arranged();
+        // `arranged` puts a newsroom in workspace 2 and names it "Straits watch".
+        state.switch_to(1);
+        assert_eq!(state.active().name, "Straits watch");
+        assert!(state.workspaces[1].panes.len() == 1);
+        // Empty it through the wall's own close, then close the place (#241 then #242: two presses, each visible).
+        let pane = state.workspaces[1].panes[0].id;
+        assert!(state.close_pane(pane));
+        state.switch_to(1);
+        assert!(state.workspaces[1].panes.is_empty());
+        assert!(state.close_workspace(1).is_ok());
+
+        let saved = state.snapshot();
+        assert_eq!(
+            saved.workspace.len(),
+            2,
+            "the snapshot describes the wall that is left"
+        );
+        assert!(
+            saved
+                .workspace
+                .iter()
+                .all(|workspace| workspace.name != "Straits watch"),
+            "the closed place's name is not left in the file as a tombstone: {saved:?}"
+        );
+        assert_eq!(
+            saved.active, 0,
+            "and the active workspace is the one on screen"
+        );
+
+        let mut restored = State::default();
+        assert!(apply_saved(&mut restored, &saved));
+        assert_eq!(restored.workspaces.len(), 2);
+        assert!(
+            restored
+                .workspaces
+                .iter()
+                .all(|workspace| workspace.name != "Straits watch"),
+            "a restore of the next snapshot cannot resurrect the closed workspace"
+        );
+        assert_eq!(restored.workspaces[0].panes.len(), 2);
+    }
+
     /// **A restored wall claims a thread for every map pane, and for nothing else** (#160).
     ///
     /// #153 rebuilt the panes from the file and the only spawn left was `setup`'s, which takes the

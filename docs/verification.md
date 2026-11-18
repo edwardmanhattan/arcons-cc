@@ -139,7 +139,8 @@ cargo run -- --scenes            # empty · picture · stale · card-open · pho
                                  # pane-tree-pan · newsroom · newsroom-scopes · newsroom-page-2
                                  # newsroom-story · newsroom-story-back
                                  # workspaces · workspaces-empty · workspaces-switch
-                                 # workspaces-named · workspaces-menu · workspaces-moved
+                                 # workspaces-named · workspaces-menu · workspaces-close-menu
+                                 # workspaces-moved
                                  # workspaces-new · workspaces-close
                                  # workspaces-new-remote
                                  # close-all · menu-ring · cursor-hull · cursor-two · cursor-idle · stale-banner
@@ -320,6 +321,13 @@ requires **two surfaces** (the menu's own `bg()` fill appears as two runs across
 the right of the first), the trigger's children to be the three workspaces this pane is **not** in, by
 name — `Straits watch`, `Workspace 3`, `Workspace 4` — and the raised chip to be workspace 1's. A
 submenu that listed the pane's own workspace, or a waterfall that never opened, is red.
+
+`workspaces-close-menu` is **a workspace's own menu** (#242): workspace 2 is active and empty, and its chip
+menu is open below the chips. The assertion reads the state — workspace 2 active, empty, the menu asking that
+chip — and the rows from `ui::workspace_menu_rows`, then counts two rows of the menu's own ink inside its box.
+`Close workspace` is present because `State::offers_close_workspace_at` says this workspace can be closed: it
+is empty, and the wall holds another. A row drawn where the verb would refuse, or a menu that forgot the row,
+is red.
 
 `workspaces-moved` is **a feed moved to workspace 2** through `ui::move_pane_to`, the function the menu
 row calls. The assertion requires the pane's identity and view to have travelled (one pane in the target,

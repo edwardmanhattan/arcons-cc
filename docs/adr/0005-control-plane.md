@@ -96,7 +96,8 @@ hull positions starts to be a renderer, and the whole point of decision 1 is tha
 | the guesture the wall has | the intent it means | or a cursor event? |
 | --- | --- | --- |
 | press a chip | `FocusWorkspace(index)` | — |
-| right-click a chip | `BeginRename(Workspace(index))` | — (a press *is* the input; the surface is a rename sheet) |
+| right-click another workspace's chip | `BeginRename(Workspace(index))` | — (a press *is* the input; the surface is a rename sheet) |
+| right-click the active chip | the workspace menu: `BeginRename(Workspace(index))`, and `CloseWorkspace(index)` where it is empty and not the wall's last (#242) | the menu is a surface; each row is an intent |
 | press a pane's title | `ToggleFullSize(pane)` | — |
 | press a menu row | `SplitPane{..}`, `ClosePane`, … | the *press that opened the menu* is a position; the row is an intent once chosen |
 | drag a border | `SetRatio{..}` (one, on release) | the drag's intermediate points are the viewer's own |

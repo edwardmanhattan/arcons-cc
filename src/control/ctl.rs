@@ -167,6 +167,7 @@ pub fn parse(words: &[String]) -> Result<Intent, Failure> {
         "pane.close_others" => Intent::CloseOtherPanes,
         "pane.close_all" => Intent::CloseAllPanes,
         "workspace.close_others" => Intent::CloseOtherWorkspaces,
+        "workspace.close" => Intent::CloseWorkspace(number(0, "a workspace index")? as usize),
         "pane.open" => Intent::OpenPane(
             super::wire::content_from_words(rest.first().map(String::as_str))
                 .map_err(Failure::Usage)?,
@@ -414,6 +415,8 @@ arcons-cc ctl <noun> <verb> [args]
   pane close_all             close every pane in this workspace, leaving it empty on the
                              chips (`No panes yet.`). The wall's last pane is refused
   workspace close_others     close every workspace but the one on screen
+  workspace close <index>    close an empty workspace; one that holds panes, and the
+                             wall's last workspace, are refused
   pane move <id> <index>     carry a pane into another workspace
   pane drop <id> <onto> <edge>
                              land a pane in another pane's slot; the edge is left, right,
@@ -476,6 +479,7 @@ mod tests {
             "pane close_others",
             "pane close_all",
             "workspace close_others",
+            "workspace close 1",
             "pane move 2 1",
             "pane drop 2 1 top",
             "pane resize 2 1 0.58",

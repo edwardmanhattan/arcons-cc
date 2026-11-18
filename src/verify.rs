@@ -3822,6 +3822,56 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 }
             }
         }
+        // **A workspace's own menu** (#242): workspace 2 is active and empty, so its chip menu carries
+        // `Close workspace` as well as `Rename workspace`. The row is the state's predicate and the picture's;
+        // a menu that drew the row where the wall would refuse it, or one that forgot the row, is red here.
+        "workspaces-close-menu" => {
+            let state = scene::state_for(scene);
+            if state.active != 1 || !state.workspaces[1].panes.is_empty() {
+                failures.push(format!(
+                    "{scene}: workspace {} is active, and this scene is empty workspace 2",
+                    state.active + 1
+                ));
+            }
+            if state.workspace_menu() != Some((1, scene::WORKSPACE_MENU_AT)) {
+                failures.push(format!(
+                    "{scene}: the open surface is {:?}, and this scene asks the workspace chip's menu",
+                    state.workspace_menu()
+                ));
+            }
+            let rows = crate::ui::workspace_menu_rows(&state, 1);
+            let labels: Vec<&str> = rows.iter().map(|(label, _)| *label).collect();
+            if labels
+                != vec![
+                    crate::ui::MENU_RENAME_WORKSPACE,
+                    crate::ui::MENU_CLOSE_WORKSPACE,
+                ]
+            {
+                failures.push(format!(
+                    "{scene}: the workspace menu offers {labels:?}, and this empty workspace may be renamed                      and closed"
+                ));
+            }
+            let (w, h) = tokens::menu_size(rows.len());
+            let at = scene::WORKSPACE_MENU_AT;
+            let bands = ink_bands(
+                image,
+                (f64::from(at.0), f64::from(at.1), f64::from(w), f64::from(h)),
+                &[ink(tokens::ink())],
+                24,
+            );
+            if bands.len() < rows.len() {
+                failures.push(format!(
+                    "{scene}: {} row(s) of the menu's ink in its box, and it has {} rows — the chip menu                      is not drawn, or a row is clipped",
+                    bands.len(),
+                    rows.len()
+                ));
+            } else {
+                lines.push(format!(
+                    "{scene}: {} rows in the workspace menu, `Close workspace` among them",
+                    bands.len()
+                ));
+            }
+        }
         // **Workspace actions** (#140): the waterfall, a pane moved between workspaces, and a new
         // workspace from a pane. The chip checks are the same as the workspaces arm's — where the raised
         // chip sits relative to the `+` says **which** workspace is active in the capture.

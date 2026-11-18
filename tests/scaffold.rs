@@ -231,9 +231,10 @@ fn no_handler_changes_the_wall_except_through_control() {
         "drag_map",
         "wheel",
         // A press on the water or on a pane: three intents inside (`press_in`), and a menu anchored where the
-        // pointer was (`open_menu`).
+        // pointer was (`open_menu`). A workspace chip's menu is the same kind of surface (#242).
         "press_in",
         "open_menu",
+        "open_workspace_menu",
         // The rename sheet's Enter, which ends the sheet and calls the one function a sent name also uses.
         "commit_rename",
         // A menu row, which builds its intent and applies it (#170).

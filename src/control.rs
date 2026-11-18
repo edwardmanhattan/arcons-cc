@@ -96,6 +96,15 @@ pub const SOCKET_MODE: u32 = 0o600;
 /// The refusal a `ClosePane` earns on the wall's last pane (#141's predicate, named once).
 pub const LAST_PANE: &str = "the last pane on the wall";
 
+/// **The refusal `workspace.close` earns when the workspace still holds panes** (#242): an arrangement is not
+/// reconstructible from the wire — a name can be typed again, a pane's camera, tiling and shares cannot — so one
+/// press may not destroy it. Emptying is `pane.close_all` (#241), a separate settled change the operator can see.
+pub const WORKSPACE_HAS_PANES: &str = "the workspace holds panes";
+
+/// **The last workspace on the wall is not closable** (#242): the same rule `pane.close` keeps one level down.
+/// A wall with no workspace is not a wall, so the request is refused whole rather than leaving a hole.
+pub const LAST_WORKSPACE: &str = "the last workspace on the wall";
+
 /// The refusal a drop earns when both names are the same pane (#219): a swap with itself is a rule, not a
 /// tiling that failed — the pointer cannot ask for it (`Layout::drop_for` answers `None` over the pane it is
 /// dragging), and a client that says it meant it gets the rule's name.
@@ -260,6 +269,14 @@ pub enum Intent {
     /// **Close every workspace but the one on screen** (#166). The active workspace is never closed and never
     /// emptied, and every dropped pane joins its map thread.
     CloseOtherWorkspaces,
+    /// **Close one empty workspace** (#242). The workspace is named by its index, the same address every other
+    /// workspace intent uses. It refuses a workspace that still holds panes (`the workspace holds panes`) — an
+    /// arrangement is not reconstructible from the wire, and emptying is #241's separate, visible change — and the
+    /// wall's last workspace (`the last workspace on the wall`), the rule `pane.close` keeps one level down.
+    ///
+    /// **The wall lands where a pane close lands**: closing the active workspace lands on the nearest previous
+    /// workspace that still holds a pane, or on the previous index when every remaining workspace is empty.
+    CloseWorkspace(usize),
     /// Open a pane of this kind beside the focused one (the header's controls, a CLI's `pane open`).
     OpenPane(PaneContent),
     /// **Lock this pane's camera onto a hull** (#169), or stop with `unit: None`. `zoom` sets it once; without one,
@@ -349,6 +366,7 @@ impl Intent {
             Intent::CloseOtherPanes => "pane.close_others",
             Intent::CloseAllPanes => "pane.close_all",
             Intent::CloseOtherWorkspaces => "workspace.close_others",
+            Intent::CloseWorkspace(_) => "workspace.close",
             Intent::OpenPane(_) => "pane.open",
             Intent::Follow { .. } => "object.follow",
             Intent::Select { .. } => "pane.select",
@@ -525,6 +543,8 @@ pub const REFUSALS: &[(&str, RefusalKind)] = &[
     ("the cursor is not pressed", RefusalKind::Rule),
     ("the hull has not reported", RefusalKind::Rule),
     ("the last pane on the wall", RefusalKind::Rule),
+    ("the last workspace on the wall", RefusalKind::Rule),
+    ("the workspace holds panes", RefusalKind::Rule),
     ("the pane cannot be swapped with itself", RefusalKind::Rule),
     ("the pane draws no map", RefusalKind::Rule),
     ("the pane has no frame yet", RefusalKind::Rule),
@@ -705,6 +725,18 @@ pub fn apply_by(
             closed > 0
         }
         Intent::CloseOtherWorkspaces => state.close_workspaces_but_active() > 0,
+        Intent::CloseWorkspace(workspace) => {
+            if workspace >= state.workspaces.len() {
+                return Err(Refused("no such workspace"));
+            }
+            // **The action and its row read one answer** (#242): the rule is in `State::close_workspace`, the same
+            // predicate `State::offers_close_workspace` gives the menu, so a row that says it can and an action that
+            // says it cannot is unrepresentable.
+            match state.close_workspace(workspace) {
+                Ok(changed) => changed,
+                Err(why) => return Err(Refused(why)),
+            }
+        }
         Intent::Drop { pane, onto, edge } => {
             if state.pane(pane).is_none() || state.pane(onto).is_none() {
                 return Err(Refused("no such pane"));
@@ -970,6 +1002,7 @@ pub fn vocabulary() -> Vec<Intent> {
         Intent::CloseOtherPanes,
         Intent::CloseAllPanes,
         Intent::CloseOtherWorkspaces,
+        Intent::CloseWorkspace(1),
         Intent::OpenPane(PaneContent::Newsroom),
         Intent::Follow {
             pane: 1,
@@ -2130,6 +2163,96 @@ mod pane_drop {
             "an unknown edge is a call to fix, not a rule to wait out"
         );
         let _ = second;
+    }
+}
+
+/// **`workspace.close`** (#242): the empty workspace is the one a press may forget, and the two rules that keep a
+/// place's arrangement out of a single press.
+#[cfg(test)]
+mod workspace_close {
+    use super::*;
+
+    /// **`workspace.close` closes an empty workspace and lands where a pane close lands** (#242): the active
+    /// workspace is emptied, the wall lands on the nearest previous workspace that still has a pane, and the
+    /// workspace is gone from the chips.
+    #[test]
+    fn closing_an_empty_workspace_lands_like_a_pane_close() {
+        let mut state = State::default();
+        assert_eq!(state.workspaces.len(), 3);
+        assert_eq!(
+            apply(&mut state, Intent::FocusWorkspace(1)),
+            Ok(Applied::Changed(Changed(true)))
+        );
+        assert!(state.workspaces[1].panes.is_empty());
+        assert_eq!(
+            apply(&mut state, Intent::CloseWorkspace(1)),
+            Ok(Applied::Changed(Changed(true)))
+        );
+        assert_eq!(state.workspaces.len(), 2, "the workspace is gone");
+        assert_eq!(
+            state.active, 0,
+            "the nearest previous workspace that still has a pane"
+        );
+        assert_eq!(
+            state
+                .workspaces
+                .iter()
+                .map(|w| w.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Workspace 1", "Workspace 3"],
+            "the chip went and the others keep the wall's own numbering"
+        );
+    }
+
+    /// **A workspace that still holds panes is refused by name** (#242): its arrangement — cameras, shares,
+    /// tiling — is not reconstructible from the wire, so one press may not destroy it. Emptying is
+    /// `pane.close_all`, a separate settled change (#241).
+    #[test]
+    fn closing_a_workspace_that_holds_panes_is_refused_whole() {
+        let mut state = State::default();
+        let only = state.focused();
+        assert_eq!(state.workspaces[0].panes.len(), 1);
+        assert_eq!(
+            apply(&mut state, Intent::CloseWorkspace(0)),
+            Err(Refused("the workspace holds panes"))
+        );
+        assert_eq!(state.workspaces.len(), 3, "the refusal changed nothing");
+        assert!(state.pane(only).is_some());
+        assert_eq!(
+            refusal_kind(WORKSPACE_HAS_PANES),
+            Some(RefusalKind::Rule),
+            "the wall will not do that: retrying changes nothing until the panes are emptied"
+        );
+        assert_eq!(WORKSPACE_HAS_PANES, "the workspace holds panes");
+    }
+
+    /// **The wall's last workspace is refused**, the rule `pane.close` keeps one level down (#242): a wall with no
+    /// workspace is not a wall.
+    #[test]
+    fn closing_the_last_workspace_on_the_wall_is_refused_by_name() {
+        let mut state = State::default();
+        // The wall's last workspace, and it is empty: the state #141 allows and #242 still refuses to remove.
+        let only = state.focused();
+        assert!(state.workspaces[0].close(only));
+        state.workspaces.truncate(1);
+        state.active = 0;
+        assert_eq!(state.workspaces.len(), 1);
+        assert!(state.workspaces[0].panes.is_empty());
+        assert_eq!(
+            apply(&mut state, Intent::CloseWorkspace(0)),
+            Err(Refused("the last workspace on the wall"))
+        );
+        assert_eq!(state.workspaces.len(), 1, "a refusal is a settled no");
+        assert_eq!(
+            refusal_kind(LAST_WORKSPACE),
+            Some(RefusalKind::Rule),
+            "the wall will not do that, and no retry makes a last workspace closable"
+        );
+        assert_eq!(LAST_WORKSPACE, "the last workspace on the wall");
+        assert_eq!(
+            apply(&mut state, Intent::CloseWorkspace(9)),
+            Err(Refused("no such workspace"))
+        );
     }
 }
 

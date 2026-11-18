@@ -89,6 +89,7 @@ field marked **required** is a refusal when it is missing.
 | `pane.close_others` | — | closes every pane in the **workspace on screen** but the one with the keys (#166), one at a time through the close a menu row uses. Never a workspace the client cannot see. `no pane has the keys` (an empty workspace) |
 | `pane.close_all` | — | **empties the workspace on screen** (#241): every pane in it goes, one at a time through the close a menu row uses, each map thread joined, and the workspace stays on the chips drawing `No panes yet.` (#141). **`the last pane on the wall`** is its only refusal: where the workspace holds every pane the wall has, the request would take that one and is refused **whole** rather than half-applied; a workspace that is already empty is `changed: false` |
 | `workspace.close_others` | — | closes every workspace but the one on screen (#166): the chips go, their panes go with them and join their map threads, and **the active workspace is never closed and never emptied** |
+| `workspace.close` | `index` | **closes an empty workspace** (#242), the chip gone with its name and the wall landing where `pane.close` lands: the nearest previous workspace that still holds a pane, or the previous index when every remaining workspace is empty. **`the workspace holds panes`** — an arrangement is not reconstructible from the wire, so empty it with `pane.close_all` first; **`the last workspace on the wall`** — a wall with no workspace is not a wall. Both are refused whole |
 | `pane.open` | `content` | a pane of that kind beside the focused one — the header's tree and newsroom controls (#116, #136), asking their first reads |
 | `object.follow` | `pane`, `unit`, `zoom` | **locks that pane's camera onto a hull** (#169): every frame the camera centres the hull's current fix, at `zoom` if one is given (once — the pane keeps it afterwards). `unit: null` lets go. `no such pane`, `the pane draws no map`, `the hull has not reported` (no fix is not a fix at zero, `INV-01`) |
 | `pane.select` | `pane`, `unit` | puts that pane's card on a hull; `unit: null` clears it (#99). `no such pane` |
@@ -138,6 +139,40 @@ rule's own name, because an intent is a settled change and not a prefix of one.
 **The phone's overview does not draw it** (#225, `docs/mobile-ui.md`): a *clear* on a diagram is one press from a
 workspace with nothing where the operator's panes were, and the wall's own menu is where a reset is asked for
 deliberately. The verb is on the wire for a client that means it; that screen does not put it under a thumb.
+
+### Forgetting an empty workspace (#242)
+
+`workspace.close` is one verb with **one behaviour**: it closes a workspace that is already **empty**. It is not the
+wide verb that closes panes and then the place — that is two behaviours under one press, and the first of them is not
+reconstructible. A workspace's name can be typed again (`rename.set`) and a new one made (`workspace.new`), but its
+tiling, its panes' cameras and their shares cannot be put back from anything on the wire. So the wall refuses a
+workspace that holds panes by name, and the operator empties it first.
+
+| refused when | the words | why |
+| --- | --- | --- |
+| the workspace holds panes | `the workspace holds panes` | one press may not destroy an arrangement the wire cannot rebuild; `pane.close_all` (#241) is the separate, **visible** change that empties it, and the operator sees `No panes yet.` before the second press |
+| it is the wall's last workspace | `the last workspace on the wall` | the rule `pane.close` keeps one level down: a wall with no workspace is not a wall. Refused whole, like every other intent |
+
+**Why two presses is the answer.** `pane.close_all` (#241) and `workspace.close` are two settled changes, and each
+has a result the operator can see between them: the first leaves the workspace on the chips, named, drawing
+`No panes yet.` (#141); the second is the deliberate act that forgets it. The close cannot be a mis-hit, because what
+it deletes is already empty. That composition is also why the narrow verb is enough: a client that wants a full
+workspace gone sends `pane.close_all` then `workspace.close`, in that order, and a refusal in either is the wall's
+own name rather than a half-applied reset.
+
+**The landing is `pane.close`'s** (#141): closing the active workspace lands on the nearest previous workspace that
+still holds a pane, and when every remaining workspace is empty it lands on the previous index. Closing another
+workspace keeps the wall where it is and shifts `active` down with the hole, so `active` still names the same place.
+
+**The row is drawn only where the close can succeed** (#81's rule, one object over): the active workspace's chip menu
+offers `Close workspace` when that workspace is empty and is not the wall's last, and is absent where it would always
+refuse. `State::offers_close_workspace` is the row's answer and `State::close_workspace` is the action's, and they
+read the same rule, so a row that says it can and an action that says it cannot is unrepresentable. The verb is on the
+wire regardless, for a client that means it.
+
+**The phone's overview does not draw it** (#225, `docs/mobile-ui.md`): a delete on an arrangement is not a press for a
+card, and a phone that cannot show what it destroyed cannot ask for the deletion. The verb is on the wire for a client
+that means it; that screen does not put it under a thumb.
 
 ### The glass has every one of them, or a reason it cannot
 

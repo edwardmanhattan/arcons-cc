@@ -247,7 +247,7 @@ update it*.
 ## The verbs it uses
 
 The vocabulary is `docs/control.md`'s, and a note is not a second reference. This screen sends four verbs and refuses
-four, and the four are named because a note that is silent about what it will not do leaves the next author to
+six, and the six are named because a note that is silent about what it will not do leaves the next author to
 discover it from a refusal.
 
 | the verb | the gesture on the canvas | why this one |
@@ -264,9 +264,10 @@ discover it from a refusal.
 | `cursor.press` | a press means something where it lands — a hull, a pane's water — and this screen draws neither. The phone's press names a **pane**, which is a value, not a point |
 | `cursor.release` | the same, and a cursor with no press has nothing to release |
 | `pane.close_all` | the wall's pane menu offers `Close all panes` where it changes more than the rows beside it (#241), and this screen does not: a **clear** on a diagram is one press from a workspace with nothing where the operator's panes were, and a reset is asked for deliberately. The verb exists on the wire for a client that means it |
+| `workspace.close` | a delete on an arrangement is not a press for a card, and a phone cannot show what it destroyed (#242). The wall's chip menu offers `Close workspace` only where the workspace is empty and not the wall's last; the phone draws the arrangement and leaves forgetting it to the glass. The verb exists on the wire for a client that means it |
 
 The plane has more verbs than this screen uses — `pane.close`, `pane.open`, `pane.split`, `pane.move`,
-`workspace.new`, `pane.close_others`, `workspace.close_others`, `menu.focus`, `menu.submenu`, `menu.choose`,
+`workspace.new`, `pane.close_others`, `workspace.close_others`, `workspace.close`, `menu.focus`, `menu.submenu`, `menu.choose`,
 `surface.settings`, `surface.close`, `map.camera`, `object.follow`, `pane.select`, `rename.begin`, `rename.set` —
 and the note does not name them here because this screen does not send them. Closing a pane is a menu's row on the
 wall, not a long-press on a diagram, and moving a pane **across** workspaces is `pane.move` and not a drop:
