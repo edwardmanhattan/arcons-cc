@@ -12,6 +12,9 @@
 //!   in the room (`INV-08`).
 //! - **The code lives two minutes, on the frame clock**, and a claim spends it. A code that outlived its two
 //!   minutes, or its own claim, is a second phone pairing with something read over a shoulder.
+//! - **A code gives up after [`PAIR_ATTEMPTS`] wrong ones** (#262): the budget is the wall's, because the code lives
+//!   here — six digits with two minutes and a person in the room is a better bound than a rate limiter somebody
+//!   else's process might apply.
 //! - **A refusal is a name, with a kind** (`INV-07`): `no pairing is open`, `that code is not the code`,
 //!   `that device is already paired` — a client that cannot tell the first two apart retries the wrong one for
 //!   ever, and one that cannot tell the third would re-pair a device it already has.
@@ -27,6 +30,20 @@ use crate::ui::State;
 /// short enough that a code nobody paired with is not a door left open for a shift.
 pub const PAIR_FOR: f64 = 120.0;
 
+/// **How many wrong codes a code survives** (#262, decided on #260).
+///
+/// A person mistypes six digits on a phone in a room, so one guess is not a budget — five is. And five, not fifty:
+/// 10⁶ codes with a five-guess budget per code, one open code at a time and two minutes each, means a guesser needs
+/// roughly 200,000 codes-worth of two-minute windows — and every one of those windows is a fresh code drawn on a
+/// screen in a room, by somebody pressing `pair.begin`. That is a better bound than a rate limiter on somebody else's
+/// relay, so it lives where the code lives.
+///
+/// After the fifth wrong `code` the pairing is **gone** and the answer is the existing `no pairing is open`: no new
+/// refusal name, no new kind (`INV-07`), and **no counter a client can read** — a client that could count the tries
+/// would know when a code was nearly burnt. A correct claim still spends the code, and `pair.begin` replaces a burnt
+/// one, which is the remedy the operator already had.
+pub const PAIR_ATTEMPTS: u32 = 5;
+
 /// **The code on the wall** (#194): six digits, and the frame after which they are not a code any more.
 ///
 /// It lives on [`State::pairing`] rather than in [`crate::ui::Interaction`] on purpose: a code holds neither the
@@ -37,6 +54,11 @@ pub struct Pairing {
     pub code: u32,
     /// The frame clock at which it stops being a code. Exclusive: at `until` it is gone.
     pub until: f64,
+    /// **How many wrong codes have been spent on it** (#262), against [`PAIR_ATTEMPTS`].
+    ///
+    /// Deliberately not in any answer, read or drawing: the budget is the wall's, and a client that could count the
+    /// tries could tell how nearly a code was burnt — `docs/control.md` says so where it says what the frame is.
+    attempts: u32,
 }
 
 impl Pairing {
@@ -77,6 +99,7 @@ pub fn begin(state: &mut State) -> Result<Changed, Refused> {
     state.pairing = Some(Pairing {
         code,
         until: now + PAIR_FOR,
+        attempts: 0,
     });
     Ok(Changed(true))
 }
@@ -86,11 +109,25 @@ pub fn begin(state: &mut State) -> Result<Changed, Refused> {
 ///
 /// The code is **spent** on success: it paired the phone in the room, and a code that outlived its claim would
 /// pair whoever read it over a shoulder. The key is fresh here and never written — only its SHA-256 is.
+///
+/// **A wrong code is one of [`PAIR_ATTEMPTS`]** (#262): the fourth wrong guess leaves the code open, the fifth burns
+/// it, and the answer to that fifth guess is `no pairing is open` — the same name an expired or spent code gets, so
+/// there is no new refusal (`INV-07`) and nothing a client can read about how many tries are left.
 pub fn claim(state: &mut State, code: &str, name: &str) -> Result<super::Paired, Refused> {
-    let Some(pairing) = state.pairing() else {
+    let Some(pairing) = state.pairing().copied() else {
         return Err(Refused("no pairing is open"));
     };
     if !pairing.accepts(code) {
+        let spent = pairing.attempts + 1;
+        if spent >= PAIR_ATTEMPTS {
+            // **The code gives up** (#262): gone, and the answer is the name a phone already knows. The operator's
+            // remedy is the one they had — `pair.begin` replaces the code.
+            state.pairing = None;
+            return Err(Refused("no pairing is open"));
+        }
+        if let Some(open) = state.pairing.as_mut() {
+            open.attempts = spent;
+        }
         return Err(Refused("that code is not the code"));
     }
     let name = name.trim();
@@ -204,6 +241,62 @@ mod tests {
             super::claim(&mut state, &digits, "tablet"),
             Err(Refused("no pairing is open")),
             "a spent code is not a second door"
+        );
+    }
+
+    /// **The fifth wrong code burns the code, and the sixth is `no pairing is open`** (#262, `INV-07`).
+    ///
+    /// The falsifiers the ticket names: a code still claimable after five wrong guesses, and a refusal name added for
+    /// the budget. The fourth guess leaves the code alone, the fifth takes it, and the right digits afterwards are not
+    /// a second chance — they meet the name a spent or expired code already gets, so nothing on the wire says how many
+    /// tries are left.
+    #[test]
+    fn five_wrong_codes_burn_the_code_and_the_sixth_is_no_pairing_is_open() {
+        let (mut state, digits) = opened();
+        let wrong = if digits == "000000" {
+            "000001"
+        } else {
+            "000000"
+        };
+        // **One short of the budget**: still the code's own refusal, still open.
+        for spent in 1..PAIR_ATTEMPTS {
+            assert_eq!(
+                super::claim(&mut state, wrong, "phone"),
+                Err(Refused("that code is not the code")),
+                "wrong code {spent} of {PAIR_ATTEMPTS} is `that code is not the code`"
+            );
+            assert!(
+                state.pairing().is_some(),
+                "wrong code {spent} of {PAIR_ATTEMPTS} burnt a code it should only have spent a try on"
+            );
+        }
+        // **The fifth wrong code is the last**: the pairing is gone, and the answer is the name that already exists.
+        assert_eq!(
+            super::claim(&mut state, wrong, "phone"),
+            Err(Refused("no pairing is open")),
+            "the fifth wrong code must burn the code and answer `no pairing is open` — a code still claimable \
+             after {PAIR_ATTEMPTS} wrong guesses is the ticket's falsifier (#262)"
+        );
+        assert!(
+            state.pairing.is_none(),
+            "the burnt code is gone from the wall, not merely refused"
+        );
+        // **And the right digits are not a second chance** — the same name, not `that code is not the code`.
+        assert_eq!(
+            super::claim(&mut state, &digits, "phone"),
+            Err(Refused("no pairing is open")),
+            "a burnt code answered by the right digits is still `no pairing is open` (#262)"
+        );
+        assert!(
+            !state.devices.has("phone"),
+            "a burnt code paired the phone anyway"
+        );
+        // **The remedy the operator already had**: `pair.begin` replaces the burnt code.
+        apply(&mut state, Intent::PairBegin).expect("pairing opens again");
+        let fresh = state.pairing().expect("a fresh code").digits();
+        assert!(
+            super::claim(&mut state, &fresh, "phone").is_ok(),
+            "a fresh `pair.begin` after a burnt code must pair: the budget is per code, not per wall"
         );
     }
 

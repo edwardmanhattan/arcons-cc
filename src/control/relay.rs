@@ -16,7 +16,10 @@
 //!   because they are different fixes: wait, or fix the credential.
 //! - **Who is speaking is a device key**, hashed and looked for in `devices.toml` — the file keeps hashes, so a phone
 //!   that presents the hash instead of the key is refused, and a revoked device stops at its next frame. A frame
-//!   from a key no row holds is `that device is not paired`, answered to the relay, and the wall never sees it.
+//!   from a key no row holds is `that device is not paired`, answered to the relay, and the wall never sees it —
+//!   **except `pair.claim`, and except nothing else** (#262): a phone that has never paired has no key to send, so the
+//!   one verb that can precede a name is carried, and its answer goes back on the connection it arrived on **with no
+//!   `to`**, the refusal's own convention extended to the one grant that can come before one.
 //! - **A line the carrier cannot carry is dropped, never waited on** (`INV-05`): the dial, the read, the backoff and
 //!   the redial all happen on the carrier's own thread, and the answer the session loop wrote is dropped rather than
 //!   blocking the wall for a relay that went away.
@@ -409,8 +412,30 @@ impl Connection {
     }
 }
 
-/// **The wall's end of a relay connection** (#196): one [`Carrier`], so the session loop does not know it is a relay.
+/// **Which device an answer goes to** (#196, #262): the name a row of `devices.toml` gave, or — for one frame — no
+/// name at all.
+#[cfg(unix)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Address {
+    /// A key whose hash a row holds: the answer goes back with that row's `name` in `to`, so the relay can route it.
+    Named(String),
+    /// **A phone that has not paired yet** (#262): its frame was `pair.claim`, the only verb a device with no row may
+    /// send, and its answer goes back **on the connection it arrived on, with no `to`** — the only address a device
+    /// with no name has, and the refusal's existing convention rather than a second addressing rule.
+    Unnamed,
+}
+
+/// **The verb a frame's intent names** (#262), or `None` when it names none.
 ///
+/// The gate is the **verb**, not "an intent that parses": a claim with a mistyped field still names the one verb a
+/// device with no row may send, so it is carried and the session loop tells the phone what to fix — an `input` refusal
+/// it can act on, rather than `that device is not paired`, which is a stranger's answer.
+#[cfg(unix)]
+fn verb_of(intent: &Value) -> Option<&str> {
+    intent.get("verb").and_then(Value::as_str)
+}
+
+/// **The wall's end of a relay connection** (#196): one [`Carrier`], so the session loop does not know it is a relay.
 /// `read_line` **never surfaces a drop**: it redials, with backoff, on this thread. The two things it does surface are
 /// a refusal (`the relay refused the wall`, which no retry fixes) and the wall stopping (`Ok(None)`).
 #[cfg(unix)]
@@ -419,7 +444,7 @@ pub struct RelayCarrier {
     connection: Option<Connection>,
     /// The device the next answer is for: the phone that asked the question the session loop is answering. One
     /// question at a time, because the loop asks the wall and waits (`INV-05`).
-    to: Option<String>,
+    to: Option<Address>,
     /// **The device a watch is publishing to** (#221), if one is open. A publish has no request of its own to take a
     /// name from, and the name is the relay's routing field rather than the plane's, so the carrier keeps it: set when
     /// a paired frame asks for a watch, and cleared when the connection goes — **a watch does not resume across one**
@@ -581,7 +606,16 @@ impl RelayCarrier {
                 {
                     self.watching = Some(name.clone());
                 }
-                self.to = Some(name);
+                self.to = Some(Address::Named(name));
+                Some(line.to_string())
+            }
+            // **One verb wide** (#262): a device with no row may send `pair.claim` — a phone in the room, with six
+            // digits read off the screen, has no key yet, which is the whole point of the frame. The answer has no
+            // `to`, because the wall has no name for the device until the claim writes one. Any other verb from the
+            // same key is still a stranger, and `a_phone_with_no_row_may_claim_the_code_and_nothing_else` holds both
+            // halves of that.
+            None if value.get("intent").and_then(verb_of) == Some(super::PAIR_CLAIM) => {
+                self.to = Some(Address::Unnamed);
                 Some(line.to_string())
             }
             None => {
@@ -771,16 +805,22 @@ impl Carrier for RelayCarrier {
         // **A publish has no request to take a name from** (#221), so it goes to the device watching — which is also
         // why a line with neither a `to` nor a watcher is dropped: after a redial the watch is gone by design, and a
         // phone that has not read and asked again is not watching anything.
-        let to = self.to.take().or_else(|| self.watching.clone());
+        let to = self
+            .to
+            .take()
+            .or_else(|| self.watching.clone().map(Address::Named));
         match serde_json::from_str::<Value>(line) {
-            Ok(mut value) => {
-                let Some(to) = to else {
-                    tracing::debug!("relay: dropped a line with no device to carry it to");
-                    return Ok(());
-                };
-                value[frame::TO] = json!(to);
-                self.publish(&value.to_string());
-            }
+            Ok(mut value) => match to {
+                Some(Address::Named(to)) => {
+                    value[frame::TO] = json!(to);
+                    self.publish(&value.to_string());
+                }
+                // **A frame with no `to` goes back on the connection it arrived on** (#262): the refusal's own
+                // convention, extended to `pair.claim`'s answer — the one grant that can precede a name. No second
+                // addressing rule, and no invented field: the line `wire::reply` wrote, verbatim.
+                Some(Address::Unnamed) => self.publish(&value.to_string()),
+                None => tracing::debug!("relay: dropped a line with no device to carry it to"),
+            },
             // Not a frame this wall wrote: dropping it is better than writing half a frame to a relay.
             Err(_) => tracing::debug!("relay: dropped a line that is not a frame"),
         }
@@ -798,7 +838,12 @@ impl Carrier for RelayCarrier {
     /// cursor, a refusal and a log line name the same thing. Never the key, the hash or the relay's address
     /// (`INV-08`): a name a phone chose in the room is the only thing here that is the phone's.
     fn origin(&self) -> Option<Origin> {
-        self.to.as_deref().map(Origin::named)
+        match self.to.as_ref()? {
+            Address::Named(name) => Some(Origin::named(name)),
+            // **A claim has no name yet** (#262): until the wall writes the row there is nobody to name, the request
+            // arrives at the door with no hand, and a claim moves no cursor.
+            Address::Unnamed => None,
+        }
     }
 }
 
@@ -903,6 +948,7 @@ pub fn row(_config: Option<&Config>, _env: &crate::config::Env) -> String {
 mod tests {
     use super::*;
     use crate::config::devices::{Device, Devices, Key, VERSION};
+    use crate::control::pair::PAIR_ATTEMPTS;
     use crate::control::server::Job;
     use crate::control::wire::{self, Answer, Request};
     use crate::control::{Changed, Intent, RefusalKind, refusal_kind};
@@ -1789,5 +1835,259 @@ mod tests {
                 "INV-08: the wall's credential reached a log-shaped line: {text}"
             );
         }
+    }
+
+    /// **The wall's half of a conversation** (#262): take every job a carrier left on the wall's queue and settle it
+    /// on this thread, exactly as `poll` does between frames, until `wanted` requests have been answered.
+    ///
+    /// Bounded, so a frame that never reached the wall is a failing test with a sentence rather than a gate that
+    /// hangs — the rule every dialect in this module keeps.
+    fn serve_the_wall(
+        queue: &crate::control::sessions::Queue,
+        state: &mut crate::ui::State,
+        wanted: usize,
+    ) -> Vec<Request> {
+        let mut served: Vec<Request> = Vec::new();
+        let deadline = Instant::now() + PATIENCE;
+        while served.len() < wanted {
+            if let Some(job) = queue.next() {
+                let request = job.request().cloned();
+                let _ = crate::control::authority::serve(state, job);
+                if let Some(request) = request {
+                    served.push(request);
+                }
+                continue;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the wall was handed {} of the {wanted} requests a relay conversation carries (#262)",
+                served.len()
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        served
+    }
+
+    /// A wall with pairing open and nothing else: headless, so the code is a function of the frame clock (`INV-11`)
+    /// and a claim writes no `devices.toml` — the file's own write is `ui::devices`'s test, not this one's.
+    fn a_wall_with_a_code(directory: &TempDir) -> (crate::ui::State, String) {
+        let mut state = crate::ui::State::default();
+        state.headless = true;
+        state.devices_path = directory.path().join("devices.toml");
+        crate::control::apply(&mut state, Intent::PairBegin).expect("pairing opens");
+        let digits = state.pairing().expect("a code on the wall").digits();
+        (state, digits)
+    }
+
+    /// **One verb wide** (#262): a frame from a device this wall has no row for is carried only when its intent's verb
+    /// is exactly `pair.claim`, and that answer goes back **on the connection it arrived on, with no `to`**.
+    ///
+    /// The falsifiers the ticket names: a second verb carried without a device key, a `to` on the claim's answer, and
+    /// the key reaching the answer anywhere but `paired.key`. A `pane.focus` from the same unknown key is refused
+    /// before the wall sees it, so the difference between the bypass and the rule is asserted rather than described.
+    #[test]
+    fn a_phone_with_no_row_may_claim_the_code_and_nothing_else() {
+        let fake = Fake::start("claim");
+        let wall = TempDir::new("claim-wall");
+        let (mut state, digits) = a_wall_with_a_code(&wall);
+        // **This phone has never paired**: there is no `devices.toml` row for any key, which is the whole point.
+        let settings = fake.settings(&wall.path().join("devices.toml"));
+        let queue = crate::control::sessions::Queue::new();
+        let relay = Relay::spawn(settings, &queue).expect("the carrier thread starts");
+
+        let stranger = "cd".repeat(32);
+        let code = digits.clone();
+        let (seen, observed) = mpsc::channel::<String>();
+        let phone = std::thread::spawn(move || {
+            let mut end = fake.claim();
+            end.welcome();
+            // **The same unknown key, three other verbs**: a refusal on this connection each time, and the wall never
+            // sees one. `pane.focus` is the plane's; `pair.begin` and `pair.forget` are pairing's own — a stranger who
+            // could open a code could draw one on the wall, and one who could forget a device could revoke the phone
+            // in the room, so the bypass is one verb wide *inside* pairing too.
+            for intent in [
+                r#"{"verb":"pane.focus","pane":2}"#,
+                r#"{"verb":"pair.begin"}"#,
+                r#"{"verb":"pair.forget","name":"phone"}"#,
+            ] {
+                end.request(&stranger, intent);
+                let _ = seen.send(end.recv());
+            }
+            // **The claim, with no `device` at all**: there is no key yet, and that is what the frame is for.
+            end.send(&format!(
+                r#"{{"v":{PROTOCOL},"intent":{{"verb":"pair.claim","code":"{code}","name":"phone"}}}}"#
+            ));
+            let _ = seen.send(end.recv());
+        });
+
+        let served = serve_the_wall(&queue, &mut state, 1);
+        let mut refused = Vec::new();
+        for _ in 0..3 {
+            let line = observed
+                .recv_timeout(PATIENCE)
+                .expect("a stranger's refusal");
+            refused.push(serde_json::from_str::<Value>(&line).expect("a JSON answer"));
+        }
+        let answer = observed.recv_timeout(PATIENCE).expect("the claim's answer");
+        phone.join().expect("the relay's half ends");
+        drop(relay);
+
+        // **The gate is the verb, not the key**: three other verbs were answered here and never became a `Job`.
+        for refused in &refused {
+            assert_eq!(
+                refused["why"],
+                json!(NOT_PAIRED),
+                "a verb that is not `pair.claim` from a key no row holds is still `{NOT_PAIRED}` (#262): the \
+                 bypass is one verb wide"
+            );
+            assert!(
+                refused.get(frame::TO).is_none(),
+                "a device the wall cannot name is not addressed"
+            );
+        }
+        assert_eq!(
+            served,
+            vec![Request::Intent(Intent::PairClaim {
+                code: digits.clone(),
+                name: "phone".to_string(),
+            })],
+            "the wall was handed the claim as the wire's own request and nothing else (#196, #262)"
+        );
+
+        // **The claim's answer**: `paired`, once, with no `to`.
+        let line = answer.clone();
+        let answer: Value = serde_json::from_str(&answer).expect("a JSON answer");
+        assert_eq!(
+            answer["ok"],
+            json!(true),
+            "a claim that names the code on the wall pairs (#194)"
+        );
+        assert!(
+            answer.get(frame::TO).is_none(),
+            "the claim's answer carries a `to`: a device with no name has no address, and the frame goes back on \
+             the connection it arrived on (#262)"
+        );
+        let paired = answer["paired"].as_object().expect("a `paired` answer");
+        let mut fields: Vec<&str> = paired.keys().map(String::as_str).collect();
+        fields.sort_unstable();
+        assert_eq!(
+            fields,
+            vec!["key", "name"],
+            "the pairing's answer carries the name and the key and no other field (INV-08, #262)"
+        );
+        assert_eq!(
+            paired["name"],
+            json!("phone"),
+            "the answer names the device by the name it chose"
+        );
+        let key = paired["key"].as_str().expect("a key is a string");
+        assert!(
+            state.devices.has("phone"),
+            "the wall knows the device by the row it wrote (#194)"
+        );
+        assert_eq!(
+            state.devices.device[0].key,
+            Key::from_hex(key)
+                .expect("a key is 64 lowercase hex characters")
+                .hash(),
+            "the row is the SHA-256 of the key the answer carries, and nothing else (#194, INV-08)"
+        );
+        assert_eq!(
+            line.matches(key).count(),
+            1,
+            "the key is on the claim's answer more than once: `paired.key` is the only field that may carry it \
+             (INV-08)"
+        );
+    }
+
+    /// **The budget is the wall's, and the relay path reaches it** (#262): five wrong codes burn the code, the fifth
+    /// answer is the existing `no pairing is open`, and every answer has no `to` — a phone with no name gets one shape.
+    ///
+    /// The falsifiers: a code still claimable after five wrong guesses, and a refusal name added for the budget.
+    #[test]
+    fn five_wrong_codes_over_the_relay_burn_the_code() {
+        let fake = Fake::start("claim-budget");
+        let wall = TempDir::new("claim-budget-wall");
+        let (mut state, digits) = a_wall_with_a_code(&wall);
+        let settings = fake.settings(&wall.path().join("devices.toml"));
+        let queue = crate::control::sessions::Queue::new();
+        let relay = Relay::spawn(settings, &queue).expect("the carrier thread starts");
+
+        let wrong = if digits == "000000" {
+            "000001".to_string()
+        } else {
+            "000000".to_string()
+        };
+        let code = digits.clone();
+        let typo = wrong.clone();
+        let (seen, observed) = mpsc::channel::<String>();
+        let phone = std::thread::spawn(move || {
+            let mut end = fake.claim();
+            end.welcome();
+            for _ in 0..PAIR_ATTEMPTS {
+                end.send(&format!(
+                    r#"{{"v":{PROTOCOL},"intent":{{"verb":"pair.claim","code":"{typo}","name":"phone"}}}}"#
+                ));
+                let _ = seen.send(end.recv());
+            }
+            // **The right digits, after the budget**: not a second chance, and the same name.
+            end.send(&format!(
+                r#"{{"v":{PROTOCOL},"intent":{{"verb":"pair.claim","code":"{code}","name":"phone"}}}}"#
+            ));
+            let _ = seen.send(end.recv());
+        });
+
+        serve_the_wall(&queue, &mut state, PAIR_ATTEMPTS as usize + 1);
+        phone.join().expect("the relay's half ends");
+        drop(relay);
+
+        let answers: Vec<Value> = (0..=PAIR_ATTEMPTS)
+            .map(|_| {
+                let line = observed.recv_timeout(PATIENCE).expect("an answer");
+                serde_json::from_str(&line).expect("a JSON answer")
+            })
+            .collect();
+        for (spent, answer) in answers.iter().take(PAIR_ATTEMPTS as usize - 1).enumerate() {
+            assert_eq!(
+                answer["why"],
+                json!("that code is not the code"),
+                "wrong code {} of {PAIR_ATTEMPTS} must be `that code is not the code`",
+                spent + 1
+            );
+            assert!(
+                answer.get(frame::TO).is_none(),
+                "a claim's answer is not addressed: the wall has no name for the device yet (#262)"
+            );
+        }
+        let fifth = &answers[PAIR_ATTEMPTS as usize - 1];
+        assert_eq!(
+            fifth["why"],
+            json!("no pairing is open"),
+            "the fifth wrong code must burn the pairing and answer the name that already exists — a code still \
+             claimable after {PAIR_ATTEMPTS} wrong guesses is the ticket's falsifier (#262)"
+        );
+        assert_eq!(
+            fifth["kind"],
+            json!("rule"),
+            "and its kind is the one `no pairing is open` already has: no new refusal for the budget (`INV-07`)"
+        );
+        assert!(
+            fifth.get(frame::TO).is_none(),
+            "the burnt code's answer is addressed to a device the wall cannot name (#262)"
+        );
+        let sixth = &answers[PAIR_ATTEMPTS as usize];
+        assert_eq!(
+            sixth["why"],
+            json!("no pairing is open"),
+            "the right digits after the budget are not a second chance (#262)"
+        );
+        assert!(
+            state.pairing.is_none(),
+            "the burnt code is gone from the wall, not merely refused"
+        );
+        assert!(
+            !state.devices.has("phone"),
+            "a burnt code paired the phone anyway"
+        );
     }
 }

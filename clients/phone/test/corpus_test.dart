@@ -106,6 +106,9 @@ void main() {
             Projection() => 'projection',
             Granted() => 'grant',
             Refused() => 'refused',
+            // A claim's answer is typed because the wall can send one (#262); the corpus holds none, because a claim's
+            // key is fresh on every recording and a key in a fixture is a secret in the tree (`INV-08`).
+            Paired() => 'paired',
           },
           (count) => count + 1,
           ifAbsent: () => 1,

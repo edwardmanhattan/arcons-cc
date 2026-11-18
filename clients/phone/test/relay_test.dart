@@ -1,6 +1,6 @@
 /// **The phone's carrier, over a fake relay on loopback** (#256).
 ///
-/// There is **no fixture for the watch's three lines**, and this file does not pretend otherwise: the unix socket
+/// **There is no fixture for the watch's three lines**, and this file does not pretend otherwise: the unix socket
 /// refuses a watch by name (the corpus's own refusal is replayed in `test/corpus_test.dart`), and `fixtures/README.md`
 /// refuses a timed exchange because a coalesced publish is a race and a race is not a fixture. So the relay's frames are
 /// the ones `docs/control.md` and `src/control/wire.rs` spell out, written by the fake relay below, and **the
@@ -9,17 +9,24 @@
 /// exactly the field `src/control/relay.rs` adds to it (`RelayCarrier::write_line`: *the relay's answer is the socket's
 /// answer with one field on it*).
 ///
+/// **There is no fixture for a pairing either** (#262): the corpus holds the socket's four `pair.claim` exchanges and no
+/// `paired` answer, because a claim's key is fresh on every recording and a key in a fixture is a secret in the tree
+/// (`INV-08`). The claim's two lines are `docs/control.md`'s (*The one frame a stranger may send*), typed here and
+/// driven by the fake relay — said out loud rather than dressed up as corpus coverage.
+///
 /// What is proved, one test each:
 ///
 /// 1. **the frames** — a read, an act and a read over a real socket, with the device key in `device` and nowhere else;
-/// 2. **the watch** — the ask, the grant, two publishes, and a publish that lands while a read is in flight is *not*
+/// 2. **a phone with no key claims one** (#262) — the frame carries no `device`, the answer's key goes to the key store
+///    and to every frame after it, a burnt code is the wall's words, and `pair.begin` / `pair.forget` need a key;
+/// 3. **the watch** — the ask, the grant, two publishes, and a publish that lands while a read is in flight is *not*
 ///    taken for the read's answer;
-/// 3. **a drop mid-stream reads first and asks again** — nothing is replayed, and the carrier refuses to ask for a watch
+/// 4. **a drop mid-stream reads first and asks again** — nothing is replayed, and the carrier refuses to ask for a watch
 ///    or to write an intent on a connection it has not seen a read land on;
-/// 4. **a refusal is mapped by `kind`**, and a version refusal stops the carrier: no dial, no ask, no frame;
-/// 5. **a revoked phone** sees silence — the wall's `that device is not paired` has no `to`, so nothing reaches the
+/// 5. **a refusal is mapped by `kind`**, and a version refusal stops the carrier: no dial, no ask, no frame;
+/// 6. **a revoked phone** sees silence — the wall's `that device is not paired` has no `to`, so nothing reaches the
 ///    phone — and, if a relay routed it back anyway, the phone sees a `rule` and not a stop;
-/// 6. **the key is never printed**: not in a message, not in an exception, not in a `toString` (`INV-08`).
+/// 7. **the key is never printed**: not in a message, not in an exception, not in a `toString` (`INV-08`).
 ///
 /// **Not proved here, and said out loud**: `tls://` is only parsed. A TLS relay needs a certificate, and a certificate a
 /// test made up is a fixture nobody recorded; the scheme is all this build's one `SecureSocket.connect` would need.
@@ -172,6 +179,233 @@ void main() {
         (await reading).seq,
         wallOf(reads[0])['seq'],
         reason: 'a frame that arrived in two pieces was not read as one line',
+      );
+
+      await carrier.close();
+      await relay.stop();
+    });
+  });
+
+  group('a phone with no key', () {
+    /// **A claim is the one frame with no `device`, and its answer hands the key over once** (#262).
+    ///
+    /// The two lines are `docs/control.md`'s (*The one frame a stranger may send*): the ask is the socket's
+    /// `pair.claim` with **no `device`**, because there is no key yet, and the answer is `paired` with **no `to`**,
+    /// because there is no name yet. Neither is in a fixture: the corpus holds the socket's four `pair.claim` exchanges
+    /// and no `paired` answer, because a claim's key is fresh on every recording — so these lines are typed from the
+    /// document and driven here, which is said out loud rather than dressed up as corpus coverage.
+    test(
+      'a claim carries no device, and the key is stored and used on every frame after it',
+      () async {
+        final relay = await FakeRelay.start();
+        final store = MemoryKeyStore(null);
+        final carrier = RelayCarrier(relay: relay.url, keys: store);
+        // A key of the shape `pair.claim` hands back, and **not a secret**: a test literal that reaches no wall.
+        final claimedKey = 'cd' * 32;
+
+        final claiming = carrier.claim(code: '481902', name: 'phone');
+        final wire = await relay.next;
+        expect(
+          await wire.frame(),
+          {
+            'v': protocol,
+            'intent': {'verb': 'pair.claim', 'code': '481902', 'name': 'phone'},
+          },
+          reason:
+              'a claim carries something besides the intent — `device` most of all, and there is no key to put '
+              'there yet (docs/control.md, #262)',
+        );
+        await wire.send({
+          'v': protocol,
+          'ok': true,
+          'paired': {'name': 'phone', 'key': claimedKey},
+        });
+        final paired = await claiming;
+        expect(
+          paired.name,
+          'phone',
+          reason:
+              'the pairing is the name the phone chose, which is what the wall\'s row holds',
+        );
+        expect(
+          store.remembered,
+          [claimedKey],
+          reason:
+              'the key did not reach the store, or reached it twice: `claim` is the one write this package '
+              'makes, and it is made once (#262, INV-08)',
+        );
+
+        // **Every frame after it carries `device`**, on the connection the claim was made on: the phone is paired.
+        final client = Client();
+        await client.connect(carrier);
+        final reading = client.read();
+        expect(
+          await wire.frame(),
+          {'v': protocol, 'device': claimedKey, 'read': 'wall'},
+          reason:
+              'the frame after a claim does not carry the key it was answered with: a phone that paired and '
+              'stayed a stranger has kept the key in memory and nowhere else (#262)',
+        );
+        await wire.send(relayAnswer(reads[0]));
+        expect((await reading).seq, wallOf(reads[0])['seq']);
+
+        await carrier.close();
+        await relay.stop();
+      },
+    );
+
+    /// **A burnt code is the wall's words**, mapped by its `kind` (#262, #198).
+    ///
+    /// The wall burns a code after five wrong ones and answers the fifth with `no pairing is open` — the name
+    /// `docs/mobile-ui.md`'s pairing table already has a step for (the code field empties and the wall has to be asked
+    /// again). This package adds no sentence for it, which is what the verbatim `why` here asserts; and a refused claim
+    /// is a `rule`, so the connection is still usable for the next code.
+    test(
+      'a burnt code is `no pairing is open`, and the connection stays usable',
+      () async {
+        final relay = await FakeRelay.start();
+        final store = MemoryKeyStore(null);
+        final carrier = RelayCarrier(relay: relay.url, keys: store);
+
+        final claiming = carrier.claim(code: '000000', name: 'phone');
+        final wire = await relay.next;
+        await wire.frame();
+        await wire.send({
+          'v': protocol,
+          'ok': false,
+          'why': 'no pairing is open',
+          'kind': 'rule',
+        });
+        await expectLater(
+          claiming,
+          throwsA(
+            isA<Refusal>()
+                .having((refusal) => refusal.why, 'why', 'no pairing is open')
+                .having(
+                  (refusal) => refusal.kind,
+                  'kind',
+                  RefusalKind.rule,
+                )
+                .having((refusal) => refusal.next, 'next', Next.reread),
+          ),
+          reason:
+              'a burnt code must reach the phone as the wall\'s own words with the kind that says to read again: '
+              'a sentence invented here is a second vocabulary, and a burnt code and an expired one take the same '
+              'step (#262, docs/mobile-ui.md)',
+        );
+        expect(
+          store.remembered,
+          isEmpty,
+          reason: 'a refused claim handed a key to the store (#262)',
+        );
+        expect(
+          carrier.isConnected,
+          isTrue,
+          reason:
+              'a `rule` refusal ended the connection: the next code is one more line, not a new dial (#198)',
+        );
+
+        // **The next code is another frame on the same connection.**
+        final again = carrier.claim(code: '111111', name: 'phone');
+        expect(
+          (await wire.frame())['intent'],
+          {'verb': 'pair.claim', 'code': '111111', 'name': 'phone'},
+          reason:
+              'the connection could not carry a second claim after a refusal (#262)',
+        );
+        await wire.send({
+          'v': protocol,
+          'ok': false,
+          'why': 'that code is not the code',
+          'kind': 'rule',
+        });
+        await expectLater(
+          again,
+          throwsA(
+            isA<Refusal>().having(
+              (refusal) => refusal.why,
+              'why',
+              'that code is not the code',
+            ),
+          ),
+        );
+
+        await carrier.close();
+        await relay.stop();
+      },
+    );
+
+    /// **`pair.begin` and `pair.forget` are only reachable while paired** (#262): they need a key to be worth sending,
+    /// and a stranger who could send them could draw a code on the wall or revoke the phone in the room.
+    test('pair.begin and pair.forget need a key', () async {
+      final relay = await FakeRelay.start();
+      final store = MemoryKeyStore(null);
+      final carrier = RelayCarrier(relay: relay.url, keys: store);
+      final claimedKey = 'ef' * 32;
+
+      final claiming = carrier.claim(code: '481902', name: 'phone');
+      final wire = await relay.next;
+      await wire.frame();
+
+      // **Before the claim lands**: an unpaired connection may send exactly one frame, and it is `claim`'s.
+      await expectLater(
+        carrier.send('{"v":$protocol,"intent":{"verb":"pair.begin"}}'),
+        throwsA(isA<NoDeviceKey>()),
+        reason:
+            'an unpaired connection wrote `pair.begin`: the wall would draw a code for a stranger (#262)',
+      );
+      await expectLater(
+        carrier.send(
+          '{"v":$protocol,"intent":{"verb":"pair.forget","name":"phone"}}',
+        ),
+        throwsA(isA<NoDeviceKey>()),
+        reason:
+            'an unpaired connection wrote `pair.forget`: a stranger could revoke the phone in the room (#262)',
+      );
+      await expectLater(
+        carrier.send('{"v":$protocol,"read":"wall"}'),
+        throwsA(isA<NoDeviceKey>()),
+        reason:
+            'an unpaired connection read the wall, which has no name to answer to (#262)',
+      );
+      expect(
+        await wire.quietFor(const Duration(milliseconds: 150)),
+        isTrue,
+        reason: 'a frame reached the relay from a connection that has no key (#262)',
+      );
+
+      await wire.send({
+        'v': protocol,
+        'ok': true,
+        'paired': {'name': 'phone', 'key': claimedKey},
+      });
+      await claiming;
+
+      // **After it**: the same connection is paired, so read first (a client's rule) and then the pairing verbs go.
+      final client = Client();
+      await client.connect(carrier);
+      final reading = client.read();
+      expect(await wire.frame(), {
+        'v': protocol,
+        'device': claimedKey,
+        'read': 'wall',
+      });
+      await wire.send(relayAnswer(reads[0]));
+      await reading;
+
+      final beginning = client.act('pair.begin');
+      expect(await wire.frame(), {
+        'v': protocol,
+        'device': claimedKey,
+        'intent': {'verb': 'pair.begin'},
+      });
+      await wire.send(relayAnswer(landed));
+      expect(
+        (await beginning).changed,
+        isTrue,
+        reason:
+            'a paired phone could not open pairing: the wall draws the code for the operator in the room, and a '
+            'phone that is already paired asks for another (#194, #262)',
       );
 
       await carrier.close();
@@ -1244,15 +1478,25 @@ final class RelayEnd {
 }
 
 /// **A key store in memory**, which is what the ticket asks a test to use: the app's is the Keychain or the Keystore,
-/// and neither is this package's (#260).
+/// and neither is this package's (#260). **The write is recorded** (#262): `claim` is the only caller of [remember], and
+/// `remembered` is how a test says the key went there once and not into a string.
 final class MemoryKeyStore implements KeyStore {
   MemoryKeyStore(this.maybeKey);
 
   /// The key, or `null` for a phone that has not paired.
-  final String? maybeKey;
+  String? maybeKey;
+
+  /// Every key `RelayCarrier.claim` has handed over, in the order it did.
+  final List<String> remembered = <String>[];
 
   @override
   Future<String?> key() async => maybeKey;
+
+  @override
+  Future<void> remember(String key) async {
+    remembered.add(key);
+    maybeKey = key;
+  }
 }
 
 /// **Let the socket deliver what it has.** A real delay and not `pumpEventQueue`: a zero-duration timer turns microtasks,

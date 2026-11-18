@@ -103,7 +103,7 @@ field marked **required** is a refusal when it is missing.
 | `cursor.press` | — | presses where the cursor is: the hull under it (its card, and that pane's keys), or the pane it is over (the keys and a cleared card). A press outside every pane, or before `cursor.move`, is refused |
 | `cursor.release` | — | releases; the cursor fades from here |
 | `pair.begin` | — | **draws six digits on the wall for two minutes** (#194), replacing any open code. The digits are a picture for the room and are **never in the answer**: a client that could read its own pairing code could pair itself. A capture draws a code without writing anything, and a wall's digits are a function of its frame clock there (`INV-11`) |
-| `pair.claim` | `code`, `name` | **a phone pairs**: `devices.toml` gains the **SHA-256 of a fresh 32-byte key**, the name and when, and the key travels back in `paired`, once. The code is spent, so a second claim needs its own `pair.begin`. `no pairing is open` (nothing begun, the two minutes ran out, or the code was spent), `that code is not the code`, `that device is already paired` |
+| `pair.claim` | `code`, `name` | **a phone pairs**: `devices.toml` gains the **SHA-256 of a fresh 32-byte key**, the name and when, and the key travels back in `paired`, once. The code is spent, so a second claim needs its own `pair.begin`. **Five wrong codes burn the code** (#262) — the fifth answer is `no pairing is open`, the same name an expired one gets. `no pairing is open` (nothing begun, the two minutes ran out, the code was spent, or it was burnt), `that code is not the code`, `that device is already paired` |
 | `pair.forget` | `name` | **revokes a device**: its row goes. A name that is not there changes nothing — a revocation is a deletion, not a rule to refuse |
 | `surface.settings` | — | opens the settings sheet (#82) |
 | `surface.close` | — | dismisses **one** surface, in the ladder Escape walks: the waterfall, then the menu, then the interaction, then the maximised pane, then the newsroom's detail, then the selection (#140) |
@@ -508,6 +508,36 @@ carrier stops, because a wall that looped on a credential its relay had said no 
 paired`, `kind: rule`, with no `to` — and the wall never sees it. That is also what a **revoked** phone meets: `pair.forget`
 deletes its row, and the next frame it sends is a stranger's. The file is read **per request**, so a phone paired a second
 ago drives the wall without a restart, and one revoked a second ago stops without one.
+
+### The one frame a stranger may send (#262)
+
+A phone that has never paired has no key, so it cannot authenticate — and pairing is the only reason it is talking to
+the relay at all. **Exactly one verb is carried from a device no row of `devices.toml` holds: `pair.claim`.** It is
+carried as the `wire::Request` the socket's session loop already answers, so nothing about intents or answers is
+spelled twice, and the answer goes back **on the connection it arrived on, with no `to`**: a device the wall cannot
+name has no address yet, which is the refusal's existing convention extended to the one grant that can precede a name.
+
+```json
+{"v": 1, "intent": {"verb": "pair.claim", "code": "481902", "name": "phone"}}
+{"v": 1, "ok": true, "paired": {"name": "phone", "key": "…64 hex…"}}
+```
+
+- **No `device` on the ask**, because there is no key yet; **no `to` on the answer**, because there is no name yet. The
+  key travels in `paired`, once, and nowhere else (`INV-08`); the wall keeps only its hash, and the phone's next frame
+  carries `device` like any other, because the claim wrote the row the lookup reads. That write is off the UI thread
+  (`INV-05`), so a frame that beats it is a stranger's like any other — and a phone that meets that reads and acts
+  again, which is `mobile-remote.md` decision 1's rule and not a special case here.
+- **The gate is the verb, and it is exactly `pair.claim`.** Any other verb from the same unknown key is still `that
+  device is not paired`, answered on that connection and never carried to the wall — `pair.begin` and `pair.forget`
+  included, because a stranger who could open a code could draw one on the wall, and one who could forget a device
+  could revoke the phone in the room. `cargo test control::relay` drives the grant and the refusal from one key.
+- **The budget is the wall's, not the relay's** (`PAIR_ATTEMPTS`, `src/control/pair.rs`): **five wrong codes burn the
+  code**, and the fifth answer is the existing `no pairing is open` — no new refusal name, no new kind (`INV-07`), and
+  no count a client can read. A correct claim still spends the code, and `pair.begin` replaces a burnt one.
+- **What the relay still owes, and this repository cannot prove**: the relay is somebody else's process, so it **must
+  rate-limit connections** and refuse to carry `pair.claim` faster than a person can type. That is a requirement on the
+  deployment, not a promise this repository keeps. What is proven here is the other half: one code cannot be guessed
+  more than five times, and the answer to a stranger is one shape.
 
 The three names above, and `that device is not paired`, are rows of `control::REFUSALS` with their kinds (`INV-07`):
 `rule` for a wall that will not, `busy` for a relay that is not answering now.

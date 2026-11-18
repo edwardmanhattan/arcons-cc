@@ -96,6 +96,11 @@ pub const SOCKET_MODE: u32 = 0o600;
 /// The refusal a `ClosePane` earns on the wall's last pane (#141's predicate, named once).
 pub const LAST_PANE: &str = "the last pane on the wall";
 
+/// **The one verb a device with no row may send** (#262): `pair.claim`, named once here beside the vocabulary it
+/// belongs to, so the relay's gate (`src/control/relay.rs`) cannot drift from [`Intent::verb`]'s spelling — a second
+/// string in the carrier would be a bypass that survives a rename.
+pub const PAIR_CLAIM: &str = "pair.claim";
+
 /// **The refusal `workspace.close` earns when the workspace still holds panes** (#242): an arrangement is not
 /// reconstructible from the wire — a name can be typed again, a pane's camera, tiling and shares cannot — so one
 /// press may not destroy it. Emptying is `pane.close_all` (#241), a separate settled change the operator can see.
@@ -380,7 +385,7 @@ impl Intent {
             Intent::CursorPress { .. } => "cursor.press",
             Intent::CursorRelease { .. } => "cursor.release",
             Intent::PairBegin => "pair.begin",
-            Intent::PairClaim { .. } => "pair.claim",
+            Intent::PairClaim { .. } => PAIR_CLAIM,
             Intent::PairForget { .. } => "pair.forget",
             Intent::OpenSettings => "surface.settings",
             Intent::CloseSurfaces => "surface.close",

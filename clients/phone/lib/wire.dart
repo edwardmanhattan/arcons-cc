@@ -5,16 +5,19 @@
 /// `test/corpus_test.dart`. A field named here that the wall does not send is a red test, and a shape the corpus grows
 /// is a red test until it is typed — which is the only way a client in another language stays honest.
 ///
-/// **Four answers, and one that must not exist.** A request's success is `{"ok": true, "changed": …}`, a read's is a
-/// projection under `"wall"`, a watch's is a grant under `"watch"`, and a no is `{"ok": false, "why": …, "kind": …}` —
-/// one of those, never two. The fifth shape `docs/control.md` defines, the **publish**, is the body a read answers with
-/// **plus the watch it belongs to** (#221, #256): it is a [Projection] whose [Projection.watch] is set, and that field is
-/// the only thing that tells it from the answer to a read in flight.
+/// **Five answers, and one that must not exist.** A request's success is `{"ok": true, "changed": …}`, a read's is a
+/// projection under `"wall"`, a watch's is a grant under `"watch"`, a pairing's is a key under `"paired"` (#262), and a
+/// no is `{"ok": false, "why": …, "kind": …}` — one of those, never two. The last shape `docs/control.md` defines, the
+/// **publish**, is the body a read answers with **plus the watch it belongs to** (#221, #256): it is a [Projection] whose
+/// [Projection.watch] is set, and that field is the only thing that tells it from the answer to a read in flight.
 ///
 /// **The corpus holds none of the watch's three lines** — the unix socket refuses a watch by name, and
 /// `fixtures/README.md` refuses a timed exchange because a coalesced publish is a race and not a fixture. They are typed
 /// here from `src/control/wire.rs` and driven by a **fake relay** on loopback (`test/relay_test.dart`, #256), which is
-/// said out loud rather than dressed up as corpus coverage.
+/// said out loud rather than dressed up as corpus coverage. **The same is true of a successful `pair.claim`**: the corpus
+/// holds the socket's four pairing exchanges and no `paired` answer, because a claim's key is fresh every recording and a
+/// key in a fixture is a secret in the tree (`INV-08`) — so [Paired] is typed from `docs/control.md` and driven by the
+/// fake relay too.
 library;
 
 import 'dart:convert';
@@ -73,6 +76,27 @@ final class Granted extends Answer {
   const Granted(this.watch);
 
   final Watch watch;
+}
+
+/// **A device has paired** (#262): `{"v": 1, "ok": true, "paired": {"name": "phone", "key": "…64 hex…"}}`.
+///
+/// The one line on this wire that carries a device key, and it is the answer to `pair.claim` — the frame a phone sends
+/// **before** it has one (`RelayCarrier.claim`). Nothing else on this wire carries a key except the `device` field the
+/// carrier writes, which is why [toString] redacts it: a line that formatted a whole answer would put the key in a log
+/// (`INV-08`).
+final class Paired extends Answer {
+  const Paired({required this.name, required this.key});
+
+  /// The name the phone gave itself — the one the wall's `devices.toml` row holds, and the name a cursor's origin
+  /// says. Not a secret.
+  final String name;
+
+  /// 64 lowercase hex characters, handed to the key store and to the `device` field on every frame after it. **Never
+  /// printed** (`INV-08`).
+  final String key;
+
+  @override
+  String toString() => 'a pairing: the device "$name" (its key is not printed)';
 }
 
 /// **What a client watches** (`Watch` in `src/control/watch.rs`): the projection, and nothing else — a phone draws the
@@ -397,9 +421,19 @@ Answer decodeAnswer(String line) {
   if (object.containsKey('changed')) {
     return Changed(_asBool(object['changed'], '"changed"'));
   }
+  // **The one answer that carries a key** (#262): `pair.claim`'s, and the only line this client hands to the platform
+  // store. It is read last because a pairing carries none of the other fields, so nothing it says is ambiguous with a
+  // read, a change or a stream.
+  if (object.containsKey('paired')) {
+    final paired = _asMap(object['paired'], '"paired"');
+    return Paired(
+      name: _asString(paired['name'], '"paired.name"'),
+      key: _asString(paired['key'], '"paired.key"'),
+    );
+  }
   throw const WireException(
-    'an "ok" answer that carries none of "changed", "wall" or "watch": this client types the three a relay '
-    'carries, and a `paired` answer is pairing\'s (#260, not on this wire yet)',
+    'an "ok" answer that carries none of "changed", "wall", "watch" or "paired": this client types the four a '
+    'relay carries, and a shape outside them is a wall this build does not speak',
   );
 }
 

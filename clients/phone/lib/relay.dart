@@ -6,6 +6,8 @@
 /// `device`, and the device name an answer is for in `to` (`src/control/relay.rs`, *The relay's frames*).
 ///
 /// ```text
+/// a claim     {"v": 1, "intent": {"verb": "pair.claim", "code": "481902", "name": "phone"}}   no `device`: no key yet
+/// a pairing   {"v": 1, "ok": true, "paired": {"name": "phone", "key": "<64 lowercase hex>"}}  no `to`: no name yet
 /// a request   {"v": 1, "device": "<64 lowercase hex>", "read": "wall"}
 ///             {"v": 1, "device": "<64 lowercase hex>", "intent": {…}}
 ///             {"v": 1, "device": "<64 lowercase hex>", "watch": "wall"}
@@ -14,19 +16,24 @@
 /// a publish   {"v": 1, "to": "phone", "ok": true, "watch": "wall", "wall": {…}}   the read's body, with its watch
 /// ```
 ///
-/// Four rules, each of them a test in `test/relay_test.dart`, driven by a **fake relay on loopback** — because there
+/// Five rules, each of them a test in `test/relay_test.dart`, driven by a **fake relay on loopback** — because there
 /// is no fixture for a watch: the unix socket refuses one by name and `fixtures/README.md` refuses a timed exchange
 /// (a coalesced publish is a race, and a race is not a fixture). The projections and answers the fake relay hands back
 /// are the wall's **own recording**, `fixtures/control/session.jsonl`, read by path; the stream's three lines are the
-/// ones `src/control/wire.rs` and `docs/control.md` spell, and nothing else in that test is invented.
+/// ones `src/control/wire.rs` and `docs/control.md` spell, and nothing else in that test is invented. **There is no
+/// fixture for a pairing either** (#262): the corpus holds the socket's four `pair.claim` exchanges and no `paired`
+/// answer, because a claim's key is fresh on every recording — so the claim's two lines are the ones `docs/control.md`
+/// spells, driven by the fake relay, rather than a recording this test pretends exists.
 ///
 /// 1. **One JSON object per line, both directions**, over `tcp://host:port` (`Socket.connect`) or `tls://host:port`
 ///    (`SecureSocket.connect`). A request the client writes is framed here: the version stays where the client put it,
 ///    `device` is added, and nothing else is added — a key anywhere but `device` is a stranger, and a key in any case
-///    but lowercase hex is not the key `devices.toml` hashed.
-/// 2. **The key arrives from outside** ([KeyStore]): this package has no Keychain, no Keystore, no platform channel, and
-///    no pairing (#260 owns both the bootstrap and the key's home). The one secret in this file is never interpolated
-///    into a message, an exception or a `toString` (`INV-08`), and a test holds it to that.
+///    but lowercase hex is not the key `devices.toml` hashed. **The one exception is a claim** (#262): the frame a
+///    phone sends before it has a key, which carries none.
+/// 2. **The key arrives from outside** ([KeyStore]): this package has no Keychain, no Keystore, no platform channel. It
+///    is handed to the store by [RelayCarrier.claim] — the one write this package makes — and read back on every dial.
+///    The one secret in this file is never interpolated into a message, an exception or a `toString` (`INV-08`), and a
+///    test holds it to that.
 /// 3. **A connection that comes back reads first and resumes nothing.** A drop takes the socket, the read that landed
 ///    on it and the watch that belonged to it; a reconnect is a dial ([connect]) and the app's own read, never a
 ///    buffer. The carrier refuses to write an intent on a connection it has not seen a read land on ([NotRead]), and
@@ -34,6 +41,9 @@
 /// 4. **Nothing waits forever.** A request with no answer inside [answerWithin] is a read that did not land: the
 ///    connection goes with it (a late answer could not be told from the next one's) and the caller gets [Unanswered].
 ///    That deadline is the only thing a **revoked** phone ever observes — see [Unanswered].
+/// 5. **A phone with no key may claim, and do nothing else** (#262). `pair.begin` and `pair.forget` need a key to be
+///    worth sending, so an unpaired connection refuses them here ([NoDeviceKey]) rather than writing a stranger's
+///    frame — and `pair.claim` is refused on a connection that already has one, because a phone pairs once.
 library;
 
 import 'dart:async';
@@ -43,22 +53,31 @@ import 'dart:io';
 import 'client.dart' show Carrier, Lost, NoConnection, NotRead, Refusal;
 import 'wire.dart';
 
-/// **Where the phone keeps its device key** (#256) — the one thing this package needs from the app.
+/// **Where the phone keeps its device key** (#256, #262) — the one thing this package needs from the app.
 ///
-/// A phone is paired out of band (`pair.claim`, `docs/control.md`: *a phone pairs*), and the key it is handed is 32
-/// bytes as **64 lowercase hex characters**. Its home — the Keychain, the Keystore, a file — is **not this ticket's**:
-/// ADR-0008 decision 4 says written by hand, and that needs platform code and a phone in a hand (#260 records the
-/// bootstrap that is still to be decided). This package asks for the key and never invents one, never stores one and
-/// never writes one down.
+/// A phone is paired over the relay (#262): `pair.claim` sends the six digits drawn on the wall, and the wall answers
+/// with a key — 32 bytes as **64 lowercase hex characters** — which this package hands here and nowhere else. Its home
+/// — the Keychain, the Keystore, a file — is **not this ticket's**: ADR-0008 decision 4 says written by hand, and that
+/// needs platform code and a phone in a hand. This package asks for the key and for one write, and never invents one,
+/// never prints one and never writes one down itself.
 ///
 /// `null` is a phone that has not paired: the carrier says so by name ([NoDeviceKey]) rather than dialling with a
-/// stranger's frame. An implementation that returns anything but 64 lowercase hex characters is [NotADeviceKey].
+/// stranger's frame — and a phone with no key may still [RelayCarrier.claim] one, which is the only frame it can send.
+/// An implementation that returns anything but 64 lowercase hex characters is [NotADeviceKey].
 abstract interface class KeyStore {
   /// The device key this phone paired with, 64 lowercase hex characters, or `null` when it has none.
   ///
   /// A carrier reads it on every dial, so a phone that paired while the app was running is a phone that connects —
   /// and a test can hand a different key to a second connection without a restart.
   Future<String?> key();
+
+  /// **Keep the key the wall handed over**, once (#262): the answer to `pair.claim`.
+  ///
+  /// Called by [RelayCarrier.claim] and by nothing else, so "a key is written once, where the wall gave it" is a fact
+  /// about one caller rather than a rule a screen remembers. A store that cannot write says so by throwing; the claim
+  /// does not invent a second home for the key, and a key held only in memory is a phone that has to pair again after
+  /// a restart.
+  Future<void> remember(String key);
 }
 
 /// **This phone has no device key**: it has never paired (#260), and a relay frame without one is a stranger's.
@@ -134,6 +153,10 @@ enum _Awaiting {
 
   /// The carrier's own watch ask: its answer is a grant, or a refusal to grant one.
   watch,
+
+  /// **The carrier's own claim** (#262): its answer is a pairing, or a refusal to pair. The one request a carrier
+  /// writes with no `device` on it, because the phone has no key yet.
+  claim,
 }
 
 /// **A phone's carrier: a socket to the relay** (#256), and the watch the unix socket refuses.
@@ -250,7 +273,8 @@ final class RelayCarrier implements Carrier {
   /// ends the attempt. Resolves when the socket is up; it does not send anything — the client's read is the first line.
   ///
   /// A dial that fails is not a refused credential: a relay that is down is worth retrying, and a phone with no key is
-  /// not (that throws at once, because no number of attempts makes a key). A stopped carrier ([Refusal]) never dials.
+  /// not (that throws at once, because no number of attempts makes a key — [claim] is the one connection a phone with
+  /// no key makes). A stopped carrier ([Refusal]) never dials.
   Future<void> connect() {
     final stop = _stopped;
     if (stop != null) {
@@ -304,6 +328,14 @@ final class RelayCarrier implements Carrier {
     if (_socket == null) {
       throw const NoConnection();
     }
+    // **A connection with no key may only claim** (#262): `pair.begin` and `pair.forget` are frames a paired phone sends,
+    // and a phone that has not paired has no key to make them worth anything — so nothing here writes a stranger's
+    // frame, and the one frame that can precede a key is [claim]'s. A read is refused for the same reason: the wall
+    // would answer a stranger, and the carrier would have to invent a name to route it to.
+    final key = _key;
+    if (key == null) {
+      throw const NoDeviceKey();
+    }
     final Object? decoded;
     try {
       decoded = jsonDecode(line);
@@ -338,7 +370,7 @@ final class RelayCarrier implements Carrier {
     }
     final frame = <String, Object?>{
       'v': decoded['v'] ?? protocol,
-      'device': _key!,
+      'device': key,
     };
     for (final entry in decoded.entries) {
       if (entry.key == 'v') {
@@ -388,6 +420,12 @@ final class RelayCarrier implements Carrier {
     if (_socket == null) {
       throw const NoConnection();
     }
+    final key = _key;
+    if (key == null) {
+      // A connection with no key is a phone claiming a code (#262): there is nothing to watch with, and the ask would be
+      // a stranger's frame.
+      throw const NoDeviceKey();
+    }
     if (!_read) {
       throw const NotRead();
     }
@@ -401,7 +439,7 @@ final class RelayCarrier implements Carrier {
     try {
       await _write(<String, Object?>{
         'v': protocol,
-        'device': _key!,
+        'device': key,
         'watch': Watch.wall.word,
       }, _Awaiting.watch);
     } on Object {
@@ -415,11 +453,75 @@ final class RelayCarrier implements Carrier {
     return granted.future;
   }
 
+  /// **Claim the code on the wall** (#262): the one frame a phone sends before it has a key.
+  ///
+  /// `docs/control.md`, *The one frame a stranger may send*: `pair.claim` is the only verb the wall carries from a
+  /// device no row of `devices.toml` holds, so it is the only frame this carrier writes **without `device` on it** —
+  /// and its answer carries **no `to`**, because the wall has no name for a phone it has not paired. The key the
+  /// answer carries goes to [KeyStore] and then to this connection's `device`, in that order and nowhere else
+  /// (`INV-08`): every later frame on the connection is an ordinary paired frame.
+  ///
+  /// A refusal is the wall's, and it is the wall's words the screen prints (`docs/mobile-ui.md`'s refusal table):
+  /// `no pairing is open` — nothing begun, the two minutes gone, the code spent, or **burnt by five wrong codes** —
+  /// `that code is not the code`, or `that device is already paired`. All three are `rule`s, and a refused claim leaves
+  /// the connection up, so a mistyped code is one more line on it rather than a new dial.
+  ///
+  /// Refused **without touching the socket** when this phone already holds a key: a phone pairs once, and a second
+  /// claim would be a second name. A `version` refusal stops the carrier like every other, because a wall this build
+  /// cannot speak to will not pair it either.
+  Future<Paired> claim({required String code, required String name}) async {
+    final stop = _stopped;
+    if (stop != null) {
+      throw stop;
+    }
+    if (_key != null || await _keys.key() != null) {
+      throw StateError(
+        'this phone already holds a device key: `pair.claim` is the frame a phone sends before it has one',
+      );
+    }
+    if (_socket == null) {
+      await (_dialling ??=
+          _dial(claiming: true).whenComplete(() => _dialling = null));
+    }
+    if (_awaiting != null) {
+      throw StateError(
+        'a request is already out: a carrier has one request in flight',
+      );
+    }
+    await _write(<String, Object?>{
+      'v': protocol,
+      'intent': <String, Object?>{
+        'verb': 'pair.claim',
+        'code': code,
+        'name': name,
+      },
+    }, _Awaiting.claim);
+    final line = await receive();
+    if (line == null) {
+      throw const NoConnection();
+    }
+    final answer = decodeAnswer(line);
+    if (answer is Refused) {
+      throw Refusal(answer.why, answer.kind);
+    }
+    if (answer is! Paired) {
+      throw const WireException(
+        'the wall answered `pair.claim` with something that is not a pairing',
+      );
+    }
+    if (!_deviceKey.hasMatch(answer.key)) {
+      throw const NotADeviceKey();
+    }
+    await _keys.remember(answer.key);
+    _key = answer.key;
+    return answer;
+  }
+
   // -------------------------------------------------------------------------------------------------------------
   // The dial.
   // -------------------------------------------------------------------------------------------------------------
 
-  Future<void> _dial() async {
+  Future<void> _dial({bool claiming = false}) async {
     _closed = false;
     var wait = _backoffStart;
     while (true) {
@@ -427,12 +529,13 @@ final class RelayCarrier implements Carrier {
         throw const NoConnection();
       }
       // **The key is read on every dial** (a phone may have paired since the last one), and a store that holds
-      // something that is not a key ends the attempt rather than dialling as a stranger.
+      // something that is not a key ends the attempt rather than dialling as a stranger. **A claim dials without one**
+      // (#262): the phone has no key yet, which is the whole point of the frame it is about to send.
       final key = await _keys.key();
-      if (key == null) {
+      if (key == null && !claiming) {
         throw const NoDeviceKey();
       }
-      if (!_deviceKey.hasMatch(key)) {
+      if (key != null && !_deviceKey.hasMatch(key)) {
         throw const NotADeviceKey();
       }
       try {
@@ -466,7 +569,10 @@ final class RelayCarrier implements Carrier {
   }
 
   /// Take the socket: a new connection knows nothing — no read, no watch, no answers from the last one.
-  void _attach(Socket socket, String key) {
+  ///
+  /// `key` is `null` on the one connection a phone makes before it has one (#262): the socket a claim is sent on. It
+  /// is set from the pairing's answer, so every later frame on this connection carries `device`.
+  void _attach(Socket socket, String? key) {
     _socket = socket;
     _key = key;
     _read = false;
@@ -608,6 +714,7 @@ final class RelayCarrier implements Carrier {
         granted.completeError(refusal);
       case Changed():
       case Projection():
+      case Paired():
         granted.completeError(
           const WireException(
             'the relay answered a watch with something that is not a grant',
