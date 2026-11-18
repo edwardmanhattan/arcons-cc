@@ -19,6 +19,7 @@ import 'dart:developer' as developer;
 import 'package:arcons_phone/relay.dart' show KeyStore;
 import 'package:material_ui/material_ui.dart';
 
+import 'keystore.dart';
 import 'shell.dart';
 
 /// The variable the deployment sets: `flutter run --dart-define=ARCONS_RELAY=tcp://HOST:PORT`.
@@ -29,9 +30,10 @@ void main() {
   runApp(
     PhoneApp(
       relay: parseRelay(const String.fromEnvironment(relayVariable)),
-      // **The platform's store is #265's.** Until it lands this is memory: a phone that pairs again after a restart is
-      // a smaller lie than a key in a file this repository can read (ADR-0008 decision 4).
-      keys: MemoryKeyStore(),
+      // **The platform's store** (#265): the Keychain on iOS, an AES key in the AndroidKeyStore wrapping the secret on
+      // Android, behind one channel. ADR-0008 decision 4 — the key itself is in neither a file nor a `Map` a crash dump
+      // can read, and on Android the wrapped blob in the app's own preferences is useless without the keystore key.
+      keys: PlatformKeyStore(),
     ),
   );
 }

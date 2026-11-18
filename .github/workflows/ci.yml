@@ -245,3 +245,61 @@ jobs:
           flutter pub get
           flutter analyze
           flutter test
+
+  # **#265's Android half, compiled.** The device key lives behind a platform API, written by hand (ADR-0008 decision
+  # 4), and `clients/phone` proves everything a laptop can — the wire, the tiling, the client's rules, the screen — while
+  # the Kotlin is the one part no test here can run. This job is the only proof that side **compiles**; it is not a proof
+  # that it works (that is a phone, a hand, and #265's checklist in the PR body). It is a job of its own so a broken
+  # Android build is red where the Android code is, and it **does not run the gate**: `scripts/verify.sh` is Rust,
+  # renders pixels and needs no Java, and `tests/doc_claims.rs` refuses a second job that runs it.
+  phone-android:
+    name: phone-android
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: clients/phone/app
+    steps:
+      - uses: actions/checkout@v4
+
+      # The app's Gradle builds at Java 17 (`android/app/build.gradle.kts`), and `flutter build apk` drives Gradle 9,
+      # which needs a modern JDK to run on: 21 is the LTS both the wrapper and the Android plugin accept.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: the AndroidKeyStore half, compiled
+        run: |
+          flutter pub get
+          flutter build apk --debug
+
+  # **#265's iOS half, compiled** — the Keychain, in Swift, in `ios/Runner/AppDelegate.swift`. It needs a Mac and an
+  # Xcode, which is why neither this job nor the code it compiles could run where it was written: no machine on this
+  # project has macOS. What it proves is narrow and worth naming: the Swift **compiles** and the app bundles. What it
+  # does not prove is that a key is written, survives a reboot, or is gone after an uninstall — that is the checklist.
+  # Separate from the gate for the same reason as `phone-android`, and slower than both.
+  phone-ios:
+    name: phone-ios
+    runs-on: macos-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: clients/phone/app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: the Keychain half, compiled
+        run: |
+          flutter pub get
+          flutter build ios --no-codesign --debug
