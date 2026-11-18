@@ -1,1 +1,7 @@
 include: package:lints/recommended.yaml
+
+analyzer:
+  # **`app/` is its own package with its own toolchain.** Analysing it from here resolves no Flutter and reports a
+  # hundred import errors that mean only "wrong SDK" — the screen has its own `flutter analyze` in the same CI job.
+  exclude:
+    - app/**
