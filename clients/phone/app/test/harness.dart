@@ -12,6 +12,7 @@ import 'dart:io';
 
 import 'package:arcons_phone/cells.dart';
 import 'package:arcons_phone/client.dart';
+import 'package:arcons_phone/relay.dart' show KeyStore;
 import 'package:arcons_phone/wire.dart';
 import 'package:flutter/gestures.dart';
 import 'package:material_ui/material_ui.dart';
@@ -19,6 +20,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:arcons_phone_app/controller.dart';
 import 'package:arcons_phone_app/overview.dart';
+import 'package:arcons_phone_app/pairing.dart';
+import 'package:arcons_phone_app/shell.dart' show PhoneRelay;
 
 /// The recording, by path from this package: `clients/phone/app/` → the repository's root.
 const String corpusPath = '../../../fixtures/control/session.jsonl';
@@ -149,7 +152,7 @@ Wall _projection(String line) {
 
 /// **The wall with no socket under it.** Every line the client sends is recorded, and every answer is either the
 /// recording's or held by the test's hand — no clock, no network, no thread.
-final class FakeCarrier implements Carrier {
+class FakeCarrier implements Carrier {
   FakeCarrier(this._answers);
 
   /// What the wall will answer, in order. `null` is the connection ending — the end of file a closed socket gives.
@@ -383,3 +386,153 @@ String refusalWord(List<Exchange> corpus, String verb, RefusalKind kind) {
   }
   throw StateError('the recording\'s ${kind.word} answer to $verb is not a refusal');
 }
+
+/// **A device key that is not a secret**: 64 lowercase hex characters, the shape `pair.claim` hands back. A test literal
+/// is the only kind of key that may be in this tree, and this one reaches no `devices.toml` and no wall.
+final String testDeviceKey = 'ab' * 32;
+
+/// **A key store a test owns** (#264): the phone's key, and every write `pair.claim` made to it.
+final class RecordingKeyStore implements KeyStore {
+  RecordingKeyStore([this.maybeKey]);
+
+  /// The key, or `null` for a phone that has not paired.
+  String? maybeKey;
+
+  /// Every key a claim handed over, in the order it did.
+  final List<String> remembered = <String>[];
+
+  @override
+  Future<String?> key() async => maybeKey;
+
+  @override
+  Future<void> remember(String key) async {
+    remembered.add(key);
+    maybeKey = key;
+  }
+
+  @override
+  String toString() => 'a key store (its key is not printed)';
+}
+
+/// **A relay with the socket taken out** (#264): the carrier's three methods, the dial, the watch and the claim.
+///
+/// The projections are still the recording's ([FakeCarrier]'s answers); the claim's two lines are
+/// `docs/control.md`'s, because a claim's key is fresh on every recording and a key in a fixture is a secret in the
+/// tree (`INV-08`) — the same line `clients/phone/test/relay_test.dart` draws, one screen up.
+final class FakeRelay extends FakeCarrier implements PhoneRelay {
+  FakeRelay(super.answers);
+
+  /// The store the claim writes to, handed over by the shell's factory.
+  KeyStore? keys;
+
+  /// Every claim this relay was asked for, in order: what the pairing screen actually sent.
+  final List<({String code, String name})> claims = <({String code, String name})>[];
+
+  /// What `claim` answers, in order: a [Paired] or a [Refusal]. Empty is a failure, not an invented success.
+  final List<Object> claimAnswers = <Object>[];
+
+  /// The dials this relay was asked for, and the watches it was asked to grant.
+  int connects = 0;
+  int watches = 0;
+
+  final StreamController<Projection> _published = StreamController<Projection>.broadcast();
+
+  @override
+  Future<void> connect() async {
+    connects++;
+  }
+
+  @override
+  Future<Granted> watch() async {
+    watches++;
+    return const Granted(Watch.wall);
+  }
+
+  @override
+  Stream<Projection> get published => _published.stream;
+
+  /// **Publish a projection the wall wrote** — a read's answer with the watch it belongs to on it.
+  void publish(Projection projection) => _published.add(projection);
+
+  @override
+  Future<Paired> claim({required String code, required String name}) async {
+    claims.add((code: code, name: name));
+    if (claimAnswers.isEmpty) {
+      throw StateError(
+        'the pairing screen claimed ${jsonEncode(code)} and this test scripted no answer: a claim is answered by the '
+        'wall, and a fake that invented one would be proving itself',
+      );
+    }
+    return switch (claimAnswers.removeAt(0)) {
+      final Paired paired => _rememberPaired(paired),
+      Refusal(:final why, :final kind) => throw Refusal(why, kind),
+      _ => throw StateError('a claim answer is a Paired or a Refusal'),
+    };
+  }
+
+  /// The claim's one write (`INV-08`): the key goes to the store and to nothing on this side of the wire.
+  Future<Paired> _rememberPaired(Paired paired) async {
+    await keys?.remember(paired.key);
+    return paired;
+  }
+
+  @override
+  Future<void> close() async {
+    if (!_published.isClosed) {
+      await _published.close();
+    }
+    await super.close();
+  }
+}
+
+/// **The answer to a read, with the watch it was published under** (#221): a publish is the read's body plus
+/// `watch`, and the `seq` is therefore the corpus's own.
+String publishedLine(List<Exchange> corpus, int index) {
+  final lines = projectionLines(corpus);
+  final object = jsonDecode(lines[index]) as Map<String, Object?>;
+  return jsonEncode(<String, Object?>{
+    ...object,
+    'to': 'phone',
+    'watch': Watch.wall.word,
+  });
+}
+
+/// Pump the app — `PhoneApp`, or a screen inside it — at phone size.
+Future<void> pumpApp(WidgetTester tester, Widget app) async {
+  await tester.binding.setSurfaceSize(phone);
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+  await tester.pumpWidget(app);
+}
+
+/// Every string this screen would draw: a `Text`, a rich one, or a live field's value. **What a key must never be in**
+/// (`INV-08`).
+List<String> screenText(WidgetTester tester) {
+  final out = <String>[];
+  for (final text in tester.widgetList<Text>(find.byType(Text))) {
+    final data = text.data;
+    if (data != null) {
+      out.add(data);
+    }
+    final span = text.textSpan;
+    if (span != null) {
+      out.add(span.toPlainText());
+    }
+  }
+  for (final field in tester.widgetList<EditableText>(find.byType(EditableText))) {
+    out.add(field.controller.text);
+  }
+  return out;
+}
+
+/// Type six digits into the pairing screen's one code field.
+Future<void> enterCode(WidgetTester tester, String code) async {
+  await tester.enterText(find.byKey(pairCodeKey), code);
+  await tester.pump();
+}
+
+/// The code field and the name field, as the screen holds them.
+TextField codeField(WidgetTester tester) =>
+    tester.widget<TextField>(find.byKey(pairCodeKey));
+
+TextField nameField(WidgetTester tester) =>
+    tester.widget<TextField>(find.byKey(pairNameKey));

@@ -49,6 +49,48 @@ abstract final class PhoneTokens {
   static const double padding = 10;
   static const double ringWidth = 2;
 
+  /// **Pairing's six digit boxes**, its fields and its one button (`docs/mobile-ui.md`, *pairing*). A box is drawn,
+  /// not typed into: one field lives over the row, so a code is one value and a refusal's step can select it.
+  static const double codeBoxWidth = 40;
+  static const double codeBoxHeight = 48;
+  static const double codeBoxGap = 6;
+
+  /// The wider space between the third and fourth box: six digits are read as **two groups of three**, the way they
+  /// are drawn on the wall and read off it.
+  static const double codeBoxGroupGap = 14;
+  static const double codeDigitSize = 20;
+
+  /// A screen's own title, and a field's label — the pairing screen is the only one with either.
+  static const double screenTitleSize = 20;
+  static const double screenLabelSize = 13;
+  static const double screenSentenceSize = 13;
+
+  /// A field and the one button under it. The button is a press and nothing else: a retry is not drawn.
+  static const double fieldHeight = 44;
+  static const double buttonHeight = 48;
+  static const double buttonTextSize = 15;
+  static const EdgeInsets fieldPadding = EdgeInsets.symmetric(horizontal: 14);
+
+  /// **A colour a widget uses to draw nothing**: a chip that is not the active one, and the code field's own text,
+  /// which the six boxes draw instead.
+  static const Color transparent = Color(0x00000000);
+
+  /// The screen's type sizes: a chip, a card's body, a kind under a title, the state line, and the update screen's
+  /// words.
+  static const double chipTextSize = 13;
+  static const double bodyTextSize = 14;
+  static const double kindTextSize = 12;
+  static const double stateTextSize = 12;
+  static const double updateWordsSize = 18;
+
+  /// A chip is rounder than a card: a row of presses, not a pane.
+  static const Radius chipCorner = Radius.circular(14);
+
+  /// A chip's own padding, and a card's glyph: **the glyph is never the only word** — the kind is drawn beside it
+  /// (#111) — and its size belongs with the card's other numbers.
+  static const EdgeInsets chipPadding = EdgeInsets.symmetric(horizontal: 12);
+  static const double glyphSize = 18;
+
   /// The bands: a chip row, a card's title, the kind under it, and the state line.
   static const double chipHeight = 28;
   static const double stateHeight = 26;

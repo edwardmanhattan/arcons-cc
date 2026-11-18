@@ -121,10 +121,17 @@ enum Watch {
 
 /// **The wall said no** — its words in [why], its category in [kind], and the category is what the screen acts on.
 final class Refused extends Answer {
-  const Refused(this.why, this.kind);
+  const Refused(this.why, this.kind, {this.detail});
 
   final String why;
   final RefusalKind kind;
+
+  /// **The wall's longer words about the same refusal**, when it sends any (#264).
+  ///
+  /// Optional on the wire and absent from the corpus: `docs/control.md` spells a refusal as `why` and `kind`, and a
+  /// wall that has more to say than one sentence may add `detail`. A phone draws it **verbatim** where it draws the
+  /// refusal; a refusal without one is still a refusal, and nothing here is guessed from its absence.
+  final String? detail;
 }
 
 /// The four categories a refusal carries (`RefusalKind` in `src/control.rs`, #198).
@@ -403,6 +410,9 @@ Answer decodeAnswer(String line) {
     return Refused(
       _asString(object['why'], '"why"'),
       RefusalKind.ofWord(object['kind']),
+      detail: object['detail'] == null
+          ? null
+          : _asString(object['detail'], '"detail"'),
     );
   }
 
