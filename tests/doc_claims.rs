@@ -1065,12 +1065,14 @@ fn the_phone_reads_the_walls_corpus_by_path() {
     );
 
     // The screen's suite reads the same corpus by the path that leads out of *its* package, and the app is built from
-    // the package beside it rather than from a second copy of the wire (#255).
-    let screen = read("clients/phone/app/test/overview_test.dart");
+    // the package beside it rather than from a second copy of the wire (#255). #257 moved the path into the harness
+    // every screen test builds its carrier through, so that file is where the claim lives now — the suites above still
+    // read the projection out of it and never out of a value they made up.
+    let screen = read("clients/phone/app/test/harness.dart");
     assert!(
         screen.contains("../../../fixtures/control/session.jsonl"),
-        "clients/phone/app/test/overview_test.dart does not read the corpus by path: the screen must be proved against \
-         the wall's recording, not against a projection a test made up (#255)"
+        "clients/phone/app/test/harness.dart does not read the corpus by path: the screen must be proved against \
+         the wall's recording, not against a projection a test made up (#255, #257)"
     );
     let app = read("clients/phone/app/pubspec.yaml");
     assert!(

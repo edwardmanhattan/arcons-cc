@@ -1,0 +1,13 @@
+# **`app/` is analysed on its own options, and this file is why it is analysed at all.**
+#
+# `clients/phone/analysis_options.yaml` excludes `app/**` on purpose — the package has no Flutter under it, and a
+# package-level analysis that resolved the screen would report a hundred import errors meaning only "wrong SDK". But
+# the analyzer looks **upward** for the nearest options file, so without this one `flutter analyze` in this directory
+# found that exclusion and analysed nothing: a green step proving nothing (`AGENTS.md`, *a claim is not evidence*).
+#
+# The rules are the package's, one directory over, so the two halves of the phone are held to the same style.
+analyzer:
+  exclude:
+    - build/**
+
+include: package:lints/recommended.yaml
