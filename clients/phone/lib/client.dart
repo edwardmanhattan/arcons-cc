@@ -256,6 +256,13 @@ final class Client {
         throw const Unreadable(
           'a read was answered with a watch grant, and a projection is the only answer to one',
         );
+      // **A pairing is the answer to `pair.claim`** (#262), the carrier's own ask and never a read's: a line that
+      // carried one here is a wall answering a question nobody asked.
+      case Paired():
+        _known = const _Nothing();
+        throw const Unreadable(
+          'a read was answered with a pairing, and a projection is the only answer to one',
+        );
     }
   }
 
@@ -309,6 +316,13 @@ final class Client {
         _known = const _Nothing();
         throw const Unreadable(
           'an intent was answered with a watch grant, and a change is the only answer to one',
+        );
+      // **The one intent whose answer is more than a flag** (#194, #262): `pair.claim`'s key. It is the carrier's ask
+      // (`RelayCarrier.claim`), so an `act` that met one is a client that sent a claim by the wrong door.
+      case Paired():
+        _known = const _Nothing();
+        throw const Unreadable(
+          'an intent was answered with a pairing, and a change is the only answer to one',
         );
     }
   }

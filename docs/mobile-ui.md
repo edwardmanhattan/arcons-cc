@@ -389,6 +389,12 @@ Pairing's refusals are `rule`s, all three of them, and each has its own sentence
 A wrong code and an expired code are refused **by name**, not by a "no": the two need different actions, and a
 client that could not tell them apart would retry the wrong one for ever.
 
+**A code that has been guessed at is a code that gives up** (#262): the wall burns it after five wrong ones, and the
+answer to the fifth is `no pairing is open` — the wall's own words for a code that is gone, which is the first row
+above and its step with it (the field empties and the wall has to be asked again, `pair.begin`). The phone adds no
+sentence of its own for a burnt code, and it cannot tell the fifth wrong guess from an expired code, which is the point:
+nothing on the wire says how many tries are left.
+
 ## What it refuses to draw
 
 `ADR-0005` decision 7, restated where a UI author will read it:

@@ -100,6 +100,19 @@ A phone is paired the way a device is paired by people standing in the same room
    every other file there, and hands the key back through the carrier.
 4. Revocation is deleting the row (`pair.forget`), which is the same surface that lists the rows.
 
+**How a phone that has never been paired gets its first key** (#262). It has no key, so it cannot authenticate, and
+pairing is the only reason it is talking to the relay at all — so the relay carries **exactly one verb** from a device
+it does not know: `pair.claim`. The phone dials, sends that frame **with no `device`**, and reads the answer, which
+carries `paired` and **no `to`** (there is no name to route to yet, so it comes back on the connection it arrived on).
+The phone hands the key to the platform store, never prints it, and sends `device` on every frame after that; the wall
+knows it by the row the claim wrote. Everything else from an unknown key is still `that device is not paired`, `pair.begin`
+and `pair.forget` included — a stranger may ask for a key, not draw a code or revoke a phone (`docs/control.md`, *The
+one frame a stranger may send*).
+
+**A code gives up after five wrong ones** (#262): the budget is the wall's, because the code lives there, and the fifth
+wrong answer is the existing `no pairing is open` rather than a name of its own. That is the same sentence an expired
+code gets, so the phone's step is the one it already has — ask the wall for a fresh code.
+
 `INV-08` holds by construction: the code lives for two minutes and is never written to a log line, the key is never in
 the tree and never in this repository's state, and the file holds a hash — a leaked `devices.toml` is a list of names,
 not a set of keys. A wrong code and an expired code are refused **by name**, because a client that cannot tell them
