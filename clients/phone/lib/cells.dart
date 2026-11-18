@@ -414,6 +414,242 @@ Drop? dropFor(
   return Retile(target.pane, nearest.$1);
 }
 
+/// **The tiling a release previews** — `Layout::preview` → `Layout::apply`, the function `State::apply_drop` runs when an
+/// intent lands, so the picture a drag draws before release is the picture after it.
+///
+/// The two shapes `docs/mobile-ui.md` names, and no others:
+///
+/// - a **re-tile** closes [dragged] out of its slot — its sibling takes the space, ratio and all — and splits the target
+///   at one half on the named side, with [dragged] on the side it was dropped against. The pane **keeps its id**: its
+///   camera, its thread and its frame live on that id, and a re-tile that minted a new one would be a new pane wearing
+///   the old one's title.
+/// - a **swap** trades the two leaves, and every ratio above them stays where it was.
+///
+/// `null` is `apply`'s `false`: a swap with itself, a pane this tiling does not hold, a tiling of one pane. It means *no
+/// picture*, never *a picture of nothing* — a preview of a release the wall refuses would be a card the operator watched
+/// go somewhere it cannot land, which is the same rule [previewResize] keeps about shares.
+Tiling? previewDrop(
+  Tiling tiling, {
+  required int dragged,
+  required Drop drop,
+}) {
+  switch (drop) {
+    case Swap(:final a, :final b):
+      if (a == b || !_names(tiling, a) || !_names(tiling, b)) {
+        return null;
+      }
+      return _swapLeaves(tiling, a, b);
+    case Retile(:final target, :final side):
+      // **A refused drop moves nothing** (#219): the target is checked before the dragged pane is collapsed out, because
+      // a target the tiling does not hold would otherwise close the dragged pane and then fail to land it — half a
+      // gesture applied, which is the outcome the rule forbids.
+      if (dragged == target ||
+          tiling.leaves.length < 2 ||
+          !_names(tiling, dragged) ||
+          !_names(tiling, target)) {
+        return null;
+      }
+      final closed = _removeLeaf(tiling, dragged);
+      if (closed == null) {
+        return null;
+      }
+      return _splice(closed, target: target, side: side, id: dragged);
+  }
+}
+
+/// The two panes trade cells — `swap_leaves`, which keeps every split and every ratio where they are.
+Tiling _swapLeaves(Tiling node, int one, int other) => switch (node) {
+      TilingLeaf(pane: final id) => TilingLeaf(id == one ? other : (id == other ? one : id)),
+      TilingSplit(:final a, :final b, :final ratio, :final split) => TilingSplit(
+          _swapLeaves(a, one, other),
+          _swapLeaves(b, one, other),
+          ratio,
+          split,
+        ),
+    };
+
+/// The tiling without [pane] — `remove_leaf`: the split whose child it was is replaced by the sibling, so the space it
+/// left closes rather than staying as a gap. `null` when the tiling does not hold it.
+Tiling? _removeLeaf(Tiling node, int pane) {
+  switch (node) {
+    case TilingLeaf():
+      return null;
+    case TilingSplit(:final a, :final b, :final ratio, :final split):
+      if (a case TilingLeaf(pane: final id) when id == pane) {
+        return b;
+      }
+      if (b case TilingLeaf(pane: final id) when id == pane) {
+        return a;
+      }
+      final first = _removeLeaf(a, pane);
+      final second = _removeLeaf(b, pane);
+      return TilingSplit(
+        first ?? a,
+        second ?? b,
+        ratio,
+        split,
+      );
+  }
+}
+
+/// [id] takes the [side] of [target], which is split in half — `replace_leaf_side`, the one place a leaf becomes a split.
+///
+/// **The new split's axis is the side's**, and the tree's own direction belongs to the tree: a drop on a top edge makes a
+/// stack even when the root is side by side (#100).
+Tiling _splice(Tiling node, {required int target, required Side side, required int id}) => switch (node) {
+      TilingLeaf(pane: final leaf) when leaf == target => TilingSplit(
+          TilingLeaf(side == Side.left || side == Side.top ? id : leaf),
+          TilingLeaf(side == Side.left || side == Side.top ? leaf : id),
+          0.5,
+          side == Side.left || side == Side.right ? Split.side : Split.stack,
+        ),
+      TilingLeaf() => node,
+      TilingSplit(:final a, :final b, :final ratio, :final split) => TilingSplit(
+          _splice(a, target: target, side: side, id: id),
+          _splice(b, target: target, side: side, id: id),
+          ratio,
+          split,
+        ),
+    };
+
+/// **A point in the canvas the caller laid the tiling into** — a finger's place, and nothing more than that.
+///
+/// A record and not `Offset`: this module is plain Dart with no UI toolkit under it (#248's rule for the package), and a
+/// drag's arithmetic has no business pulling Flutter in.
+typedef GutterPoint = ({double x, double y});
+
+/// **A gutter between two panes** — `view::Border`, one language over: the split it belongs to, a pane on each side of
+/// it, and the line's own geometry.
+///
+/// The pair names the border and neither id alone can: a pane has a border on each of its sides, so "the border at pane
+/// 2" is ambiguous between the line to its left and the line below it. [a] and [b] are the ids `pane.resize` takes, in
+/// either order ([previewResize] looks the pair up both ways).
+final class Gutter {
+  const Gutter({
+    required this.a,
+    required this.b,
+    required this.split,
+    required this.at,
+    required this.start,
+    required this.span,
+    required this.rect,
+  });
+
+  /// A pane on the `a` side of the split, and one on the `b` side.
+  final int a;
+  final int b;
+
+  /// `side` is a vertical line between two columns, `stack` a horizontal one between two rows.
+  final Split split;
+
+  /// The line's own coordinate along the split's axis: an `x` for a vertical line, a `y` for a horizontal one.
+  final double at;
+
+  /// Where the split starts along that axis, and how long it is — a pointer reads as a share through these two.
+  final double start;
+  final double span;
+
+  /// The split's whole rectangle. The line runs across it on the **other** axis: a gutter between a stack of panes and
+  /// one beside it is as tall as the stack, not as tall as the canvas.
+  final CellRect rect;
+
+  /// Where a point is measured along this gutter — `Border::axis_of`.
+  double axisOf({required double x, required double y}) => switch (split) {
+        Split.side => x,
+        Split.stack => y,
+      };
+
+  /// **The share a pointer asks for**, clamped by `RATIO_RANGE` — `Border::ratio_for`, which is [Numbers.shareAlong],
+  /// so a preview built from this can never name a share the wall refuses.
+  double shareAt(GutterPoint point, Numbers numbers) =>
+      numbers.shareAlong(
+        at: axisOf(x: point.x, y: point.y),
+        start: start,
+        span: span,
+      );
+
+  /// Whether a point is on the line, within [reach] of it and of the line's own extent — `Border::hits`.
+  bool hits({required double x, required double y, required double reach}) {
+    final across = axisOf(x: x, y: y);
+    final (double, double) extent = switch (split) {
+      Split.side => (rect.y, rect.bottom),
+      Split.stack => (rect.x, rect.right),
+    };
+    final along = switch (split) {
+      Split.side => y,
+      Split.stack => x,
+    };
+    final (from, to) = extent;
+    return (across - at).abs() <= reach && along >= from - reach && along <= to + reach;
+  }
+
+  @override
+  String toString() => 'Gutter($a over $b, ${split.word} at $at of $start…${start + span})';
+}
+
+/// **Every gutter in a tiling** — `Layout::borders` → `collect_borders`, in the wall's order: a split's own line first,
+/// then its `a` side's, then its `b` side's.
+///
+/// A border is not something a view can find any other way: the drawn cards leave a gap, but two cards are a gap apart
+/// in a row without a line between them (two panes inside one column, and one beside the column), and a line whose
+/// length is the split's and not the canvas's. So this is one walk of the tree, as the wall's is.
+List<Gutter> gutters(Tiling tiling, CellRect into, {Numbers? numbers}) {
+  final wall = numbers ?? Numbers.wall;
+  final out = <Gutter>[];
+  void walk(Tiling node, CellRect rect) {
+    if (node is! TilingSplit) {
+      return;
+    }
+    final (first, second) = _split(rect, node.ratio, node.split, wall);
+    // `at`/`start`/`span` are the split's own axis — what a ratio is measured along. The line's *extent* is the other
+    // axis, and is the whole of `rect` on it.
+    final (double line, double start, double span) = switch (node.split) {
+      Split.side => (second.x < rect.right ? second.x : rect.right, rect.x, rect.w),
+      Split.stack => (second.y < rect.bottom ? second.y : rect.bottom, rect.y, rect.h),
+    };
+    out.add(Gutter(
+      a: _firstLeaf(node.a),
+      b: _firstLeaf(node.b),
+      split: node.split,
+      at: line,
+      start: start,
+      span: span,
+      rect: rect,
+    ));
+    walk(node.a, first);
+    walk(node.b, second);
+  }
+
+  walk(tiling, CellRect(into.x, into.y, _atLeastZero(into.w), _atLeastZero(into.h)));
+  return out;
+}
+
+/// **The gutter under a point**, if any — `Layout::border_at`, within [grip] of a line.
+///
+/// The [gutters] list is outermost first, which is the walk's order: where two lines cross, the outer split is the one
+/// a press takes, and anywhere else exactly one gutter is on a line.
+Gutter? gutterAt(
+  List<Gutter> gutters, {
+  required double x,
+  required double y,
+  required double grip,
+}) {
+  final reach = (grip > 1.0 ? grip : 1.0) / 2.0;
+  for (final gutter in gutters) {
+    if (gutter.hits(x: x, y: y, reach: reach)) {
+      return gutter;
+    }
+  }
+  return null;
+}
+
+/// The first leaf of a subtree, in reading order — `first_leaf`, which is how a border names a pane on a side it may
+/// share with several.
+int _firstLeaf(Tiling node) => switch (node) {
+      TilingLeaf(:final pane) => pane,
+      TilingSplit(:final a) => _firstLeaf(a),
+    };
+
 /// **The tiling a gutter drag previews** — `Layout::set_ratio` → `set_ratio_on`: the split that separates [pane] from
 /// [other], at [share], clamped by [Numbers.clampShare].
 ///

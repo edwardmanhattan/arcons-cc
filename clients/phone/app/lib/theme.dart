@@ -27,6 +27,23 @@ abstract final class PhoneTokens {
   /// A chip: the active one carries the ring colour, an empty one is still a place (#141).
   static const Color chipActive = Color(0xFF1B2733);
 
+  /// **The drag's own colours** (#257). The slot a lifted card will land in is shaded in the ring's colour, because
+  /// it is the same claim — *this one* — one moment earlier; a card in the air sits on a shadow so the canvas under
+  /// it keeps reading as the canvas.
+  static const Color slotFill = Color(0x334BB3E6);
+  static const Color slotEdge = Color(0xFF4BB3E6);
+  static const Color liftedEdge = Color(0xFF7FD0F0);
+  static const Color shadow = Color(0x55000000);
+
+  /// The gutter's grip: a bar on the line two panes meet on, drawn where a hand can find it. Its **width is the
+  /// phone's own look** — `docs/mobile-ui.md` says the gutter is, and no number here has to match the wall's.
+  static const Color gutterInk = Color(0xFF2E3F4E);
+  static const Color gutterHeld = Color(0xFF4BB3E6);
+
+  /// A diagram the phone could not re-read: dimmed, because it is the arrangement it last saw and not this moment's
+  /// (`docs/mobile-ui.md`, *not connected*).
+  static const double dimmed = 0.55;
+
   /// One card's corner, its padding, and the ring's width.
   static const Radius corner = Radius.circular(10);
   static const double padding = 10;
@@ -36,6 +53,18 @@ abstract final class PhoneTokens {
   static const double chipHeight = 28;
   static const double stateHeight = 26;
   static const double gap = 8;
+
+  /// The gutter's grip, and the bar drawn on the line: **a grip as wide as the gap plus a finger's slack**, which is a
+  /// design choice and not a number the wall has (`mobile-ui.md`, *the gutter*).
+  static const double gutterGrip = 24;
+  static const Size gutterBar = Size(28, 4);
+
+  /// `Move to…`: one row's height, and the panel's padding.
+  static const double placeHeight = 44;
+  static const EdgeInsets placePadding = EdgeInsets.symmetric(
+    horizontal: 14,
+    vertical: 4,
+  );
 
   static const EdgeInsets screen = EdgeInsets.symmetric(
     horizontal: 12,

@@ -431,7 +431,309 @@ void main() {
       expect(dropFor(const [], dragged: 1, x: 0.0, y: 0.0), isNull);
     });
   });
+
+  group('a preview of a drop', () {
+    test('a re-tile closes the lifted pane\'s slot and gives it half of the target', () {
+      final three = caseNamed(cases, 'three');
+      final before = three.tiling;
+      final target = cellOf(before, three.into, 1, three.numbers);
+      for (final side in Side.values) {
+        final preview = previewDrop(
+          before,
+          dragged: 3,
+          drop: Retile(1, side),
+        );
+        expect(
+          preview,
+          isNotNull,
+          reason: 'a re-tile of pane 3 onto pane 1\'s ${side.name} has no preview: `Layout::apply` answers this drop, '
+              'so a client that draws nothing here is a client whose release lands somewhere it never showed (#84)',
+        );
+        final laid = cells(preview!, three.into, numbers: three.numbers);
+        expect(
+          laid.map((cell) => cell.pane).toSet(),
+          {1, 2, 3},
+          reason: 'the preview of a re-tile changed which panes exist: a re-tile **keeps the id** — a camera, a thread '
+              'and a frame live on it, and a preview that minted a new pane would draw a title over nothing',
+        );
+        final slot = laid.firstWhere((cell) => cell.pane == 3).rect;
+        final horizontal = side == Side.left || side == Side.right;
+        expect(
+          slot.w,
+          horizontal ? target.w / 2.0 : target.w,
+          reason: 'the ${side.name} preview gave pane 3 a cell ${slot.w} wide: `apply` splits the target at one half on '
+              'the named side (docs/mobile-ui.md, *the preview\'s shape is Layout::apply\'s*)',
+        );
+        expect(
+          slot.h,
+          horizontal ? target.h : target.h / 2.0,
+          reason: 'the ${side.name} preview gave pane 3 a cell ${slot.h} tall, and the split\'s axis is the side\'s',
+        );
+        // And it lands inside the cell the target had, on the half it was dropped against.
+        final onTheSide = switch (side) {
+          Side.left => slot.x == target.x,
+          Side.right => slot.right == target.right,
+          Side.top => slot.y == target.y,
+          Side.bottom => slot.bottom == target.bottom,
+        };
+        expect(
+          onTheSide,
+          isTrue,
+          reason: 'pane 3 previewed at $slot, which is not the ${side.name} half of pane 1\'s cell $target: a drop '
+              'against an edge lands against that edge',
+        );
+        // **A preview is a tiling like any other**: it covers the canvas exactly, as the cells the recording holds do.
+        final area = laid.fold<double>(0, (sum, cell) => sum + cell.rect.w * cell.rect.h);
+        expect(
+          area,
+          closeTo(three.into.w * three.into.h, 0.5),
+          reason: 'the preview\'s cells cover $area of ${three.into.w * three.into.h}: a picture before release that does '
+              'not tile is a picture the wall never draws',
+        );
+      }
+    });
+
+    test('a swap trades the two leaves and every ratio stays where it was', () {
+      final three = caseNamed(cases, 'three');
+      final before = three.tiling;
+      final preview = previewDrop(before, dragged: 3, drop: const Swap(1, 3));
+      expect(preview, isNotNull, reason: 'a swap of two panes the tiling holds has no preview');
+      expect(
+        preview!.leaves,
+        before.leaves.map((pane) => pane == 1 ? 3 : (pane == 3 ? 1 : pane)).toList(),
+        reason: 'a swap is the two leaves trading places and nothing else: ${preview.leaves} is not that trade',
+      );
+      expect(
+        ratiosOf(preview),
+        ratiosOf(before),
+        reason: 'the swap moved a ratio: `swap_leaves` touches leaves only, and every split above them stays where it '
+            'was (docs/mobile-ui.md)',
+      );
+      final laid = cells(preview, three.into, numbers: three.numbers);
+      expect(
+        laid.firstWhere((cell) => cell.pane == 3).rect,
+        cellOf(before, three.into, 1, three.numbers),
+        reason: 'the swapped pane did not take the cell of the pane it swapped with',
+      );
+    });
+
+    test('a drop the wall refuses has no preview', () {
+      final three = caseNamed(cases, 'three');
+      final single = caseNamed(cases, 'one-pane');
+      expect(
+        previewDrop(three.tiling, dragged: 1, drop: const Swap(1, 1)),
+        isNull,
+        reason: 'a swap with itself previewed a tiling: the wall refuses it by name (`the pane cannot be swapped with '
+            'itself`), and a card drawn where a refused release cannot land is a picture of a wall that will not exist',
+      );
+      expect(
+        previewDrop(three.tiling, dragged: 1, drop: const Retile(9, Side.left)),
+        isNull,
+        reason: 'a re-tile onto a pane the tiling does not hold previewed something: `no such pane` is a rule',
+      );
+      expect(
+        previewDrop(three.tiling, dragged: 9, drop: const Retile(1, Side.left)),
+        isNull,
+        reason: 'a re-tile of a pane the tiling does not hold previewed something: the wall has no pane to close out',
+      );
+      expect(
+        previewDrop(single.tiling, dragged: 1, drop: const Retile(1, Side.left)),
+        isNull,
+        reason: 'a one-pane tiling previewed a re-tile: `the tiling refused the pane`, because a workspace holding one '
+            'pane cannot give half of it away',
+      );
+    });
+  });
+
+  group('the gutters', () {
+    const grip = 24.0;
+
+    test('every split is a gutter, and its line is where two of the cells meet', () {
+      var checked = 0;
+      for (final one in cases) {
+        final list = gutters(one.tiling, one.into, numbers: one.numbers);
+        expect(
+          list.length,
+          splitsIn(one.tiling),
+          reason: '${one.name}.json holds ${splitsIn(one.tiling)} splits and the phone found ${list.length} gutters: '
+              '`Layout::borders` walks the tree once, and a gutter with no line is a handle nobody can grab',
+        );
+        final laid = cells(one.tiling, one.into, numbers: one.numbers);
+        for (final gutter in list) {
+          checked++;
+          final vertical = gutter.split == Split.side;
+          // The cells that meet the line **and lie in the split's own rectangle**: two cells elsewhere on the canvas
+          // can share the coordinate without a border running between them.
+          final touching = laid.where(
+            (cell) =>
+                (vertical
+                    ? cell.rect.right == gutter.at || cell.rect.x == gutter.at
+                    : cell.rect.bottom == gutter.at || cell.rect.y == gutter.at) &&
+                (vertical
+                    ? cell.rect.y >= gutter.rect.y &&
+                          cell.rect.bottom <= gutter.rect.bottom
+                    : cell.rect.x >= gutter.rect.x &&
+                          cell.rect.right <= gutter.rect.right),
+          );
+          expect(
+            touching.length,
+            greaterThanOrEqualTo(2),
+            reason: '${one.name}.json: the gutter ${gutter.at} has ${touching.length} cells against it — a border is '
+                'the line two panes meet on, and a line with one cell on it is not between two panes',
+          );
+          for (final cell in touching) {
+            final inside = vertical
+                ? cell.rect.y >= gutter.rect.y && cell.rect.bottom <= gutter.rect.bottom
+                : cell.rect.x >= gutter.rect.x && cell.rect.right <= gutter.rect.right;
+            expect(
+              inside,
+              isTrue,
+              reason: '${one.name}.json: cell ${cell.rect} meets the gutter ${gutter.at} outside the split\'s own '
+                  'rectangle ${gutter.rect}: a border is as long as its split and not as long as the canvas',
+            );
+          }
+          expect(
+            gutter.at,
+            inInclusiveRange(vertical ? gutter.rect.x : gutter.rect.y,
+                vertical ? gutter.rect.right : gutter.rect.bottom),
+            reason: '${one.name}.json: the gutter is drawn at ${gutter.at}, outside the split it belongs to',
+          );
+        }
+      }
+      expect(
+        checked,
+        greaterThanOrEqualTo(10),
+        reason: 'only $checked gutters were checked across nine recorded tilings: the walk was not exercised',
+      );
+    });
+
+    test('a gutter names the pair `pane.resize` takes, and the pair moves that line', () {
+      for (final one in cases) {
+        for (final gutter in gutters(one.tiling, one.into, numbers: one.numbers)) {
+          final moved = previewResize(
+            one.tiling,
+            pane: gutter.a,
+            other: gutter.b,
+            share: 0.42,
+            numbers: one.numbers,
+          );
+          final after = gutters(moved, one.into, numbers: one.numbers);
+          final same = after.where((other) => other.rect == gutter.rect);
+          expect(
+            same,
+            isNotEmpty,
+            reason: '${one.name}.json: resizing (${gutter.a}, ${gutter.b}) removed the split it names: the pair is kept '
+                'on each side of a border so that a resize can name it at all',
+          );
+          final line = same.first;
+          final expected = Numbers.wall.clampShare(0.42);
+          if (gutter.span >= one.numbers.minPane * 2.0) {
+            // A split too small for two panes halves whatever share it is given (`split_length`), which is
+            // `window-too-small.json`: the stored ratio moves and the drawn line cannot, on the wall either.
+            expect(
+              (line.at - line.start) / line.span,
+              closeTo(expected, 1e-5),
+              reason: '${one.name}.json: resizing (${gutter.a}, ${gutter.b}) to $expected left the line at ${line.at} of '
+                  '${line.start}…${line.start + line.span}: the pair names a border, and a border is the split its two '
+                  'sides share — the outermost one that separates them',
+            );
+          }
+        }
+      }
+    });
+
+    test('a share read off a gutter is always inside RATIO_RANGE', () {
+      final narrow = caseNamed(cases, 'narrowest-share');
+      final gutter = gutters(narrow.tiling, narrow.into, numbers: narrow.numbers).first;
+      for (final at in [-1e9, -50.0, gutter.at, 1e9]) {
+        final point = gutter.split == Split.side
+            ? (x: at, y: narrow.into.h / 2.0)
+            : (x: narrow.into.w / 2.0, y: at);
+        final share = gutter.shareAt(point, narrow.numbers);
+        expect(
+          share,
+          allOf(
+            greaterThanOrEqualTo(narrow.numbers.ratioMin),
+            lessThanOrEqualTo(narrow.numbers.ratioMax),
+          ),
+          reason: 'a pointer at $at of the split asked for $share: RATIO_RANGE is the wall\'s clamp '
+              '(src/config/layout.rs), and the preview the phone draws at the end of a gutter is the share it sends',
+        );
+      }
+    });
+
+    test('a press is on the gutter within the grip, and off it outside', () {
+      final three = caseNamed(cases, 'three');
+      final list = gutters(three.tiling, three.into, numbers: three.numbers);
+      final root = list.first;
+      expect(root.split, Split.side, reason: 'three.json\'s first split is side by side: a different case would make '
+          'this test about a horizontal line');
+      final across = root.at;
+      expect(
+        gutterAt(list, x: across, y: 720.0, grip: grip),
+        same(root),
+        reason: 'a press on the line is not on the border it draws',
+      );
+      expect(
+        gutterAt(list, x: across - grip / 2.0 + 0.1, y: 720.0, grip: grip),
+        same(root),
+        reason: 'a press at the edge of the grip is not on the line, and a grip narrower than the drawn gap is a handle '
+            'the eye can see and the hand cannot find',
+      );
+      expect(
+        gutterAt(list, x: across - grip, y: 720.0, grip: grip),
+        isNull,
+        reason: 'a press a grip away from the line was taken as a drag of it',
+      );
+      // The line stops at its own split: a nested split's gutter is not as tall as the canvas.
+      final inner = list.firstWhere((gutter) => gutter.split == Split.stack);
+      expect(
+        gutterAt(list, x: 1200.0, y: inner.at, grip: grip),
+        same(inner),
+        reason: 'a press on a horizontal gutter inside one column is not on it: a border is as long as its split',
+      );
+      expect(
+        gutterAt(list, x: 100.0, y: inner.at, grip: grip),
+        isNull,
+        reason: 'the horizontal gutter between panes 2 and 3 was grabbed at x = 100, which is outside the split it '
+            'belongs to: the pane there has no border at that y',
+      );
+    });
+
+    test('where two lines cross, the outer split is the one a press takes', () {
+      final three = caseNamed(cases, 'three');
+      final list = gutters(three.tiling, three.into, numbers: three.numbers);
+      final outer = list.first;
+      expect(
+        gutterAt(list, x: outer.at, y: 360.0, grip: grip),
+        same(outer),
+        reason: 'a press where the outer line crosses the inner one took the inner line: `border_at` takes the first '
+            'border of a root-first walk, so the outer split is the one the operator grabs',
+      );
+      // And a tiling of one pane has no gutter, which is not a gutter at the whole canvas.
+      final single = caseNamed(cases, 'one-pane');
+      expect(gutters(single.tiling, single.into, numbers: single.numbers), isEmpty);
+    });
+  });
 }
+
+
+/// The recorded rectangle of one pane, from the wall's own walk — `Layout::cells`, through [cells].
+CellRect cellOf(Tiling tiling, CellRect into, int pane, Numbers numbers) =>
+    cells(tiling, into, numbers: numbers).firstWhere((cell) => cell.pane == pane).rect;
+
+/// Every split's ratio in reading order — what a swap must leave alone and what a resize moves one of.
+List<double> ratiosOf(Tiling tiling) => switch (tiling) {
+  TilingLeaf() => const [],
+  TilingSplit(:final a, :final b, :final ratio) => [
+    ratio,
+    ...ratiosOf(a),
+    ...ratiosOf(b),
+  ],
+};
+
+/// How many splits a tiling holds — one gutter each, in `Layout::borders`' walk.
+int splitsIn(Tiling tiling) => ratiosOf(tiling).length;
 
 /// The case with a given name. A missing one is a red test with the names that are there, because the recording is the
 /// wall's and a case that vanished is a claim this suite no longer covers.

@@ -1,7 +1,7 @@
-/// **The canvas, held to the wall's own recording** (#255).
+/// **The canvas, held to the wall's own recording** (#255, #257).
 ///
 /// The projection is the corpus's — the wall's answer to `{"v": 1, "read": "wall"}`, decoded by `arcons_phone`'s wire
-/// — and the screen is asserted three ways:
+/// and read through the controller that carries it — and the screen is asserted three ways:
 ///
 /// 1. **where the cards are**: the rects come from `cells.dart`, which is `Layout::cells` proved against the nine
 ///    recorded cases (#249), so a canvas that drew its own arithmetic would be a second layout;
@@ -11,103 +11,30 @@
 ///    app's assets ticket.
 library;
 
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:arcons_phone/cells.dart';
-import 'package:arcons_phone/wire.dart';
-import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:arcons_phone_app/controller.dart';
 import 'package:arcons_phone_app/overview.dart';
 
-/// The recording, by path from this package: `clients/phone/app/` → the repository's root.
-const String corpusPath = '../../../fixtures/control/session.jsonl';
-
-/// Every projection in the corpus, in the order the wall recorded them.
-List<Wall> projections() {
-  final file = File(corpusPath);
-  if (!file.existsSync()) {
-    // Thrown rather than expected: this runs while the file is being loaded, before any test body exists.
-    throw StateError(
-      'no corpus at $corpusPath: the screen is held to the wall\'s recording (`cargo run -- --record`), and a '
-      'screen proved against a projection made up in a test is proved against itself',
-    );
-  }
-  final walls = <Wall>[];
-  for (final line in const LineSplitter().convert(file.readAsStringSync())) {
-    if (line.trim().isEmpty) {
-      continue;
-    }
-    final exchange = jsonDecode(line);
-    if (exchange is! Map<String, Object?>) {
-      continue;
-    }
-    final expect = exchange['expect'];
-    if (expect is! Map<String, Object?>) {
-      continue;
-    }
-    final answer = decodeAnswer(jsonEncode(expect));
-    if (answer is Projection) {
-      walls.add(answer.wall);
-    }
-  }
-  return walls;
-}
-
-/// A projection whose **drawn** workspace is worth drawing: the most panes in the one the wall is showing.
-///
-/// The score is the active workspace's, not the wall's: a projection with twelve panes behind a chip is a picture of
-/// one card, and a canvas tested on one card is a canvas whose tiling is untested.
-Wall busiest(List<Wall> walls) {
-  var best = walls.first;
-  var most = -1;
-  for (final wall in walls) {
-    if (wall.active < 0 || wall.active >= wall.workspaces.length) {
-      continue;
-    }
-    final count = wall.workspaces[wall.active].panes.length;
-    if (count > most) {
-      most = count;
-      best = wall;
-    }
-  }
-  return best;
-}
-
-Future<void> pump(
-  WidgetTester tester,
-  Wall wall, {
-  PhoneState state = PhoneState.live,
-}) async {
-  // A phone-sized surface, fixed: a golden that sizes itself from the window is a golden that moves on the runner.
-  await tester.binding.setSurfaceSize(const Size(360, 640));
-  addTearDown(() => tester.binding.setSurfaceSize(null));
-  await tester.pumpWidget(
-    MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: Scaffold(
-        body: OverviewScreen(wall: wall, state: state),
-      ),
-    ),
-  );
-  await tester.pumpAndSettle();
-}
+import 'harness.dart';
 
 void main() {
-  final walls = projections();
+  final corpus = readCorpus();
+  final walls = projections(corpus);
 
   test('the recording holds projections to draw', () {
     expect(
       walls,
       isNotEmpty,
-      reason: 'the corpus holds no projection: the screen would be tested against nothing',
+      reason:
+          'the corpus holds no projection: the screen would be tested against nothing',
     );
     final drawn = walls.where((wall) {
-          return wall.active >= 0 &&
-              wall.active < wall.workspaces.length &&
-              wall.workspaces[wall.active].panes.length >= 2;
-        }).toList();
+      return wall.active >= 0 &&
+          wall.active < wall.workspaces.length &&
+          wall.workspaces[wall.active].panes.length >= 2;
+    }).toList();
     expect(
       drawn,
       isNotEmpty,
@@ -119,17 +46,14 @@ void main() {
 
   group('the walk', () {
     test('every card sits in a rect the wall\'s arithmetic produced', () {
-      final wall = busiest(walls);
-      const size = Size(336, 560);
-      final cards = layOut(wall, size);
-      final workspace = wall.workspaces[wall.active];
+      final wall = projectionOf(busiestProjectionLine(corpus));
+      final canvas = CellRect(0, 0, 336, 560);
+      final cards = layOut(wall, canvas);
+      final workspace = activeWorkspace(wall)!;
       final byId = {for (final pane in workspace.panes) pane.id: pane};
 
       expect(cards, isNotEmpty, reason: 'the busiest projection drew no cards');
-      final expected = rects(
-        workspace.tiling!,
-        CellRect(0, 0, size.width, size.height),
-      );
+      final expected = rects(workspace.tiling!, canvas);
       expect(
         cards.map((card) => card.rect).toList(),
         expected.map((cell) => cell.rect).toList(),
@@ -147,11 +71,11 @@ void main() {
     });
 
     test('the words are the walk\'s, and each card is its kind, its title and whether it has the keys', () {
-      final wall = busiest(walls);
-      final cards = layOut(wall, const Size(336, 560));
+      final wall = projectionOf(busiestProjectionLine(corpus));
+      final cards = layOut(wall, CellRect(0, 0, 336, 560));
       expect(
         spokenCanvas(wall, cards),
-        startsWith(wall.workspaces[wall.active].name),
+        startsWith(activeWorkspace(wall)!.name),
         reason:
             'the canvas speaks the workspace it draws, and it speaks it first',
       );
@@ -181,14 +105,17 @@ void main() {
     testWidgets(
       'draws one card per card, and reads them out loud in the drawn order',
       (tester) async {
-        final wall = busiest(walls);
-        await pump(tester, wall);
+        final controller = await liveController(
+          tester,
+          FakeCarrier([busiestProjectionLine(corpus)]),
+        );
+        await pumpScreen(tester, controller);
 
-        final laid = layOut(wall, const Size(336, 640 - 28 - 26 - 32));
+        final wall = controller.wall!;
+        final laid = layOut(wall, canvasRect(tester));
         // The spoken description is on the canvas; the cards keep their own labels.
-        final canvas = find.bySemanticsLabel(spokenCanvas(wall, laid));
         expect(
-          canvas,
+          find.bySemanticsLabel(spokenCanvas(wall, laid)),
           findsOneWidget,
           reason: 'the canvas must say what it draws, and say it with the walk that drew it',
         );
@@ -206,8 +133,12 @@ void main() {
     testWidgets(
       'the chips are the workspaces, the active one chosen, an emptied one still there',
       (tester) async {
-        final wall = busiest(walls);
-        await pump(tester, wall);
+        final controller = await liveController(
+          tester,
+          FakeCarrier([busiestProjectionLine(corpus)]),
+        );
+        await pumpScreen(tester, controller);
+        final wall = controller.wall!;
         for (var index = 0; index < wall.workspaces.length; index++) {
           final workspace = wall.workspaces[index];
           expect(
@@ -221,50 +152,52 @@ void main() {
       },
     );
 
-    testWidgets('the state line says what the phone knows, and never more', (
+    testWidgets('the state line is silent while the last read stands, and says what it knows when it does not', (
       tester,
     ) async {
-      final wall = busiest(walls);
-      await pump(tester, wall, state: PhoneState.notConnected);
+      var now = DateTime.utc(2026, 11, 6, 12);
+      final carrier = FakeCarrier([projectionLine(corpus), null]);
+      final controller = OverviewController(clock: () => now);
+      await controller.connect(carrier);
+      await pumpScreen(tester, controller);
+
+      expect(controller.state, PhoneState.live);
       expect(
-        find.text('not connected'),
+        find.text(''),
         findsOneWidget,
-        reason: 'a phone with no read says so rather than showing a diagram labelled current',
+        reason: 'on a live connection the state line says **nothing at all**: silence is the phone saying *this is '
+            'the wall* (`docs/mobile-ui.md`, the four states) — a version number here is a claim dressed as a label',
+      );
+
+      // A read that does not land takes the holes with it, and the age is what is left of the diagram.
+      now = now.add(const Duration(seconds: 41));
+      await controller.read();
+      await tester.pumpAndSettle();
+      expect(controller.state, PhoneState.notConnected);
+      expect(
+        find.text('not connected · last read 41 s ago'),
+        findsOneWidget,
+        reason: 'the number in `last read 41 s ago` is an **age** and not a sequence: it says exactly what it says, '
+            'and it is the only thing separating a stale diagram from a lie',
       );
       expect(
         find.textContaining('wall seq'),
         findsNothing,
-        reason: 'a version is shown only when there is a read',
+        reason: 'a version is shown only where it is true to show it',
       );
-
-      await pump(tester, wall, state: PhoneState.live);
-      expect(find.text('live · wall seq ${wall.seq}'), findsOneWidget);
     });
 
-    testWidgets('an emptied workspace says the wall\'s own words', (
-      tester,
-    ) async {
-      // The corpus's last projections hold an emptied workspace; find one and make it active.
-      final withEmpty = walls
-          .where((wall) => wall.workspaces.any((workspace) => workspace.empty))
-          .toList();
+    testWidgets('an emptied workspace says the wall\'s own words', (tester) async {
+      final controller = await liveController(
+        tester,
+        FakeCarrier([emptiedProjectionLine(corpus)]),
+      );
+      await pumpScreen(tester, controller);
       expect(
-        withEmpty,
-        isNotEmpty,
-        reason: 'the corpus no longer records an emptied workspace (#141)',
+        activeWorkspace(controller.wall!)!.empty,
+        isTrue,
+        reason: 'the recording no longer shows an emptied workspace on screen (#141)',
       );
-      final source = withEmpty.first;
-      final emptyIndex = source.workspaces.indexWhere(
-        (workspace) => workspace.empty,
-      );
-      final emptied = Wall(
-        active: emptyIndex,
-        focused: null,
-        maximised: null,
-        seq: source.seq,
-        workspaces: source.workspaces,
-      );
-      await pump(tester, emptied);
       expect(
         find.text('No panes yet.'),
         findsOneWidget,
@@ -273,17 +206,26 @@ void main() {
     });
 
     testWidgets('a golden of the canvas, at phone size', (tester) async {
-      final wall = busiest(walls);
-      await pump(tester, wall);
+      final controller = await liveController(
+        tester,
+        FakeCarrier([busiestProjectionLine(corpus)]),
+      );
+      await pumpScreen(tester, controller);
       await expectLater(
         find.byType(OverviewScreen),
         matchesGoldenFile('goldens/overview-live.png'),
       );
     });
 
-    testWidgets('a golden of a phone with nothing read', (tester) async {
-      final wall = busiest(walls);
-      await pump(tester, wall, state: PhoneState.notConnected);
+    testWidgets('a golden of a phone whose last read did not land', (tester) async {
+      var now = DateTime.utc(2026, 11, 6, 12);
+      final carrier = FakeCarrier([busiestProjectionLine(corpus), null]);
+      final controller = OverviewController(clock: () => now);
+      await controller.connect(carrier);
+      await pumpScreen(tester, controller);
+      now = now.add(const Duration(seconds: 41));
+      await controller.read();
+      await tester.pumpAndSettle();
       await expectLater(
         find.byType(OverviewScreen),
         matchesGoldenFile('goldens/overview-not-connected.png'),
