@@ -104,6 +104,7 @@ void main() {
           switch (answer) {
             Changed() => 'changed',
             Projection() => 'projection',
+            Granted() => 'grant',
             Refused() => 'refused',
           },
           (count) => count + 1,
@@ -118,11 +119,12 @@ void main() {
       expect(counts['refused'], isNotNull, reason: 'the corpus holds no refusal');
     });
 
-    test('the watch\'s two shapes are not in it yet, and that is a fact about the carrier', () {
-      // A granted watch and a published projection belong to a carrier that carries a watch (#221): the unix
-      // socket refuses one by name, which is what line 81 of the corpus records. When a relay's fixtures are
-      // recorded, this test is red until the client types both — deliberately, because a publish is a read's
-      // body with the watch on it, and a client that took one for the other would act on a stale arrangement.
+    test('the watch\'s stream is not in it, and the refusal is', () {
+      // A grant and a publish belong to a carrier that carries a watch (#221), and **no fixture can hold a stream**:
+      // the unix socket refuses a watch by name (which is the exchange this test finds), and `fixtures/README.md`
+      // refuses a timed exchange because a coalesced publish is a race. So the two shapes are typed from
+      // `src/control/wire.rs` and driven by the fake relay in `test/relay_test.dart` (#256), not by this file — and
+      // this test says so rather than letting the corpus look like it covers them.
       final refusedWatch = exchanges.where((exchange) {
         final send = exchange.send;
         return send is Map<String, Object?> && send['watch'] != null && exchange.expect['ok'] == false;
@@ -133,6 +135,21 @@ void main() {
         reason:
             'the corpus no longer holds a watch refused by name: either the unix carrier now carries one, or '
             'the recording changed — and the client has to be told which',
+      );
+
+      // And the stream's lines are **not** in the corpus: a `watch` answer here would be a fixture that a race wrote,
+      // and the fake relay's claim to be the only proof of them would be false.
+      final streamed = [
+        for (final exchange in exchanges)
+          if (exchange.expect['watch'] != null && exchange.expect['ok'] == true) exchange.expect,
+      ];
+      expect(
+        streamed,
+        isEmpty,
+        reason:
+            'the corpus holds ${streamed.length} granted or published watch line(s): a watch stream is a race and '
+            'not a fixture (fixtures/README.md), so the file cannot have gained one — and if it did, the fake relay '
+            'in test/relay_test.dart is no longer the only thing proving the shape',
       );
     });
   });

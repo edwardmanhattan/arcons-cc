@@ -5,11 +5,16 @@
 /// `test/corpus_test.dart`. A field named here that the wall does not send is a red test, and a shape the corpus grows
 /// is a red test until it is typed — which is the only way a client in another language stays honest.
 ///
-/// **Three answers, and one that must not exist.** A request's success is `{"ok": true, "changed": …}`, a read's is a
-/// projection under `"wall"`, and a no is `{"ok": false, "why": …, "kind": …}` — one of those, never two. The other two
-/// shapes `docs/control.md` defines — a granted watch and a published projection — belong to a carrier that carries a
-/// watch, and the recording holds neither yet (the unix socket refuses one by name). They arrive with the relay's
-/// fixtures, and this file will refuse to parse them until that ticket types them, which is deliberate.
+/// **Four answers, and one that must not exist.** A request's success is `{"ok": true, "changed": …}`, a read's is a
+/// projection under `"wall"`, a watch's is a grant under `"watch"`, and a no is `{"ok": false, "why": …, "kind": …}` —
+/// one of those, never two. The fifth shape `docs/control.md` defines, the **publish**, is the body a read answers with
+/// **plus the watch it belongs to** (#221, #256): it is a [Projection] whose [Projection.watch] is set, and that field is
+/// the only thing that tells it from the answer to a read in flight.
+///
+/// **The corpus holds none of the watch's three lines** — the unix socket refuses a watch by name, and
+/// `fixtures/README.md` refuses a timed exchange because a coalesced publish is a race and not a fixture. They are typed
+/// here from `src/control/wire.rs` and driven by a **fake relay** on loopback (`test/relay_test.dart`, #256), which is
+/// said out loud rather than dressed up as corpus coverage.
 library;
 
 import 'dart:convert';
@@ -47,10 +52,47 @@ final class Changed extends Answer {
 
 /// **A projection** — the body of `{"v": 1, "read": "wall"}`, and the phone's only truth about the arrangement
 /// (`mobile-remote.md` decision 1: it reads, it does not remember).
+///
+/// A **publish** is this same value with [watch] set: `{"v": 1, "to": "phone", "ok": true, "watch": "wall", "wall":
+/// {…}}`. A read's answer carries no `watch`, so a client with a request in flight can tell the two lines apart — the
+/// wall's own decoder reads the watch's lines *before* the plain `wall` answer for exactly that reason
+/// (`src/control/wire.rs`, `Answer::Wall` and `Answer::Published`).
 final class Projection extends Answer {
-  const Projection(this.wall);
+  const Projection(this.wall, {this.watch});
 
   final Wall wall;
+
+  /// The watch this projection was **published** under, or `null` when it is the answer to a read.
+  final Watch? watch;
+}
+
+/// **A watch was granted** (#221): `{"v": 1, "ok": true, "watch": "wall"}` — one answer, and the projection follows
+/// on the stream. It carries no projection of its own: the client has just read one, and the grant's baseline is the
+/// `seq` the wall held when it answered (`src/control/server.rs`'s `grant`).
+final class Granted extends Answer {
+  const Granted(this.watch);
+
+  final Watch watch;
+}
+
+/// **What a client watches** (`Watch` in `src/control/watch.rs`): the projection, and nothing else — a phone draws the
+/// arrangement, and the picture is not a client's to read (`ADR-0005` decision 7).
+///
+/// One word and a closed list, like [Split]: a word this client does not know is a [WireException] and never a default
+/// (`INV-07`).
+enum Watch {
+  /// The projection, published when it changed: `docs/control.md`'s read of `wall`, as a stream.
+  wall('wall');
+
+  const Watch(this.word);
+
+  /// The word on the wire and in `docs/control.md`.
+  final String word;
+
+  static Watch ofWord(Object? word) => switch (word) {
+        'wall' => Watch.wall,
+        _ => throw WireException('watch ${jsonEncode(word)} is not a stream this client knows'),
+      };
 }
 
 /// **The wall said no** — its words in [why], its category in [kind], and the category is what the screen acts on.
@@ -333,21 +375,31 @@ Answer decodeAnswer(String line) {
   }
 
   final ok = _asBool(object['ok'], '"ok"');
-  if (ok) {
-    if (object.containsKey('changed')) {
-      return Changed(_asBool(object['changed'], '"changed"'));
-    }
-    if (object.containsKey('wall')) {
-      return Projection(Wall.from(object['wall']));
-    }
-    throw const WireException(
-      'an "ok" answer that carries neither "changed" nor "wall": the protocol has no third shape for it yet',
+  if (!ok) {
+    return Refused(
+      _asString(object['why'], '"why"'),
+      RefusalKind.ofWord(object['kind']),
     );
   }
 
-  return Refused(
-    _asString(object['why'], '"why"'),
-    RefusalKind.ofWord(object['kind']),
+  // **The watch's two lines are read before the plain `wall` answer**, because a publish carries both and the `watch`
+  // it belongs to is what tells it from the answer to a read — `wire.rs`'s order, and this file's one decoder (#221).
+  if (object.containsKey('watch')) {
+    final watch = Watch.ofWord(object['watch']);
+    if (object.containsKey('wall')) {
+      return Projection(Wall.from(object['wall']), watch: watch);
+    }
+    return Granted(watch);
+  }
+  if (object.containsKey('wall')) {
+    return Projection(Wall.from(object['wall']));
+  }
+  if (object.containsKey('changed')) {
+    return Changed(_asBool(object['changed'], '"changed"'));
+  }
+  throw const WireException(
+    'an "ok" answer that carries none of "changed", "wall" or "watch": this client types the three a relay '
+    'carries, and a `paired` answer is pairing\'s (#260, not on this wire yet)',
   );
 }
 

@@ -462,6 +462,30 @@ void main() {
       );
     });
 
+    /// **A grant is the carrier's answer, never a read's** (#221, #256). A hand-made carrier could hand one to a
+    /// client; the client must say it cannot read it rather than treat the existence of a stream as a projection.
+    test('a watch grant is not an answer a client can act on', () async {
+      final grant = jsonEncode({'v': protocol, 'ok': true, 'watch': 'wall'});
+      final carrier = FakeCarrier([grant]);
+      final client = Client();
+      await client.connect(carrier);
+
+      await expectLater(
+        client.read(),
+        throwsA(isA<Unreadable>()),
+        reason:
+            'a read answered with a grant was taken for a projection: a grant says a stream exists, and a stream is '
+            'not the arrangement the read asked for',
+      );
+      expect(client.wall, isNull, reason: 'a client that cannot read its answer must not hold a projection');
+      await expectLater(
+        client.act('pane.focus', {'pane': 1}),
+        throwsA(isA<NotRead>()),
+        reason: 'a read that did not land leaves the client knowing nothing, so nothing may be sent after it',
+      );
+      expect(carrier.sent, [readLine], reason: 'the unreadable answer provoked a line the client did not mean to send');
+    });
+
     /// `INV-07` one language over: four kinds, four actions, and no default arm anywhere in the path.
     test('every refusal kind names one action, and none of them is a default', () {
       // `Next.of`'s switch has no default arm, so a fifth kind is a compile error there rather than a screen with no
