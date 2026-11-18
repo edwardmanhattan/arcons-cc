@@ -10,9 +10,9 @@
 /// 1. **Read, then act.** The first line a session sends is `{"v":1,"read":"wall"}`, and nothing is sent until that read
 ///    has landed: [Client.act] throws [NotRead] while the projection is still out.
 /// 2. **A connection that comes back knows nothing.** [Client.connect] and [Client.disconnect] both leave the client
-///    knowing nothing, and there is no queue in this file for an intent to wait in. A watch is not resumed either,
-///    because this build asks for none: `wire.dart` refuses a grant by name, and the relay's fixtures (#196) are what
-///    will type one.
+///    knowing nothing, and there is no queue in this file for an intent to wait in. A watch is not resumed either: a
+///    watch is the **carrier's** (`lib/relay.dart`, #256), asked only after a read has landed on the connection —
+///    `RelayCarrier.watch` refuses to ask before one has — and a connection that comes back is not watching anything.
 /// 3. **A wall changed elsewhere is read, never corrected.** [Client.read] replaces what the client held, wholesale.
 ///    There is no second writer here: an `ok` answer does not patch the projection, and neither does a refusal.
 /// 4. **A version the wall does not speak is a stop.** A refusal whose kind is [RefusalKind.version] sets [Client.stop],
@@ -249,6 +249,13 @@ final class Client {
         throw const Unreadable(
           'a read was answered with "changed", and a projection is the only answer to one',
         );
+      // A grant is the answer to the carrier's ask and never to a read. Handing it here would be a client that took
+      // the existence of a stream for the arrangement it asked for.
+      case Granted():
+        _known = const _Nothing();
+        throw const Unreadable(
+          'a read was answered with a watch grant, and a projection is the only answer to one',
+        );
     }
   }
 
@@ -297,6 +304,11 @@ final class Client {
         _known = const _Nothing();
         throw const Unreadable(
           'an intent was answered with a projection, and a read is the only request that asks for one',
+        );
+      case Granted():
+        _known = const _Nothing();
+        throw const Unreadable(
+          'an intent was answered with a watch grant, and a change is the only answer to one',
         );
     }
   }
