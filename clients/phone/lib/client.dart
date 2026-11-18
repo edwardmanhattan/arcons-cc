@@ -71,13 +71,17 @@ sealed class Denied implements Exception {
 
 /// **The wall said no** (#198): its words in [why], its category in [kind], and the category is what decides.
 final class Refusal extends Denied {
-  const Refusal(this.why, this.kind);
+  const Refusal(this.why, this.kind, {this.detail});
 
   /// The wall's own words, verbatim. A screen prints them; a client does not act on them.
   final String why;
 
   /// The category, which is what a client does act on.
   final RefusalKind kind;
+
+  /// The wall's longer words about the same refusal, when it sent any (#264): drawn verbatim, and `null` on a wall
+  /// that says only [why].
+  final String? detail;
 
   @override
   Next get next => Next.of(kind);
@@ -242,8 +246,8 @@ final class Client {
       case Projection(:final wall):
         _known = _Read(wall);
         return wall;
-      case Refused(:final why, :final kind):
-        throw _refused(Refusal(why, kind));
+      case Refused(:final why, :final kind, :final detail):
+        throw _refused(Refusal(why, kind, detail: detail));
       case Changed():
         _known = const _Nothing();
         throw const Unreadable(
@@ -303,10 +307,10 @@ final class Client {
     switch (answer) {
       case Changed():
         return answer;
-      case Refused(:final why, :final kind):
+      case Refused(:final why, :final kind, :final detail):
         // **A refusal moved nothing**, so the projection the intent was composed from is still the wall's: the client
         // keeps it, and the next read decides what really happened.
-        throw _refused(Refusal(why, kind));
+        throw _refused(Refusal(why, kind, detail: detail));
       case Projection():
         _known = const _Nothing();
         throw const Unreadable(

@@ -89,6 +89,40 @@ void main() {
     }
   });
 
+  test('a refusal\'s detail is carried when the wall sends one, and absent when it does not', () {
+    final bare = decodeAnswer(
+      jsonEncode(<String, Object?>{
+        'v': protocol,
+        'ok': false,
+        'why': 'unsupported protocol version',
+        'kind': RefusalKind.version.word,
+      }),
+    );
+    expect(bare, isA<Refused>());
+    expect(
+      (bare as Refused).detail,
+      isNull,
+      reason:
+          'a refusal without `detail` was given one: the field is optional on the wire, and the corpus sends no '
+          'detail with any of its refusals (#264)',
+    );
+
+    final withDetail = decodeAnswer(
+      jsonEncode(<String, Object?>{
+        'v': protocol,
+        'ok': false,
+        'why': 'unsupported protocol version',
+        'kind': RefusalKind.version.word,
+        'detail': 'this wall speaks version 2',
+      }),
+    );
+    expect(
+      (withDetail as Refused).detail,
+      'this wall speaks version 2',
+      reason: 'the wall\'s longer words were dropped at the decode, so the update screen cannot draw them',
+    );
+  });
+
   test('the client types the four "ok" answers it can be given, and a fifth is a wall it cannot speak', () {
     // The four, one line each: a change, a projection, a grant, a pairing. A fifth `ok` shape is a `WireException`
     // rather than a default — `INV-07`'s rule applied to the answer a client acts on.

@@ -145,6 +145,7 @@ final class OverviewScreen extends StatelessWidget {
             child: controller.state == PhoneState.updateRequired
                 ? _UpdateScreen(
                     words: controller.stop?.why ?? '',
+                    detail: controller.stop?.detail,
                     onUpdate: onUpdate,
                   )
                 : Column(
@@ -233,11 +234,11 @@ final class _Chips extends StatelessWidget {
       label:
           '${workspace.name}, workspace ${index + 1}${workspace.empty ? ', empty' : ''}',
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        padding: PhoneTokens.chipPadding,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: active ? PhoneTokens.chipActive : Colors.transparent,
-          borderRadius: const BorderRadius.all(Radius.circular(14)),
+          color: active ? PhoneTokens.chipActive : PhoneTokens.transparent,
+          borderRadius: const BorderRadius.all(PhoneTokens.chipCorner),
           border: Border.all(
             color: active ? PhoneTokens.ring : PhoneTokens.cardEdge,
             width: active ? PhoneTokens.ringWidth : 1,
@@ -249,7 +250,7 @@ final class _Chips extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
             color: active ? PhoneTokens.title : PhoneTokens.kind,
-            fontSize: 13,
+            fontSize: PhoneTokens.chipTextSize,
           ),
         ),
       ),
@@ -288,7 +289,7 @@ final class _CanvasState extends State<_Canvas> {
         child: Text(
           // The wall's own words for an emptied workspace, so the phone and the wall say the same thing (#141).
           workspace != null && workspace.empty ? 'No panes yet.' : 'Nothing to show',
-          style: const TextStyle(color: PhoneTokens.kind, fontSize: 14),
+          style: const TextStyle(color: PhoneTokens.kind, fontSize: PhoneTokens.bodyTextSize),
         ),
       );
     }
@@ -476,19 +477,23 @@ final class _Card extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(_glyphOf(pane.kind), size: 18, color: PhoneTokens.kind),
+                Icon(
+                  _glyphOf(pane.kind),
+                  size: PhoneTokens.glyphSize,
+                  color: PhoneTokens.kind,
+                ),
                 const Spacer(),
                 Text(
                   pane.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: PhoneTokens.title, fontSize: 14),
+                  style: const TextStyle(color: PhoneTokens.title, fontSize: PhoneTokens.bodyTextSize),
                 ),
                 Text(
                   pane.kind,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: PhoneTokens.kind, fontSize: 12),
+                  style: const TextStyle(color: PhoneTokens.kind, fontSize: PhoneTokens.kindTextSize),
                 ),
               ],
             ),
@@ -597,7 +602,7 @@ final class _Places extends StatelessWidget {
           'Move "${moved.title}"…',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: PhoneTokens.title, fontSize: 14),
+          style: const TextStyle(color: PhoneTokens.title, fontSize: PhoneTokens.bodyTextSize),
         ),
         Expanded(
           child: ListView(
@@ -652,7 +657,7 @@ final class _PlaceRow extends StatelessWidget {
             words,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: PhoneTokens.title, fontSize: 14),
+            style: const TextStyle(color: PhoneTokens.title, fontSize: PhoneTokens.bodyTextSize),
           ),
         ),
       ),
@@ -663,10 +668,14 @@ final class _PlaceRow extends StatelessWidget {
 /// The interrupt: the wall does not speak this app's protocol, so the screen is one page, the wall's words and one
 /// button that is not a retry (`docs/mobile-ui.md`, *the four states*).
 final class _UpdateScreen extends StatelessWidget {
-  const _UpdateScreen({required this.words, this.onUpdate});
+  const _UpdateScreen({required this.words, this.detail, this.onUpdate});
 
   /// The wall's words, **verbatim**: the rules are the wall's and a paraphrase is a second copy of one.
   final String words;
+
+  /// The wall's longer words about the same refusal, when it sent any (#264). Drawn verbatim under [words], and
+  /// `null` on the wall this build's corpus recorded — a refusal without a detail is still one sentence.
+  final String? detail;
   final VoidCallback? onUpdate;
 
   @override
@@ -678,13 +687,22 @@ final class _UpdateScreen extends StatelessWidget {
         Text(
           words,
           textAlign: TextAlign.center,
-          style: const TextStyle(color: PhoneTokens.title, fontSize: 18),
+          style: const TextStyle(color: PhoneTokens.title, fontSize: PhoneTokens.updateWordsSize),
         ),
+        if (detail case final String detail)
+          Padding(
+            padding: const EdgeInsets.only(top: PhoneTokens.gap),
+            child: Text(
+              detail,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: PhoneTokens.kind, fontSize: PhoneTokens.bodyTextSize),
+            ),
+          ),
         const SizedBox(height: PhoneTokens.gap),
         const Text(
           'This app is older than this wall. Update it to control the wall.',
           textAlign: TextAlign.center,
-          style: TextStyle(color: PhoneTokens.kind, fontSize: 14),
+          style: TextStyle(color: PhoneTokens.kind, fontSize: PhoneTokens.bodyTextSize),
         ),
         const SizedBox(height: PhoneTokens.gap * 2),
         Semantics(
@@ -703,7 +721,7 @@ final class _UpdateScreen extends StatelessWidget {
               ),
               child: const Text(
                 'Update',
-                style: TextStyle(color: PhoneTokens.title, fontSize: 15),
+                style: TextStyle(color: PhoneTokens.title, fontSize: PhoneTokens.buttonTextSize),
               ),
             ),
           ),
@@ -741,7 +759,7 @@ final class _StateLine extends StatelessWidget {
         alignment: Alignment.centerLeft,
         child: Text(
           sentence ?? '',
-          style: TextStyle(color: _colour, fontSize: 12),
+          style: TextStyle(color: _colour, fontSize: PhoneTokens.stateTextSize),
         ),
       ),
     );

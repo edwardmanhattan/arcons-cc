@@ -86,6 +86,13 @@ const String ownBugSentence = 'This app asked the wall for something it does not
 /// change may have landed.
 const String busySentence = 'The wall is not answering.';
 
+/// **A phone with nowhere to dial**: no relay is configured, and that is a state and not a crash (#264).
+///
+/// The line names the **field** and never its value (`INV-08`'s spirit): a deployment's address is a measurement of
+/// somebody's network, and a phone that printed it would put a host in a screenshot. A phone with no relay draws
+/// `not connected`, because it has read nothing and there is nothing it could read.
+const String noRelayConfigured = 'no relay is configured';
+
 /// **What the screen does, and the one place it does it.**
 final class OverviewController extends ChangeNotifier {
   OverviewController({
@@ -112,6 +119,7 @@ final class OverviewController extends ChangeNotifier {
   bool _moving = false;
   bool _waiting = false;
   String? _words;
+  String? _offline;
   Tiling? _preview;
   Lift? _lift;
   Drop? _landing;
@@ -182,6 +190,10 @@ final class OverviewController extends ChangeNotifier {
       };
 
   String get _notConnectedWords {
+    final offline = _offline;
+    if (offline != null) {
+      return 'not connected · $offline';
+    }
     final readAt = _readAt;
     if (readAt == null) {
       return 'not connected';
@@ -207,12 +219,58 @@ final class OverviewController extends ChangeNotifier {
     _wall = null;
     _readAt = null;
     _words = null;
+    _offline = null;
     _preview = null;
     _moving = false;
     _waiting = false;
     _forgetTheGesture();
     notifyListeners();
     await _client.connect(carrier);
+    await read();
+  }
+
+  /// **The phone could not open a session at all** — no relay is configured, or a carrier that refused before a line
+  /// was sent. It is a state and not a crash (#264): the canvas is empty because nothing has ever been read, and
+  /// [why] is the phone's own sentence, never a URL or a host (`INV-08`).
+  ///
+  /// `null` is the plain `not connected`: a phone with a relay it cannot reach, which has no read to put an age on.
+  void offline({String? why}) {
+    _state = PhoneState.notConnected;
+    _wall = null;
+    _readAt = null;
+    _words = null;
+    _offline = why;
+    _preview = null;
+    _moving = false;
+    _waiting = false;
+    _forgetTheGesture();
+    notifyListeners();
+  }
+
+  /// **A projection the wall published** (#221): a publish is the same projection a read answers with, arriving
+  /// without being asked for, so the phone takes it as the truth it is.
+  ///
+  /// `docs/mobile-ui.md` states the comparison: **the `seq` is what the phone compares when a publish arrives — one
+  /// version after the one it holds, or it reads.** A projection is replaced wholesale and never patched, so a gap is
+  /// a read rather than a reconstruction.
+  Future<void> published(Projection projection) async {
+    if (_state == PhoneState.updateRequired) {
+      return;
+    }
+    final wall = _wall;
+    if (wall != null && projection.wall.seq == wall.seq + 1) {
+      _wall = projection.wall;
+      _state = PhoneState.live;
+      _readAt = _clock();
+      _offline = null;
+      _words = null;
+      _preview = null;
+      _moving = false;
+      _waiting = false;
+      _forgetTheGesture();
+      notifyListeners();
+      return;
+    }
     await read();
   }
 
@@ -227,6 +285,7 @@ final class OverviewController extends ChangeNotifier {
       _wall = wall;
       _state = PhoneState.live;
       _readAt = _clock();
+      _offline = null;
       _preview = null;
       _moving = false;
       _waiting = false;

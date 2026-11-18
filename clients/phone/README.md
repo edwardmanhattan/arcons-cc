@@ -13,7 +13,16 @@ dart pub get && dart analyze --fatal-infos && dart test
 
 cd clients/phone/app                  # the screen: Flutter, one golden per state
 flutter pub get && flutter analyze && flutter test
+
+cd clients/phone/app                  # the app, against a deployment's relay
+flutter run --dart-define=ARCONS_RELAY=tcp://HOST:PORT
 ```
+
+**The relay is deployment configuration and never a secret.** It is read from `ARCONS_RELAY` at build time
+(`tcp://` or `tls://`), never written in the tree; a build without it starts in `not connected · no relay is
+configured`, which is a state and not a crash. The **device key** is the platform's business (#265): until the
+Keychain/Keystore lands, `MemoryKeyStore` is a phone that pairs again after a restart, and never a key in a file this
+repository can read.
 
 `app/` has its own `analysis_options.yaml` on purpose: the analyzer looks **upward** for the nearest options file, and
 the package's excludes `app/**`, so without one `flutter analyze` in the app directory would analyse nothing.
@@ -34,25 +43,34 @@ client's truth rather than the wall's.
 | `test/cells_test.dart` | the nine cases in `fixtures/control/tiling/`: the recorded cells, the recorded rectangles and every recorded release, compared with `==` because the arithmetic is the wall's `f32` — plus the shapes a preview draws and the gutters a hand grabs |
 | `test/client_test.dart` | the four rules as four named tests over a fake carrier, and the fifth: **a refusal is mapped from its `kind`, never from its sentence** (#198, #250). No socket, no network, no clock it does not control |
 | `test/relay_test.dart` | the carrier over a **fake relay on loopback**: the frames, a watch granted with two publishes, a drop that reads first and asks again (and replays nothing), a refusal's kind, a version that stops the carrier, a revoked phone's silence, and the key that never reaches a printed string (#256) |
-| `app/lib/overview.dart` | **the screen** (#255): the chips, the canvas and the state line, drawn from the projection. One `layOut` walk gives the rects *and* the words, so a pane the canvas draws is a pane a reader hears. The drag, the gutter and **Move to…** are drawn here (#257) |
-| `app/lib/controller.dart` | **the join** (#257): the four states, the wall, and the one intent a release makes, over `Client`. It owns the lift, the landing and the gutter — decided by `cells.dart` — and it is the only place this app puts a change on the wire |
+| `app/lib/overview.dart` | **the screen** (#255): the chips, the canvas and the state line, drawn from the projection. One `layOut` walk gives the rects *and* the words, so a pane the canvas draws is a pane a reader hears. The drag, the gutter and **Move to…** are drawn here (#257); the update screen carries the wall's words, the app's one sentence, one button, and a refusal's `detail` when a wall sends one (#264) |
+| `app/lib/controller.dart` | **the four states** (#257, #264): the projection the last read gave, the lift, the landing and the gutter — decided by `cells.dart` — and the one place this app puts a change on the wire. `offline` is a phone with nowhere to dial; `published` takes a watch's projection one `seq` after the one it holds and reads on a gap |
 | `app/lib/intents.dart` | the two verbs the canvas sends — `pane.drop` and `pane.resize` — and the **one** place their fields are written, so the hand and the list cannot produce different request lines |
+| `app/lib/shell.dart` | **the app's join** (#264): `ARCONS_RELAY` parsed, the `KeyStore` read on start, a `RelayCarrier` over `PhoneRelay`, the read and then the watch, and the publish stream the watch grants. No corpus: a phone with no relay is `not connected`, not a replay |
+| `app/lib/pairing.dart` | **the pairing screen** (#264): six digit boxes over one field, `Name this phone`, one `Pair`, and the three refusals' steps as `docs/mobile-ui.md` gives them. A burnt code is `no pairing is open` and takes that row's step |
+| `app/lib/main.dart` | the app: `PhoneApp`, the relay from `String.fromEnvironment('ARCONS_RELAY')`, the key store, and `runApp` |
 | `app/test/overview_test.dart` | the corpus's own projection, held to `cells.dart`'s rects, read out loud in the drawn order, and rendered as two goldens — `live` and `not connected` |
 | `app/test/drag_test.dart` | the drag against a fake carrier: one release is one intent, nothing is optimistic, the refusal table's four kinds, **the hand and the list produce the same request line**, the gutter's clamp, and a golden of a card mid-drag |
+| `app/test/states_test.dart` | **the four states as the app's** (#264): `connecting` with no diagram from a previous life, `live` silent, `not connected` dimmed under its age and sending nothing, `update required` one screen with the wall's words and one button — plus the watch's `seq` rule. Three goldens: `connecting`, `not connected`, `update required` |
+| `app/test/pairing_test.dart` | **the pairing screen** (#264): six boxes, the defaulted name, one Pair; the claim's code and name, the key's one write, and the overview after it; each of the three refusals and its step; the key never in a widget's text. Goldens: empty and with a burnt code |
+| `app/test/shell_test.dart` | **the shell** (#264): no relay is a state, the app starts in `connecting`, asks for the watch only after the read, sends the screen's intents, dims on a dropped read, shows the update screen, draws a publish — and `lib/` reads no fixture |
 
 ## What is not here yet, and why
 
-- **The key's home, and pairing over the relay** (#260) — the carrier asks a `KeyStore` for the device key and never
-  stores, invents or writes one down. The Keychain/Keystore, and the bootstrap that would let an unpaired phone send
-  `pair.claim` over a wire that requires a key on every frame, are #260's question; until it is answered a phone is
-  paired out of band.
+- **The key's platform home** (#265) — the carrier asks a `KeyStore` and writes the claimed key to it, but the Keychain
+  and the Keystore are #265's: this app's store is memory, so a restarted app pairs again. ADR-0008 decision 4 rejects a
+  file, and a store that survived in one would be `INV-08` broken at rest.
+- **`Forget this wall`.** `docs/mobile-ui.md` puts the row on the overview's settings; the overview has no settings
+  surface yet, and `KeyStore` has no `forget` until #265 gives it the platform's three methods. The row is not drawn,
+  because a phone cannot forget a key it has no way to delete.
+- **A redial after a drop.** The shell dials, reads and watches once; a read that does not land draws `not connected`
+  and stays there. The carrier can reconnect ([`RelayCarrier.connect`]) and the app does not ask it to yet — the retry
+  loop is the next ticket's, and inventing one here would be a retry the note has not decided.
 - **The gutter's accessible path** (#257 leaves it open, deliberately): a share is a number and no recorded vocabulary
   names one, so the gutter's *drag* is in and its words are not (`docs/mobile-ui.md`, *accessibility*).
 - **The update screen's store page.** The one button is drawn and its action is the shell's: this package has no store.
 - **A bundled typeface.** The goldens draw text in the test harness's box font, so the pictures check *layout and
   colour*; the words are the semantics test's. A typeface is an asset decision and arrives with the app's assets.
-- **A screen for the publishes.** The carrier delivers them ([`RelayCarrier.published`]) and the shell still replays
-  the recording; drawing a wall somebody else is driving is the screen's next ticket, not this one's.
 - **TLS end to end.** `tls://` is parsed and would dial `SecureSocket.connect`; no certificate is in the tree, so no test
   proves the handshake — and a fixture written by a test is not a certificate.
 

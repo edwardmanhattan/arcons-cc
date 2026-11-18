@@ -502,7 +502,7 @@ final class RelayCarrier implements Carrier {
     }
     final answer = decodeAnswer(line);
     if (answer is Refused) {
-      throw Refusal(answer.why, answer.kind);
+      throw Refusal(answer.why, answer.kind, detail: answer.detail);
     }
     if (answer is! Paired) {
       throw const WireException(
@@ -669,7 +669,7 @@ final class RelayCarrier implements Carrier {
     final awaiting = _take();
     final answer = _decode(line);
     if (answer is Refused && answer.kind == RefusalKind.version) {
-      _stopped = Refusal(answer.why, answer.kind);
+      _stopped = Refusal(answer.why, answer.kind, detail: answer.detail);
     }
     if (awaiting == _Awaiting.read &&
         answer is Projection &&
@@ -706,8 +706,8 @@ final class RelayCarrier implements Carrier {
       case Granted():
         _watching = true;
         granted.complete(answer);
-      case Refused(:final why, :final kind):
-        final refusal = Refusal(why, kind);
+      case Refused(:final why, :final kind, :final detail):
+        final refusal = Refusal(why, kind, detail: detail);
         if (kind == RefusalKind.version) {
           _stopped = refusal;
         }
