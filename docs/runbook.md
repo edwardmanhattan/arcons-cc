@@ -318,3 +318,37 @@ arcons-cc ctl pane close            # closes that pane: no id needed since #181
 `0600` in `$XDG_RUNTIME_DIR/arcons-cc/`, so **a client must be the user the wall runs as** — that is the whole
 credential, and it is why the plane is off in a container with no run directory unless `ARCONS_CONTROL` says
 otherwise.
+## 10. A phone against a wall on your desk, with no deployment
+
+The phone's path — pair, read, watch, send — needs a **relay**: the wall never listens on TCP, and a phone in another
+room cannot use the socket, so both dial out and meet in the middle (`docs/control.md`, *The relay*). Production has one
+somewhere; for a desk, `tools/dev-relay` is that middle and nothing else.
+
+```sh
+# 1. the relay, on the machine that runs the wall
+dart run tools/dev-relay/bin/main.dart --host 0.0.0.0 --port 7000 --verbose
+
+# 2. the wall, with the relay configured and the control plane on
+ARCONS_RELAY_URL=tcp://127.0.0.1:7000 cargo run
+
+# 3. the phone, from `clients/phone/app`, pointed at this machine's LAN address
+flutter run --dart-define=ARCONS_RELAY=tcp://192.168.1.20:7000
+```
+
+The relay prints both commands when it starts, so nobody has to copy them out of this page twice.
+
+### The five lines, and what each one proves
+
+Run them in order. A failing line is a bug with a symptom, not a guess — which is why the list exists at all
+(`docs/adr/0008-the-phones-framework.md`, decision 4).
+
+| # | do this | it proves |
+| --- | --- | --- |
+| 1 | wall: draw a code (`arcons-cc ctl pair begin`) · phone: type the six digits, name the phone, press **Pair** | pairing over the relay: the `pair.claim` frame with no device key, its answer with no `to`, and the key landing in the platform store |
+| 2 | swipe the app away and reopen it | the key was **read back** from Keystore/Keychain — no pairing screen, and the phone dials with it |
+| 3 | reboot the phone, unlock once, reopen the app | `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` on iOS and the AndroidKeyStore wrapping key surviving a reboot |
+| 4 | uninstall the app, reinstall, reopen | **the key is gone** and pairing is offered: the Keychain keeps items an uninstal should not (`docs/adr` decision 4), so the app's first-run flag deletes it; on Android the app's data went with the uninstall |
+| 5 | wall: `arcons-cc ctl pair forget phone` · phone: tap a card | a revoked device is not a crash: the read is not answered, its deadline ends it, and the screen says `not connected` — the phone does not re-dial as a stranger |
+
+Line 5 is the shape `docs/control.md` names: a refusal for a key no row holds is written **with no `to`**, so a phone can
+observe the silence and nothing else.
