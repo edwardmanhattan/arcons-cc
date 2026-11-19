@@ -368,6 +368,26 @@ Someone at the wall opens pairing — an intent drawn on the wall, or `arcons-cc
 for **two minutes** (`mobile-remote.md` decision 3). The code is a picture in the room and never a message: the phone
 does not ask for it, so it cannot pair itself.
 
+**Beside the digits, while a code is open and the wall has a relay, the wall also draws a QR** (#270). The phone's
+camera reads it and needs no address compiled in: the payload is
+
+```
+arcons://pair?relay=<percent-encoded relay URL>&code=481902
+```
+
+so one APK serves every deployment, and the relay's host is on the glass for exactly those two minutes. `relay` is a
+percent-encoded URL — `Uri.parse` the payload and decode the `relay` query value; `code` is the six digits, the same
+string a phone with no camera types. **The six digits are still drawn and the code field still works**: a phone with no
+camera, or a camera that will not focus on a dark room's screen, pairs by typing, and the QR is additive rather than a
+replacement.
+
+Two things the QR is not. It is **not an answer to `pair.begin`**: the wall still replies with `changed: true`, and
+the picture is the only place the code travels (`INV-08`). And it is **not a promise that a phone can reach the
+address it names**: what it carries is the wall's own `ARCONS_RELAY_URL` (`control.md`, *The relay*), so a deployment
+whose wall dials a unix socket has handed a phone an address a phone cannot dial. That is a deployment question — the
+relay has to be somewhere both of them can reach — and the wall can say where its relay is, not prove a phone can get
+there.
+
 The phone sends the code and a name, and gets back **a key, once**. The key goes into the platform's store —
 Keystore or Keychain, never a file and never anything this repo can read (#223's decision 4) — and from then on the
 phone's identity is that key and its name. The code is not kept, not logged, and not shown again; a six-digit number

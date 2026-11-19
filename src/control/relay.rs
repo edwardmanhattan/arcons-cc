@@ -68,6 +68,19 @@ pub const URL_VARIABLE: &str = "ARCONS_RELAY_URL";
 /// `ARCONS_RELAY_URL` unset: **a wall in a cupboard**, which is a wall that works, and says so.
 pub const NO_RELAY: &str = "no relay is configured";
 
+/// **The relay's address as an operator wrote it** (#270): `ARCONS_RELAY_URL`, trimmed, and `None` when it is
+/// unset or blank — a blank URL is a relay nobody meant to point at.
+///
+/// One function reads the variable, so the carrier and the pairing QR cannot disagree about which string this
+/// wall's relay is. The address is a deployment address and not a secret: the QR carries it (for the two minutes
+/// a code is open), the `--self-check` row prints it, and no log line does (`INV-08`).
+pub fn configured(env: &crate::config::Env) -> Option<String> {
+    env.get(URL_VARIABLE)
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(str::to_string)
+}
+
 /// The relay said no to the wall's credential. Not retried: the same credential is the same answer.
 pub const REFUSED_WALL: &str = "the relay refused the wall";
 
@@ -201,7 +214,7 @@ impl Settings {
             .map(|config| config.minos.relay_credential())
             .unwrap_or(Value::Null);
         Settings::of(
-            env.get(URL_VARIABLE),
+            configured(env).as_deref(),
             credential,
             crate::config::devices::devices_file(),
         )

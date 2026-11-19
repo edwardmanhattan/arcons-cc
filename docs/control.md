@@ -474,6 +474,13 @@ its tests.
 | the loop | **the socket's session loop** (#195): a request becomes a `Job`, the UI thread answers it, and the answer is written back. Nothing about intents or answers is spelled twice |
 | `--self-check` | a `relay` row: configured, unreachable, or not now. A **fact, never a verdict** — it changes no exit code, like `control` |
 
+**The relay's address on the glass** (#270): while a pairing code is open the wall draws a QR that carries
+`ARCONS_RELAY_URL`, so a phone needs no build-time address (see *The QR beside the digits* below). That is the **one** place
+the address is drawn, and it is drawn for the same two minutes as the digits: the address is on the wall's glass while
+a code is open and **nowhere else on the glass**. It is a deployment address and not a secret — the `--self-check`
+`relay` row prints it too — but it is not a log line, not an answer to a client, and gone the frame the code expires
+(`INV-08`'s edge, recorded deliberately).
+
 **A relay for a desk**: `tools/dev-relay/` implements these frames and nothing else — no authentication, no TLS,
 no persistence — so a phone can be paired and driven without a deployment (#268). It is a development tool, not a second
 contract: what production needs is a relay somewhere both the wall and the phone can reach.
@@ -690,6 +697,32 @@ that proved it was in the room, and that is the only copy. A leaked `devices.tom
 
 A capture never pairs: `pair.begin` is an intent a scene may send (so the code is a picture a test can take), and a
 headless run reads no `devices.toml` and writes none (`INV-11`, the `layout.toml` rule applied to its sibling).
+
+### The QR beside the digits (#270)
+
+**While a code is open, and only when a relay is configured**, the wall draws a QR beside the six digits. The digits
+stay: they are the fallback for a phone with no camera and the thing a person in the room says out loud. The QR is
+additive, and it carries:
+
+```
+arcons://pair?relay=<percent-encoded relay URL>&code=481902
+```
+
+| | |
+| --- | --- |
+| `relay` | `ARCONS_RELAY_URL`, as the operator wrote it, **percent-encoded** (unreserved bytes, `:` and `/` as they are; everything else `%XX`, uppercase). The phone decodes it with its platform's URL parser, so the escapes are the standard's, not a private spelling |
+| `code` | the same six digits the panel draws — **one function** makes the words and the payload, so a QR and a caption cannot disagree |
+| no relay | no payload and no QR. A QR carrying no address is a picture that fails on the phone, and the wall does not draw one |
+
+**The relay's host is on the wall's glass for those two minutes and nowhere else** — the decision this records under
+`INV-08`'s edge. It is a deployment address and not a secret; it is shown for exactly as long as the digits are, and
+that is the one moment somebody is meant to be pointing a phone at the wall to configure it. It is not in a log line,
+not in an answer and not on the glass after the code expires.
+
+The payload is a function of **two values** — the digits and the relay's string — and never of a connection, so a
+capture binds no socket and renders the same bytes twice (`INV-11`). The matrix is encoded **once**, when the code is
+drawn, and cached on the pairing (`INV-05`): a frame draws squares, it does not build a QR. The encoder is
+`qrcodegen` at **EC level Q**, four modules of quiet zone, drawn as the wall's own shapes — no image, no codec.
 
 ## The CLI
 

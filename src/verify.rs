@@ -1815,6 +1815,163 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 ));
             }
         }
+        // **A code on the wall, and the QR beside it** (#270): the square's box, its quiet zone, a sample of
+        // its modules, and the digits still drawn. The picture is the witness; these are the verification.
+        //
+        // The light block is found by its own colour, which nothing else on the wall uses, rather than by
+        // arithmetic on the panel: a QR drawn in the wrong place is a QR the operator's phone cannot find,
+        // and its edges are on whole pixels (a module is a whole number of points), so the box is exact.
+        "pairing" => {
+            let paper = ink(tokens::qr_paper());
+            let dark = ink(tokens::qr_ink());
+            let state = scene::state_for("pairing");
+            let Some(matrix) = state.pairing().and_then(|pairing| pairing.qr()).cloned() else {
+                failures.push(
+                    "pairing: the wall drew no matrix, and this scene has a relay — the QR is the \
+                     ticket's picture (#270)"
+                        .to_string(),
+                );
+                return Err(failures);
+            };
+            // The panel's box from the function the view places it with, so the assertion and the drawing
+            // cannot drift apart.
+            let (px, py, pw, ph) = crate::ui::pairing_box(Some(tokens::WINDOW_SIZE));
+            let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, -1.0f64, -1.0f64);
+            for y in 0..image.height {
+                for x in 0..image.width {
+                    if near(image.at(x, y), paper, 4) {
+                        x0 = x0.min(f64::from(x));
+                        y0 = y0.min(f64::from(y));
+                        x1 = x1.max(f64::from(x));
+                        y1 = y1.max(f64::from(y));
+                    }
+                }
+            }
+            if x1 < x0 {
+                failures.push(
+                    "pairing: no light block on screen — the QR's paper is the one colour nothing else \
+                     draws, and it is not in this capture (#270)"
+                        .to_string(),
+                );
+                return Err(failures);
+            }
+            let (w, h) = (x1 - x0 + 1.0, y1 - y0 + 1.0);
+            let side = f64::from(crate::ui::qr::side(&matrix));
+            let module = f64::from(crate::ui::qr::module(&matrix));
+            let quiet = f64::from(crate::ui::qr::quiet(&matrix));
+            // **The square's box**: the modules plus four modules of quiet zone, at the module size the
+            // drawing computed — and nothing outside it.
+            if (w - side).abs() > 2.0 || (h - side).abs() > 2.0 {
+                failures.push(format!(
+                    "pairing: the light block is {w:.0}×{h:.0} px and the {}-module grid at {module:.0} px \
+                     a module is {side:.0}×{side:.0} — a block of the wrong size is not the drawing's own \
+                     square (#270)",
+                    matrix.size()
+                ));
+            } else {
+                lines.push(format!(
+                    "pairing: a {w:.0}×{h:.0} px block for a {}-module grid, {module:.0} px a module and \
+                     {quiet:.0} px of quiet zone",
+                    matrix.size()
+                ));
+            }
+            if x0 < f64::from(px)
+                || y0 < f64::from(py)
+                || x1 > f64::from(px + pw - 1.0)
+                || y1 > f64::from(py + ph - 1.0)
+            {
+                failures.push(format!(
+                    "pairing: the block spans ({x0:.0}, {y0:.0})–({x1:.0}, {y1:.0}) and the panel is \
+                     ({px:.0}, {py:.0}) {pw:.0}×{ph:.0} — a QR outside its panel is not on the glass (#270)"
+                ));
+            }
+            // **Beside the digits**, not through them: the block is right of the panel's middle.
+            if (x0 + w / 2.0) <= f64::from(px + pw / 2.0) {
+                failures.push(format!(
+                    "pairing: the block's centre is at x={:.0}, and the digits are to its left: the QR is \
+                     beside the code, not over it (#270)",
+                    x0 + w / 2.0
+                ));
+            }
+            // **The quiet zone is paper**: four modules inside every edge with no module ink in them. A
+            // margin of the panel's own dark is not a quiet zone, and a scanner reads it as a module.
+            for (edge, band) in [
+                ("top", (x0, y0, w, quiet)),
+                ("bottom", (x0, y1 - quiet + 1.0, w, quiet)),
+                ("left", (x0, y0, quiet, h)),
+                ("right", (x1 - quiet + 1.0, y0, quiet, h)),
+            ] {
+                let ink_count = count_colour_in(image, band, dark, 24);
+                if ink_count > 0 {
+                    failures.push(format!(
+                        "pairing: {ink_count} dark pixels in the {edge} quiet zone — a block with no \
+                         margin is a code a phone decodes as noise (#270)"
+                    ));
+                }
+            }
+            // **Sampled modules**: every third module of the grid, at its own centre, is the ink or the
+            // paper the matrix says. A dense sample says the runs, the module size and the block's origin
+            // all agree; one sample would pass on a block that is merely dark somewhere.
+            let origin = (x0 + quiet, y0 + quiet);
+            let mut sampled = 0usize;
+            let mut ink_seen = 0usize;
+            let mut wrong = 0usize;
+            for y in (0..matrix.size()).step_by(3) {
+                for x in (0..matrix.size()).step_by(3) {
+                    let centre = (
+                        origin.0 + (x as f64 + 0.5) * module,
+                        origin.1 + (y as f64 + 0.5) * module,
+                    );
+                    let pixel = image.at(centre.0.round() as u32, centre.1.round() as u32);
+                    let want = if matrix.module(x, y) { dark } else { paper };
+                    sampled += 1;
+                    if matrix.module(x, y) {
+                        ink_seen += 1;
+                    }
+                    if !near(pixel, want, 24) {
+                        wrong += 1;
+                        if wrong == 1 {
+                            failures.push(format!(
+                                "pairing: module ({x}, {y}) is {} in the matrix and the pixel at \
+                                 ({:.0}, {:.0}) is not — the drawing and the grid disagree (#270)",
+                                if matrix.module(x, y) { "dark" } else { "light" },
+                                centre.0,
+                                centre.1
+                            ));
+                        }
+                    }
+                }
+            }
+            if ink_seen == 0 {
+                failures.push(
+                    "pairing: no dark module in the sample — the block is paper with no code on it (#270)"
+                        .to_string(),
+                );
+            }
+            if wrong == 0 && sampled > 0 && ink_seen > 0 {
+                lines.push(format!(
+                    "pairing: {sampled} sampled modules agree with the matrix, {ink_seen} of them dark"
+                ));
+            }
+            // **The digits stay** (#270): the QR is additive, and a phone with no camera pairs by typing.
+            let accent = count_colour_in(
+                image,
+                (f64::from(px), f64::from(py), f64::from(pw), f64::from(ph)),
+                ink(tokens::accent()),
+                24,
+            );
+            if accent == 0 {
+                failures.push(
+                    "pairing: no accent ink in the panel — the six digits are the fallback, and a QR \
+                     nobody can type is not a pairing code (#270)"
+                        .to_string(),
+                );
+            } else {
+                lines.push(format!(
+                    "pairing: the six digits are drawn beside the QR ({accent} px of the code's ink)"
+                ));
+            }
+        }
         "panes-max" => {
             // **A maximised pane is a bigger rectangle, not a different pane** (#85). Its hulls project
             // against a frame the size of the panel — its own camera, the window's frame — and the tiling
@@ -4198,6 +4355,54 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                 state.focused(),
                 state.intents_applied
             ));
+        }
+    }
+
+    // **The QR is the payload's, and the payload is the digits'** (#270): one function makes both, so the
+    // capture's structure is asked for the string the phone would read — the code the panel draws and the relay
+    // this wall was given, with no socket and no environment in between (`INV-11`).
+    if scene == "pairing" {
+        let code = state.pairing().map(|pairing| pairing.digits());
+        let relay = state.relay_url.clone();
+        if code.as_deref() != Some(crate::scene::PAIRING_CODE) {
+            failures.push(format!(
+                "pairing: the code on the wall is {code:?}, and the scene's fixed digits are {:?} — a capture \
+                 whose code comes from anything but its own scene is a golden that changes on a machine",
+                crate::scene::PAIRING_CODE
+            ));
+        }
+        if relay.as_deref() != Some(crate::scene::PAIRING_RELAY) {
+            failures.push(format!(
+                "pairing: the wall's relay is {relay:?} and the scene's is {:?} — the QR would carry a \
+                 different address on every machine (#270)",
+                crate::scene::PAIRING_RELAY
+            ));
+        }
+        // **The phone's string, from the two values the wall has** — the digits it draws and the relay it was
+        // given, through the one function that makes both the words and the QR.
+        let text = code
+            .as_deref()
+            .and_then(|digits| crate::control::pair::payload(digits, relay.as_deref()));
+        match (text, state.pairing().and_then(|pairing| pairing.qr())) {
+            (Some(text), Some(matrix)) => {
+                if crate::control::pair::Matrix::encode(&text).as_ref() != Some(matrix) {
+                    failures.push(format!(
+                        "pairing: the matrix on the wall is not the encoder's for `{text}` — the drawing and the \
+                         payload have drifted apart (#270)"
+                    ));
+                } else {
+                    lines.push(format!(
+                        "pairing: the QR carries `{text}` — version {} at {}, {} modules a side",
+                        matrix.version(),
+                        matrix.correction(),
+                        matrix.size()
+                    ));
+                }
+            }
+            (text, matrix) => failures.push(format!(
+                "pairing: payload {text:?} and matrix {} — a code with a relay draws both, or neither (#270)",
+                if matrix.is_some() { "present" } else { "absent" }
+            )),
         }
     }
 

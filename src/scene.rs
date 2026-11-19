@@ -621,6 +621,31 @@ fn settings_dismiss(state: &mut State) {
     settings_sheet(state);
 }
 
+/// **The relay the `pairing` capture carries**, fixed: a deployment address that belongs to nobody, so the golden
+/// is a picture of the payload's format and not of this machine's environment (`INV-11`).
+pub const PAIRING_RELAY: &str = "tcp://relay.arcons.test:7030";
+
+/// **The digits the `pairing` capture draws**: `pair.begin`'s own function of the frame clock at setup — zero,
+/// which is the ticket's `481902`. Named here so the golden, the structure assertion and the PR quote one number.
+pub const PAIRING_CODE: &str = "481902";
+
+/// **The `pairing` scene** (#270): a code open, the six digits drawn, and the QR beside them that carries the
+/// same digits and this wall's relay.
+///
+/// Everything in the picture is a value: the digits are `pair.begin`'s own function of the frame clock (zero at
+/// setup, which is the ticket's `481902`) and the matrix is the encoder's for
+/// `arcons://pair?relay=tcp://relay.arcons.test:7030&code=481902` — no socket, no environment, no file.
+fn pairing(state: &mut State) {
+    load(state);
+    state.relay_url = Some(PAIRING_RELAY.to_string());
+    // **A capture's code comes from the frame clock, not the OS**: `begin` reads this flag to know which, and a
+    // real capture is marked headless by `setup`. `state_for` builds the wall a scene's setup produces without
+    // drawing it, so the flag is the scene's to carry — otherwise the golden and the structure assertion would
+    // be looking at two different codes, one of them a lottery.
+    state.headless = true;
+    crate::control::apply(state, crate::control::Intent::PairBegin).ok();
+}
+
 /// The `panes-menu` scene (#81): **a tiled wall with its menu open**, which is the only wall that offers
 /// `Close pane`. The one-pane `pane-menu` is its control: one row there, two here, and the surface has to be
 /// tall enough for both.
@@ -1689,6 +1714,9 @@ pub const SCENES: &[Scene] = &[
     ("installations", installations_layer),
     ("settings", settings_sheet),
     ("settings-dismiss", settings_dismiss),
+    // **A code on the wall, and the relay it carries** (#270): six digits for two minutes, and a QR beside them
+    // so a phone needs no build-time address.
+    ("pairing", pairing),
     ("pane-menu", pane_menu),
     // The chain of command (#116): a tree pane beside a map pane. A forest is a forest, the supreme
     // command is the root above it, and the tree draws nothing that projects.
@@ -2131,6 +2159,33 @@ mod tests {
         );
     }
 
+    /// **The `pairing` scene draws the ticket's digits, and a matrix for them** (#270): the code comes from the
+    /// scene's own clock, so `state_for` — the state a capture's assertion reads — and the capture itself agree on
+    /// one code instead of one of them drawing a lottery. The matrix is the encoder's for the payload the digits
+    /// and the scene's relay make.
+    #[test]
+    fn the_pairing_scene_draws_a_fixed_code_and_its_matrix() {
+        let state = state_for("pairing");
+        let pairing = state.pairing().expect("the scene opens a code on the wall");
+        assert_eq!(
+            pairing.digits(),
+            PAIRING_CODE,
+            "the pairing scene's digits must be its own clock's, or two renders draw two codes (INV-11)"
+        );
+        let text = crate::control::pair::payload(PAIRING_CODE, Some(PAIRING_RELAY))
+            .expect("the scene configures a relay, so the payload exists");
+        assert_eq!(
+            pairing.qr(),
+            crate::control::pair::Matrix::encode(&text).as_ref(),
+            "the matrix on the wall is not the encoder's for `{text}` (#270)"
+        );
+        assert_eq!(
+            pairing.qr().map(|matrix| matrix.size()),
+            Some(37),
+            "the realistic payload is a version 5 code: 37 modules a side"
+        );
+    }
+
     #[test]
     fn every_scene_is_named_and_can_be_built() {
         // `--list-scenes` prints these; a scene that panics on build is a capture that fails at
@@ -2176,6 +2231,8 @@ mod tests {
                 // The one scene whose point is that something is **not** there: the sheet, after a press
                 // outside it (#98).
                 "settings-dismiss",
+                // **A code on the wall, and the relay it carries** (#270): the digits, and the QR beside them.
+                "pairing",
                 "pane-menu",
                 // The chain of command (#116): a tree pane beside a map pane.
                 "pane-tree",

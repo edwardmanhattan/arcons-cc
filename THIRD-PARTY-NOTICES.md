@@ -51,6 +51,7 @@ screen, and its row arrives with it.
 | `thiserror` 2 | MIT OR Apache-2.0 | Typed errors. |
 | `chrono` 0.4 | MIT OR Apache-2.0 | Timestamps from the wire. |
 | `sha2` 0.10 | MIT OR Apache-2.0 | **Pairing** (#194): `devices.toml` keeps the SHA-256 of a device key, never the key. |
+| `qrcodegen` 1.8 | MIT | **The pairing QR** (#270): modules only — no renderer, no image, no codec. The wall draws the grid as its own squares (`ui::qr`), so nothing on the capture path depends on a PNG. |
 | `getrandom` 0.3 | MIT OR Apache-2.0 | **Pairing** (#194): the 32 bytes of a fresh device key and the six digits of a pairing code, from the OS's own source of chance. |
 | `tracing`, `tracing-subscriber` 0.3 / 0.1 | MIT | Logging. **Redaction is a hand-written `Debug`, not a filter** (`INV-08`). |
 | `rusqlite` 0.32 (bundled SQLite) | MIT | The offline map seed is a SQLite cache; its expiry rows are pinned before MapLibre opens it. Bundled so no system library is needed. SQLite itself is public domain. |

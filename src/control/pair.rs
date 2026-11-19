@@ -21,6 +21,12 @@
 //!
 //! The file is `config::devices`'s; the write is `ui::devices`'s, on a thread (`INV-05`). This module is the
 //! rules in between.
+//!
+//! **The wall also draws a QR beside the digits** (#270): `arcons://pair?relay=…&code=…`, encoded once when the
+//! code is drawn ([`Matrix`]) and drawn as squares by `ui::qr`. The payload is a function of two values — the
+//! digits and the relay's **string** — and never of a connection, so a capture binds no socket (`INV-11`). The
+//! code in the payload is not `pair.begin`'s answer (`INV-08`): the answer is still a change, and what carries
+//! the digits is a picture in the room, which is exactly who a pairing code is for.
 
 use crate::config::devices::{Device, Key};
 use crate::control::{Changed, Refused};
@@ -29,6 +35,9 @@ use crate::ui::State;
 /// How long a code is good for, on the frame clock: **two minutes**. Long enough to type six digits on a phone,
 /// short enough that a code nobody paired with is not a door left open for a shift.
 pub const PAIR_FOR: f64 = 120.0;
+
+/// **What a pairing QR says** (#270): the scheme and the route, the relay, and the digits.
+pub const PAIR_SCHEME: &str = "arcons://pair";
 
 /// **How many wrong codes a code survives** (#262, decided on #260).
 ///
@@ -48,7 +57,7 @@ pub const PAIR_ATTEMPTS: u32 = 5;
 ///
 /// It lives on [`State::pairing`] rather than in [`crate::ui::Interaction`] on purpose: a code holds neither the
 /// pointer nor the keyboard, and the wall keeps drawing the sea behind it while two people read it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Pairing {
     /// 0–999 999, drawn zero-padded and split as `PAIR 481 902`.
     pub code: u32,
@@ -59,6 +68,11 @@ pub struct Pairing {
     /// Deliberately not in any answer, read or drawing: the budget is the wall's, and a client that could count the
     /// tries could tell how nearly a code was burnt — `docs/control.md` says so where it says what the frame is.
     attempts: u32,
+    /// **The module grid the panel draws** (#270), encoded when the code was drawn — never re-encoded in the
+    /// view loop (`INV-05`, and a frame draws squares rather than building a QR). `None` when no relay is
+    /// configured, or for a payload no version can hold: then the digits are drawn alone, which is what a phone
+    /// with no camera needs anyway.
+    qr: Option<Matrix>,
 }
 
 impl Pairing {
@@ -83,6 +97,122 @@ impl Pairing {
     pub fn accepts(&self, code: &str) -> bool {
         code.trim() == self.digits()
     }
+
+    /// **The matrix the panel draws beside the digits** (#270), or nothing.
+    pub fn qr(&self) -> Option<&Matrix> {
+        self.qr.as_ref()
+    }
+}
+
+/// **The payload a phone reads off the wall** (#270): `arcons://pair?relay=<percent-encoded>&code=481902`.
+///
+/// One function, so the QR and the words cannot disagree: `digits` is [`Pairing::digits`]'s string — the six
+/// digits zero-padded, exactly what the panel draws — and `relay` is the address as an operator wrote it.
+///
+/// **`None` when no relay is configured**, because a QR that carries no address is a picture that fails on the
+/// phone: the digits are then drawn alone, which is the fallback a phone with no camera needs anyway.
+///
+/// The code is on the glass and not in an answer (`INV-08`): `pair.begin` still replies with a change, and this
+/// payload is drawn — a phone in the room is exactly who a pairing code is for, so the picture it reads is the
+/// one place the digits may travel.
+///
+/// The relay is **percent-encoded by hand** and not by a second crate: the set that matters in a query value is
+/// `%`, `&`, `=`, `#`, `+` and the space, and every other byte outside the URI's unreserved set is escaped too.
+/// `:` and `/` are left alone because a query value may hold them and an operator reading the code beside the
+/// digits should still see an address. The phone decodes with Dart's `Uri.parse` (#271), so the escapes are the
+/// standard `%XX`, uppercase hex — not a private spelling.
+pub fn payload(digits: &str, relay: Option<&str>) -> Option<String> {
+    let relay = relay.map(str::trim).filter(|relay| !relay.is_empty())?;
+    Some(format!(
+        "{PAIR_SCHEME}?relay={}&code={digits}",
+        percent_encode(relay)
+    ))
+}
+
+/// Percent-encode one value for a query, by hand. Unreserved bytes, `:` and `/` stay as they are; everything
+/// else — `%`, `&`, `=`, `#`, `+`, a space, a byte that is not ASCII at all — becomes `%XX`.
+fn percent_encode(value: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b':' | b'/' => {
+                out.push(char::from(byte));
+            }
+            _ => {
+                let _ = write!(out, "%{byte:02X}");
+            }
+        }
+    }
+    out
+}
+
+/// **The module grid of the pairing QR**, encoded once (#270).
+///
+/// Modules only: no renderer, no image, no PNG. `ui::qr` turns the grid into the wall's own squares, and the
+/// matrix is cached on the [`Pairing`] because a frame that built a QR would be a frame doing an encoder's work
+/// (`INV-05`).
+///
+/// **Error correction is Quartile** (`qrcodegen::QrCodeEcc::Quartile`): a wall is a screen in a room rather
+/// than a print — a phone held at an angle, the glare of a lit room, and a camera that does not come close are
+/// the errors here, and the level the standard calls for on a printed label is the floor, not the ceiling.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Matrix {
+    /// Modules per side, the quiet zone excluded.
+    size: usize,
+    /// `size * size` modules, row-major. `true` is dark.
+    modules: Vec<bool>,
+    /// What the encoder actually used, so "we asked for Q" can be checked against "it is Q".
+    level: qrcodegen::QrCodeEcc,
+}
+
+impl Matrix {
+    /// Encode `payload` at Quartile, or `None` when no version can hold it.
+    ///
+    /// **No panic on an encoder result**: a payload that does not fit is a state the panel draws without a QR,
+    /// not a wall that falls over — the same rule the panel keeps for a wall with no relay.
+    pub fn encode(payload: &str) -> Option<Matrix> {
+        let code = qrcodegen::QrCode::encode_text(payload, qrcodegen::QrCodeEcc::Quartile).ok()?;
+        let size = usize::try_from(code.size()).ok()?;
+        let mut modules = Vec::with_capacity(size * size);
+        for y in 0..code.size() {
+            for x in 0..code.size() {
+                modules.push(code.get_module(x, y));
+            }
+        }
+        Some(Matrix {
+            size,
+            modules,
+            level: code.error_correction_level(),
+        })
+    }
+
+    /// Modules per side, the quiet zone excluded: 21 for version 1, four more for every version after it.
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    /// The version the encoder chose: `(size - 17) / 4`, 1 to 40.
+    pub fn version(&self) -> u8 {
+        ((self.size.saturating_sub(17)) / 4) as u8
+    }
+
+    /// The error correction level as the standard names it (`L`, `M`, `Q`, `H`) — what the encoder used, not
+    /// what this module asked for.
+    pub fn correction(&self) -> char {
+        match self.level {
+            qrcodegen::QrCodeEcc::Low => 'L',
+            qrcodegen::QrCodeEcc::Medium => 'M',
+            qrcodegen::QrCodeEcc::Quartile => 'Q',
+            qrcodegen::QrCodeEcc::High => 'H',
+        }
+    }
+
+    /// Whether the module at `(x, y)` is dark. Out of bounds is light, which is the quiet zone's own answer.
+    pub fn module(&self, x: usize, y: usize) -> bool {
+        x < self.size && y < self.size && self.modules[y * self.size + x]
+    }
 }
 
 /// **Open pairing** (`pair.begin`): put a fresh code on the wall for [`PAIR_FOR`], replacing any open one.
@@ -96,11 +226,18 @@ pub fn begin(state: &mut State) -> Result<Changed, Refused> {
     } else {
         fresh_code()?
     };
-    state.pairing = Some(Pairing {
+    let mut pairing = Pairing {
         code,
         until: now + PAIR_FOR,
         attempts: 0,
-    });
+        qr: None,
+    };
+    // **The payload is the digits and the relay's string** (#270), and the grid is built here, once: the view
+    // draws squares out of it on every frame and builds nothing (`INV-05`). A relay nobody configured means no
+    // QR — a picture that carries no address fails on the phone, which is worse than the digits alone.
+    pairing.qr = payload(&pairing.digits(), state.relay_url.as_deref())
+        .and_then(|text| Matrix::encode(&text));
+    state.pairing = Some(pairing);
     Ok(Changed(true))
 }
 
@@ -114,7 +251,7 @@ pub fn begin(state: &mut State) -> Result<Changed, Refused> {
 /// it, and the answer to that fifth guess is `no pairing is open` — the same name an expired or spent code gets, so
 /// there is no new refusal (`INV-07`) and nothing a client can read about how many tries are left.
 pub fn claim(state: &mut State, code: &str, name: &str) -> Result<super::Paired, Refused> {
-    let Some(pairing) = state.pairing().copied() else {
+    let Some(pairing) = state.pairing().cloned() else {
         return Err(Refused("no pairing is open"));
     };
     if !pairing.accepts(code) {
@@ -493,5 +630,195 @@ mod tests {
             state.pairing().expect("a code").words(),
             format!("PAIR {} {}", &digits[..3], &digits[3..])
         );
+    }
+
+    /// **The payload is the digits and the relay** (#270), exactly: one function, so the QR beside the words
+    /// cannot carry a different code from the one the panel draws.
+    ///
+    /// The falsifiers the ticket names: a payload that does not name the digits on the glass, and a QR drawn with
+    /// no relay configured — a picture that carries no address fails on the phone, so the digits are drawn alone.
+    #[test]
+    fn the_payload_is_the_drawn_digits_and_the_relays_address_or_nothing() {
+        let mut state = capture();
+        state.relay_url = Some("tcp://relay.arcons.test:7030".to_string());
+        apply(&mut state, Intent::PairBegin).expect("pairing opens");
+        let pairing = state.pairing().expect("a code on the wall");
+        let digits = pairing.digits();
+        assert_eq!(digits.len(), 6, "the code is six digits, zero-padded");
+        assert_eq!(
+            payload(&digits, state.relay_url.as_deref()).as_deref(),
+            Some("arcons://pair?relay=tcp://relay.arcons.test:7030&code=481902"),
+            "the payload is `arcons://pair?relay=<relay>&code=<the six digits the panel draws>`"
+        );
+        assert!(
+            pairing.qr().is_some(),
+            "a wall with a relay draws a matrix for the code"
+        );
+        // **No relay, no QR** (#270): the digits are the whole picture, which is what a phone with no camera
+        // reads anyway.
+        let mut bare = capture();
+        apply(&mut bare, Intent::PairBegin).expect("pairing opens on a wall with no relay");
+        let bare = bare.pairing().expect("a code on the wall");
+        assert_eq!(
+            payload(&bare.digits(), None),
+            None,
+            "a QR carrying no address is a picture that fails on the phone: the payload is `None` and the panel \
+             draws the digits alone"
+        );
+        assert!(
+            bare.qr().is_none(),
+            "a wall with no relay drew a matrix: the panel would draw a QR nobody can use"
+        );
+        assert!(
+            bare.words().starts_with("PAIR "),
+            "the digits are still drawn without a relay — they are the fallback, not a second surface"
+        );
+        assert_eq!(
+            payload(&bare.digits(), Some("   ")),
+            None,
+            "a blank relay is a relay nobody meant to point at"
+        );
+    }
+
+    /// **A payload no version can hold is a code without a QR, not a wall that falls over** (#270): the digits
+    /// are still drawn, which is what a phone with no camera needs and what an operator watches while they fix
+    /// the relay's address. The falsifier is an `unwrap` on the encoder's result — a panic on the wall.
+    #[test]
+    fn an_unencodable_payload_draws_the_digits_without_a_qr() {
+        let mut state = capture();
+        state.relay_url = Some(format!("tcp://{}", "a".repeat(4_000)));
+        apply(&mut state, Intent::PairBegin).expect("the code still opens");
+        let pairing = state.pairing().expect("a code on the wall");
+        assert!(
+            pairing.qr().is_none(),
+            "a payload past every version of the standard was drawn as a QR: `Matrix::encode` said no and the \
+             panel believed it — the digits are what is left"
+        );
+        assert!(
+            pairing.words().starts_with("PAIR "),
+            "an unencodable payload took the digits with it"
+        );
+        assert!(
+            payload(&pairing.digits(), state.relay_url.as_deref()).is_some(),
+            "the payload still has a form, it is the encoder that cannot hold it"
+        );
+    }
+
+    /// **The encoding is standard, not clever** (#270): a phone decodes the value with Dart's `Uri.parse`, so
+    /// `tcp://host:port` and `tls://host:port` round-trip, and the bytes a query value must escape — `%`, `&`,
+    /// `=`, `#`, `+`, space — are escaped.
+    #[test]
+    fn a_relay_round_trips_through_the_percent_encoding() {
+        for relay in [
+            "tcp://relay.example.test:7030",
+            "tls://relay.example.test:7030",
+            "wss://relay.example.test/arcons",
+            "unix:/run/arcons relay/a&b=c+d#e%f",
+        ] {
+            let text = payload("481902", Some(relay)).expect("a configured relay makes a payload");
+            let (decoded, code) = decode(&text);
+            assert_eq!(
+                decoded, relay,
+                "`{relay}` did not round-trip: the payload is `{text}`, and a phone decodes it with the \
+                 standard's percent-encoding"
+            );
+            assert_eq!(code, "481902", "the code is the digits, unescaped");
+        }
+        // The bytes that matter, one at a time: a value carrying each is escaped, and a `&` or an `=` inside a
+        // relay cannot end the value it is in.
+        let text = payload("000001", Some("a b&c=d#e+f%g")).expect("a payload");
+        assert_eq!(
+            text,
+            "arcons://pair?relay=a%20b%26c%3Dd%23e%2Bf%25g&code=000001"
+        );
+        assert_eq!(
+            decode(&text),
+            ("a b&c=d#e+f%g".to_string(), "000001".to_string())
+        );
+    }
+
+    /// **The encoder's version and level for a realistic payload** (#270), and **a recorded digest of the grid**:
+    /// an encoder bump is a red test, not a picture nobody looked at.
+    ///
+    /// The digest is SHA-256 over the modules row by row, one byte per module (`1` dark, `0` light), each row
+    /// followed by `\n` — the grid as the number it is, not as the renderer paints it.
+    #[test]
+    fn a_realistic_payload_is_encoded_at_quartile_with_a_recorded_grid() {
+        let text = payload("481902", Some(crate::scene::PAIRING_RELAY)).expect("a payload");
+        let matrix = Matrix::encode(&text).expect("a realistic payload is encodable");
+        assert_eq!(
+            matrix.correction(),
+            'Q',
+            "the pairing QR is encoded at Quartile: a wall is a screen in a room, not a print"
+        );
+        assert_eq!(
+            matrix.version(),
+            5,
+            "the encoder chose version {} for `{text}` and {} modules",
+            matrix.version(),
+            matrix.size()
+        );
+        assert_eq!(
+            digest(&matrix),
+            "fcc64d758a294bcc7f83a6734ed2a96aaaba8d69610648c41db8c24419fdfcbb",
+            "the module grid changed: an encoder bump is a red test here rather than a picture nobody looked at \
+             (#270). If the change is deliberate, record the new digest and say so in the PR"
+        );
+    }
+
+    /// The payload as a phone reads it: the scheme, then `relay` and `code` out of the query, unescaped. A
+    /// **test's** decoder — this repository has no business shipping a second one.
+    fn decode(text: &str) -> (String, String) {
+        let query = text
+            .strip_prefix(PAIR_SCHEME)
+            .and_then(|rest| rest.strip_prefix('?'))
+            .unwrap_or_else(|| panic!("`{text}` is not a pairing payload"));
+        let (mut relay, mut code) = (None, None);
+        for field in query.split('&') {
+            let (name, value) = field
+                .split_once('=')
+                .unwrap_or_else(|| panic!("`{field}` is not a field"));
+            match name {
+                "relay" => relay = Some(unescape(value)),
+                "code" => code = Some(unescape(value)),
+                other => panic!("`{other}` is not a field of a pairing payload"),
+            }
+        }
+        (
+            relay.expect("the payload names its relay"),
+            code.expect("the payload names its code"),
+        )
+    }
+
+    /// The standard's `%XX`, decoded: what Dart's `Uri.parse` does to the value.
+    fn unescape(value: &str) -> String {
+        let bytes = value.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut at = 0;
+        while at < bytes.len() {
+            if bytes[at] == b'%' {
+                let hex = std::str::from_utf8(&bytes[at + 1..at + 3]).expect("two hex digits");
+                out.push(u8::from_str_radix(hex, 16).expect("two hex digits"));
+                at += 3;
+            } else {
+                out.push(bytes[at]);
+                at += 1;
+            }
+        }
+        String::from_utf8(out).expect("a relay is UTF-8")
+    }
+
+    /// The matrix as a digest: one byte per module, row-major, and `\n` at the end of each row.
+    fn digest(matrix: &Matrix) -> String {
+        use sha2::{Digest as _, Sha256};
+
+        let mut hasher = Sha256::new();
+        for y in 0..matrix.size() {
+            for x in 0..matrix.size() {
+                hasher.update([u8::from(matrix.module(x, y))]);
+            }
+            hasher.update(b"\n");
+        }
+        format!("{:x}", hasher.finalize())
     }
 }
