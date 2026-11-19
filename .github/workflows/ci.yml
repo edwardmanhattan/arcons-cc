@@ -7,7 +7,16 @@ on:
   pull_request:
   # The Windows-core probe below downloads 1.3 GB, so it does not run on every push: dispatch this
   # workflow when you want its answer (#46).
+  #
+  # `relay` is for the phone's APK artifact (#265): a debug APK carries its relay at **build** time
+  # (`--dart-define=ARCONS_RELAY`), so the address arrives as an input and never as committed
+  # configuration. Empty is a build with no relay, which starts in `not connected` on purpose.
   workflow_dispatch:
+    inputs:
+      relay:
+        description: "ARCONS_RELAY for the APK (tcp://host:port); empty builds one with no relay"
+        required: false
+        default: ""
 
 jobs:
   # #31: the crate must build where it might be packaged, and a platform that breaks must be a red job
@@ -277,7 +286,19 @@ jobs:
       - name: the AndroidKeyStore half, compiled
         run: |
           flutter pub get
-          flutter build apk --debug
+          flutter build apk --debug --target-platform android-arm64 \
+            --dart-define=ARCONS_RELAY="${{ inputs.relay }}"
+
+      # **The APK, so the checklist can be run** (#265). The platform code compiles here and nowhere else on
+      # this project, and the five lines in the PR that say whether it *works* need an installable build.
+      # arm64 only: every phone since 2017 is, and a fat debug APK is three times the download for no gain.
+      # A debug build is signed with the debug keystore — good for a hand and a test phone, never a release.
+      - name: the APK a phone can run
+        uses: actions/upload-artifact@v4
+        with:
+          name: arcons-phone-debug-apk
+          path: clients/phone/app/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
 
   # **#265's iOS half, compiled** — the Keychain, in Swift, in `ios/Runner/AppDelegate.swift`. It needs a Mac and an
   # Xcode, which is why neither this job nor the code it compiles could run where it was written: no machine on this
