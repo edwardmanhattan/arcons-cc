@@ -119,9 +119,21 @@ pub const NAME_MAX_CHARS: usize = 28;
 /// a menu `size()`d to one row clips the second one, which is the kind of wrong no golden notices until
 /// someone opens it on a wall.
 pub const MENU_WIDTH: f32 = 216.0;
-/// The rename sheet's box, and the pairing code's: wide enough for a sentence, and as tall as the three rows
-/// they carry. **The settings sheet has its own** (#240) — it is as tall as its rows, not as tall as these.
+/// The rename sheet's box. **The pairing panel has its own** (#270), because it also holds a square: a QR
+/// squeezed into a sheet sized for a sentence is a picture nobody can scan.
 pub const SHEET_SIZE: (f32, f32) = (360.0, 132.0);
+/// **The pairing panel's box** (#270): the digits and the words beside the QR square.
+pub const PAIRING_SIZE: (f32, f32) = (460.0, 240.0);
+/// The width the digits and the hint get beside the QR. Fixed, so the square lands on a whole point and no
+/// module edge is antialiased — a scanner reads edges, not pixels.
+pub const PAIR_TEXT_W: f32 = 240.0;
+/// **The pairing QR** (#270): the square it is given in the panel, and its quiet zone in modules.
+///
+/// Four modules of quiet zone is what the standard requires and what a phone's decoder expects, and the zone is
+/// **inside** this square: the light block is drawn as wide as the modules plus their margin, so the margin
+/// is light and not the panel's dark behind it.
+pub const QR_SIDE: f32 = 180.0;
+pub const QR_QUIET: usize = 4;
 /// **The settings sheet's own box** (#82, #240): its width, and the height one of its rows takes.
 pub const SETTINGS_W: f32 = 360.0;
 pub const SETTINGS_ROW: f32 = 28.0;
@@ -299,6 +311,17 @@ pub fn clear() -> Color {
 /// preference *about* the picture and hiding it would hide what they are choosing for (#82).
 pub fn scrim() -> Color {
     oklcha(0.05, 0.0, 250.0, 0.72)
+}
+
+/// **The pairing QR's paper and ink** (#270). Light modules on a dark wall would read as a hole in the panel;
+/// the standard's own polarity — **dark modules on a light block** — is also what every scanner expects, and a
+/// white square on a dark wall is a target the eye (and a camera) finds instantly for the two minutes it is up.
+pub fn qr_paper() -> Color {
+    oklch(0.97, 0.002, 250.0)
+}
+
+pub fn qr_ink() -> Color {
+    oklch(0.16, 0.006, 250.0)
 }
 
 /// A pane's name plate (#83): the panel's colour lifted a step, so a label reads as chrome sitting on the

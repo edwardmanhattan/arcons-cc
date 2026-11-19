@@ -153,7 +153,7 @@ cargo run -- --scenes            # empty · picture · stale · card-open · pho
                                  # panes-drag · panes-pan · panes-drop · panes-drop-remote
                                  # panes-menu · panes-gaps · panes-gap-resize
                                  # panes-named · panes-max · panes-cards · panes-range · objects
-                                 # panes-filter · installations · settings · settings-dismiss
+                                 # panes-filter · installations · settings · settings-dismiss · pairing
                                  # pane-menu · pane-tree · pane-tree-narrow · pane-tree-zoom
                                  # pane-tree-pan · newsroom · newsroom-scopes · newsroom-page-2
                                  # newsroom-story · newsroom-story-back
@@ -505,6 +505,17 @@ wall at 50/50 and both the golden and the assertion say so. The assertion finds 
 its centre with `PANES_DRAGGED` of the panel (within 2 pt), then projects each pane's hull against the 58/42
 layout. Drawing the gutter elements *under* the panes is the other falsifier: the press then falls through to a
 pane's map drag, which pans a camera instead of moving the line.
+
+`pairing` is **a pairing code on the wall** (#270): the six digits for two minutes, and beside them the QR that
+carries `arcons://pair?relay=…&code=481902`. The relay and the code are values on the state — the scene fixes both, so
+the picture is the same bytes on every machine (`INV-11`) and no socket is bound. The assertion finds the QR by the one
+colour nothing else on the wall uses (`tokens::qr_paper`), requires its block to be the modules plus four modules of
+quiet zone at the module size `ui::qr` computes, requires that margin to be **paper with no module ink in it**, samples
+every third module against the matrix and requires each to be the ink or the paper the encoder says — and requires the
+digits still drawn beside it, because the QR is additive and a phone with no camera types the code. `cargo test
+control::pair` holds what a picture cannot: the payload's exact string with a relay and `None` without one, the
+percent-encoding a phone's `Uri.parse` undoes, the encoder's version and EC level, and a **recorded SHA-256 of the
+module grid** so an encoder bump is a red test rather than a picture nobody decoded.
 
 `settings` is the wall with its **settings sheet open** (#82): the one modal surface, over a picture that is
 dimmed and not reflowed (the scrim is *pinned* to the root, so opening it costs the picture nothing). The

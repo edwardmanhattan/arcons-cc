@@ -25,6 +25,7 @@ pub mod installations;
 pub mod markers;
 pub mod newsroom;
 pub mod objects;
+pub mod qr;
 pub mod saved;
 pub mod snapshot;
 pub mod symbol;
@@ -456,6 +457,14 @@ pub struct State {
     /// pairing is open. Not an [`Interaction`]: a code holds neither the pointer nor the keyboard, and the
     /// wall keeps drawing the sea behind it while two people in the room read it.
     pub pairing: Option<crate::control::pair::Pairing>,
+    /// **Where this wall's relay is** (#270), as the operator wrote `ARCONS_RELAY_URL`: read once when the wall
+    /// opens by [`State::with_relay`], and never from the view. It is what the pairing QR carries, so a phone
+    /// needs no build-time address — a deployment address, not a secret.
+    ///
+    /// **`None` on a wall with no relay and on every capture**: a scene sets its own string (`pairing`), so a
+    /// golden never depends on the machine or the environment it was rendered on (`INV-11`), and the payload is
+    /// a function of two values rather than of a connection. Not [`State::relay`], which is the carrier's thread.
+    pub relay_url: Option<String>,
     /// **The devices that may drive this wall** (#194): names and SHA-256 hashes — never a key. Loaded from
     /// `devices.toml` at start-up, appended by `pair.claim`, and written off the UI thread.
     pub devices: crate::config::devices::Devices,
@@ -776,6 +785,7 @@ impl Default for State {
             settings: crate::config::settings::Settings::default(),
             arranged_at: None,
             pairing: None,
+            relay_url: None,
             devices: crate::config::devices::Devices::default(),
             devices_path: devices::saved_devices_path(),
 
@@ -1460,6 +1470,20 @@ impl State {
                 );
             }
         }
+    }
+
+    /// **The relay's address, read once** (#270): `ARCONS_RELAY_URL` as the operator wrote it, put on the state
+    /// at startup so the pairing QR's payload is a function of two values and the view reads no environment.
+    ///
+    /// **Never for a scene**: a capture that read this machine's environment would make its golden depend on
+    /// who is logged in — the same rule [`State::with_saved_settings`] keeps, for the same reason (`INV-11`). A
+    /// scene that wants a relay sets its own string.
+    pub fn with_relay(mut self) -> State {
+        if rune::is_headless() {
+            return self;
+        }
+        self.relay_url = crate::control::relay::configured(&crate::config::Env::from_process());
+        self
     }
 
     /// The preferences the display remembers (#82), read once when the wall opens.
@@ -2653,18 +2677,41 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
     root
 }
 
-/// **The pairing code** (#194): six digits two people in the same room read off the screen.
+/// **The pairing code** (#194): six digits two people in the same room read off the screen, and beside them a
+/// QR that carries the same digits and this wall's relay (#270).
 ///
 /// It is **not a sheet**: a code holds neither the pointer nor the keyboard, and the wall keeps drawing the sea
 /// behind it for the two minutes a phone needs. The digits are a picture — never an answer to `pair.begin` — because
 /// a client that could read its own pairing code could pair itself.
+///
+/// **The digits stay when the QR is drawn**, and they are the whole panel when there is no relay: a phone with no
+/// camera pairs by typing, and a QR carrying no address is a picture that fails on the phone.
 fn pairing_panel(state: &State, pairing: &crate::control::pair::Pairing) -> El {
-    let width = state.panel.map(|(w, _)| w).unwrap_or(tokens::WINDOW_SIZE.0);
-    let height = state.panel.map(|(_, h)| h).unwrap_or(tokens::WINDOW_SIZE.1);
-    let (w, h) = tokens::SHEET_SIZE;
+    let (x, y, w, h) = pairing_box(state.panel);
+    let mut beside = row().gap(tokens::GAP).items_center().child(
+        col()
+            .w(tokens::PAIR_TEXT_W)
+            .gap(tokens::GAP)
+            .child(
+                text(pairing.words())
+                    .key("pairing-code")
+                    .font(tokens::TITLE)
+                    .color(tokens::accent()),
+            )
+            .child(
+                text("type it on the phone · two minutes")
+                    .font(tokens::LABEL)
+                    .color(tokens::ink_dim()),
+            ),
+    );
+    // **The square is the matrix's, not the panel's** (#270): a code the panel cannot draw is not a square to
+    // draw empty. With no relay, the digits are drawn alone.
+    if let Some(matrix) = pairing.qr() {
+        beside = beside.child(crate::ui::qr::square(matrix));
+    }
     col()
         .key("pairing-panel")
-        .absolute((width - w) / 2.0, (height - h) / 2.0)
+        .absolute(x, y)
         .size(w, h)
         .padding(tokens::PAD)
         .gap(tokens::GAP)
@@ -2676,17 +2723,16 @@ fn pairing_panel(state: &State, pairing: &crate::control::pair::Pairing) -> El {
                 .font(tokens::LABEL)
                 .color(tokens::ink_dim()),
         )
-        .child(
-            text(pairing.words())
-                .key("pairing-code")
-                .font(tokens::TITLE)
-                .color(tokens::accent()),
-        )
-        .child(
-            text("type it on the phone · two minutes")
-                .font(tokens::LABEL)
-                .color(tokens::ink_dim()),
-        )
+        .child(beside)
+}
+
+/// **Where the pairing panel sits, and how big it is** (#270): centred on the picture panel, from
+/// [`tokens::PAIRING_SIZE`]. The view draws from it and `verify` measures against it, so a sheet that moved and an
+/// assertion that did not cannot pass each other.
+pub fn pairing_box(panel: Option<(f32, f32)>) -> (f32, f32, f32, f32) {
+    let (width, height) = panel.unwrap_or(tokens::WINDOW_SIZE);
+    let (w, h) = tokens::PAIRING_SIZE;
+    ((width - w) / 2.0, (height - h) / 2.0, w, h)
 }
 
 /// What the header's one control says. A word, because there is room for one and a word needs no catalogue
@@ -7065,6 +7111,7 @@ pub fn run(window: config::Window, passthrough: Vec<String>) -> ExitCode {
                 State::default()
                     .with_saved_settings()
                     .with_saved_layout()
+                    .with_relay()
                     .with_saved_devices()
             },
             view,

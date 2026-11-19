@@ -57,6 +57,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
+qrcodegen = "1.8"
 
 [features]
 default = []
