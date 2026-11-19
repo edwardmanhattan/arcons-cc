@@ -352,10 +352,14 @@ One screen, and it is the only screen before the overview:
 ┌───────────────────────────────────────┐
 │  Pair with a wall                     │
 │                                       │
-│  ┌───┐┌───┐┌───┐  ┌───┐┌───┐┌───┐     │   six digits, drawn on the wall, typed here
+│  ┌───┐┌───┐┌───┐  ┌───┐┌───┐┌───┐     │   six digits, drawn on the wall, typed or scanned
 │  │ 4 ││ 8 ││ 1 │  │ 9 ││ 0 ││ 2 │     │
 │  └───┘└───┘└───┘  └───┘└───┘└───┘     │
 │                                       │
+│  ┌───────────────────────────────┐    │
+│  │       Scan the wall's QR      │    │   the camera, when the phone has one
+│  └───────────────────────────────┘    │
+│  Relay             [ tcp://host:7000 ]│
 │  Name this phone   [ operations phone ]│
 │                                       │
 │  ┌───────────────────────────────┐    │
@@ -380,6 +384,20 @@ percent-encoded URL — `Uri.parse` the payload and decode the `relay` query val
 string a phone with no camera types. **The six digits are still drawn and the code field still works**: a phone with no
 camera, or a camera that will not focus on a dark room's screen, pairs by typing, and the QR is additive rather than a
 replacement.
+
+**The scan affordance** (#271) opens the camera and reads one payload. A scan **wins over the field**: it fills the code
+field with the payload's six digits and the relay field with the relay the payload names, so the two values always move
+together. A payload the parser refuses fills **nothing**, keeps whatever the operator had typed, and says which name
+refused it — `notAnArconsUri`, `pairIsNotTheHost`, `noRelay`, `noCode`, `codeIsNotSixDigits` or
+`relayCannotBeDialled` — rather than turning a bad QR into a blank screen. A camera the operator denied (or a phone with
+no camera) leaves the typed path working and says so in words; it is a refused affordance, not a refused pairing.
+
+**The Relay field** is the address the claim goes to. It starts with the remembered value when there is one, then the
+build's `--dart-define=ARCONS_RELAY`, and empty otherwise — and the precedence is **a scan wins over the field, the
+field wins over the compiled default**. The value is kept in the platform's ordinary preferences, **not** in the
+Keystore: a relay URL is deployment configuration and not a secret, while the device key is the secret the platform
+store holds (#265, ADR-0008 decision 4). The field draws the address because it is the setting being edited; the URL is
+never written to a log line (`#264`'s rule, and `INV-08`'s edge in `control.md`).
 
 Two things the QR is not. It is **not an answer to `pair.begin`**: the wall still replies with `changed: true`, and
 the picture is the only place the code travels (`INV-08`). And it is **not a promise that a phone can reach the

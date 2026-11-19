@@ -29,16 +29,19 @@ by `dart pub` from `clients/phone/pubspec.lock`. The direct ones, all developmen
 | `test` | BSD-3-Clause | the test runner (`dart test`) |
 | `lints` | BSD-3-Clause | the analysis rules `dart analyze` enforces |
 
-The screen (`clients/phone/app/`) adds two more, and the Flutter SDK itself is a **toolchain**, not a package linked
+The screen (`clients/phone/app/`) adds more, and the Flutter SDK itself is a **toolchain**, not a package linked
 into either program:
 
 | package | licence | role |
 | --- | --- | --- |
 | `material_ui` | BSD-3-Clause | the widget set and the icon catalogue the screen draws with (`mobile-ui.md`) |
+| `mobile_scanner` 7.5.0 | BSD-3-Clause — © 2022 Julian Steenbakker | **the pairing QR's camera and decoder** (#271). Android: CameraX plus the **bundled** ML Kit barcode model (`com.google.mlkit:barcode-scanning`), roughly 3–10 MB in the APK; iOS: AVFoundation and Apple's Vision framework. The plugin's own Android/iOS halves are linked, and `mobile_scanner` is the only package that touches a camera |
+| `shared_preferences` 2.5.6 | BSD-3-Clause | **the relay field's memory** (#271): a URL is deployment configuration, not a secret, so it is kept in platform preferences beside the app's other settings; the device key is not here (ADR-0008 decision 4) |
 | `flutter_test` | BSD-3-Clause | widget tests and the golden harness (`flutter test`) |
 
-The transitive set is `pubspec.lock`'s, and none of it ships in the wall. A runtime dependency arrives with the first
-screen, and its row arrives with it.
+The transitive set is `pubspec.lock`'s, and none of it ships in the wall. The two runtime plugins above ship in the
+phone app only; the wall links neither. `shared_preferences` brings its per-platform implementations and `mobile_scanner`
+brings CameraX/ML Kit on Android and AVFoundation/Vision on iOS — all in the app's APK or bundle, never in the wall.
 
 ## The wall's own dependencies
 
