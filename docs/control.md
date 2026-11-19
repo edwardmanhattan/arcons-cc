@@ -474,6 +474,10 @@ its tests.
 | the loop | **the socket's session loop** (#195): a request becomes a `Job`, the UI thread answers it, and the answer is written back. Nothing about intents or answers is spelled twice |
 | `--self-check` | a `relay` row: configured, unreachable, or not now. A **fact, never a verdict** — it changes no exit code, like `control` |
 
+**A relay for a desk**: `tools/dev-relay/` implements these frames and nothing else — no authentication, no TLS,
+no persistence — so a phone can be paired and driven without a deployment (#268). It is a development tool, not a second
+contract: what production needs is a relay somewhere both the wall and the phone can reach.
+
 ### The relay's frames
 
 A frame is named by the field that makes it one; `hello` and `welcome` are the handshake and the other two are the

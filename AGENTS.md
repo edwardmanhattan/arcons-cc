@@ -110,4 +110,5 @@ scripts/         verify.sh (the gate), capture.sh <scene>, assert.sh <png>
 fixtures/scenes/ the 40-vessel feed the scenes load; golden/ the captures they must match
 docs/            verification contract, invariants, ADRs, control.md (the control plane), mobile-remote.md (the phone), mobile-ui.md (its screen), runbook.md
 clients/phone/   the phone: a Dart package the corpus holds to the protocol (ADR-0008, #248). `dart test`, not the gate
+tools/dev-relay/ a development relay: the phone's path with real sockets on both ends (#268). Not the contract
 ```

@@ -240,6 +240,15 @@ jobs:
           dart analyze --fatal-infos
           dart test
 
+      # The development relay (#268) — the only place two real ends of the phone path meet a real socket, and it needs
+      # no display to prove the routing it does.
+      - name: the dev relay's routing
+        working-directory: tools/dev-relay
+        run: |
+          dart pub get
+          dart analyze --fatal-infos
+          dart test
+
       # The screen (#255). Flutter arrives here with its first golden and not before: a picture the engine renders on
       # this runner is a picture that cannot pass by looking plausible in a review. The app depends on the package
       # above by path, so the wire, the tiling and the client's rules are the same code the job above just proved.
