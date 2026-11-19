@@ -28,6 +28,7 @@ import 'package:arcons_phone/wire.dart' show Granted, Paired, Projection;
 import 'package:material_ui/material_ui.dart';
 
 import 'controller.dart';
+import 'keystore.dart' show KeyStoreUnavailable;
 import 'overview.dart';
 import 'pairing.dart';
 
@@ -109,28 +110,6 @@ Uri? parseRelay(String configured) {
   };
 }
 
-/// **A key store with no platform under it** — what this app holds until #265 lands the Keychain and the Keystore.
-///
-/// ADR-0008 decision 4 says the platform's store and **not a file**, so this is deliberately not one: a memory store is
-/// a phone that has to pair again after a restart, which is a smaller lie than a key written somewhere this repository
-/// can read. `INV-08`: the key can never be formatted into a string by this object.
-final class MemoryKeyStore implements KeyStore {
-  MemoryKeyStore([this._key]);
-
-  String? _key;
-
-  @override
-  Future<String?> key() async => _key;
-
-  @override
-  Future<void> remember(String key) async {
-    _key = key;
-  }
-
-  @override
-  String toString() => 'a key store (its key is not printed)';
-}
-
 /// **The app.** The pairing screen before a key, the overview after it, and the relay under both.
 final class PhoneShell extends StatefulWidget {
   const PhoneShell({
@@ -203,9 +182,12 @@ final class _PhoneShellState extends State<PhoneShell> {
     String? key;
     try {
       key = await widget.keys.key();
-    } on Object {
-      // A store that cannot answer is a phone that has to pair: nothing here invents a key, and `pair.claim` is how a
-      // key is made.
+    } on KeyStoreUnavailable catch (refusal) {
+      // **The platform's store did not answer** (#265): a phone that has to pair, because nothing here invents a key
+      // and `pair.claim` is how a key is made. The branch is named rather than `on Object`, so a store's own bug is a
+      // bug and not a silent pairing screen (`INV-07`'s spirit) — and the line it logs carries the channel's name and
+      // never a value (`INV-08`).
+      _log(refusal.toString());
       key = null;
     }
     if (!mounted) {

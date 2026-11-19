@@ -44,6 +44,25 @@ VERIFY_WITH_MAP=1 scripts/verify.sh   # the same gate, plus the map feature at c
 Run it before pushing anything that touches code behind `cfg(feature = "map")`. CI's `map` jobs run the same
 command, which is why a change to those lines is decided there even when a local gate says PASSED.
 
+## The phone's platform half is compiled by CI, and by nothing else
+
+Two jobs in `.github/workflows/ci.yml`, beside `phone`, compile the only code in this repository that no test here can
+run: the device key's two homes, written by hand because ADR-0008 decision 4 says so.
+
+| job | runner | what it proves |
+| --- | --- | --- |
+| `phone-android` | `ubuntu-latest` | `flutter build apk --debug` compiles `android/app/src/main/kotlin/…` — an AES key generated in the **AndroidKeyStore**, wrapping the secret whose blob is in the app's own `SharedPreferences` |
+| `phone-ios` | `macos-latest` | `flutter build ios --no-codesign --debug` compiles `ios/Runner/AppDelegate.swift` — the **Keychain** item through `SecItemAdd` / `SecItemCopyMatching` / `SecItemDelete`, with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` |
+
+**What they prove is narrow, and it is written down rather than assumed: the platform code compiles.** No command on any
+machine here says a key is written, that it survives a reboot, or that it is gone after an uninstall. That is a hand, a
+phone and the checklist in #265's PR body, and a green pair of jobs is not evidence in its place.
+
+**They are separate from the gate on purpose.** `scripts/verify.sh` is Rust: it needs no Java, no Android SDK and no
+Xcode, and it renders pixels. These two need those toolchains between them, so folding them into the gate would make the
+gate a machine nobody has. `tests/doc_claims.rs` holds the other half of the rule — the gate job runs `scripts/verify.sh`
+and no other job does — so these are deliberately commands of their own, and neither is advisory.
+
 ## Every ticket carries a `## Proof` line
 
 One line: the command, and what a failure looks like. Not "tests pass" — the invocation.
