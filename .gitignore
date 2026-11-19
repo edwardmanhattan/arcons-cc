@@ -14,6 +14,7 @@ __pycache__/
 /clients/phone/.dart_tool/
 /clients/phone/app/.dart_tool/
 /clients/phone/app/build/
+/clients/phone/app/.flutter-plugins-dependencies
 
 # The development relay's package (#268): caches only, the lockfile is committed.
 /tools/dev-relay/.dart_tool/

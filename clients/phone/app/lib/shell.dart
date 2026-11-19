@@ -23,6 +23,7 @@ import 'dart:async';
 import 'dart:developer' as developer;
 
 import 'package:arcons_phone/client.dart' show Carrier;
+import 'package:arcons_phone/pairing.dart' show parseDialableRelay;
 import 'package:arcons_phone/relay.dart' show KeyStore, RelayCarrier;
 import 'package:arcons_phone/wire.dart' show Granted, Paired, Projection;
 import 'package:material_ui/material_ui.dart';
@@ -31,6 +32,8 @@ import 'controller.dart';
 import 'keystore.dart' show KeyStoreUnavailable;
 import 'overview.dart';
 import 'pairing.dart';
+import 'preferences.dart' show MemoryRelayPreferences, RelayPreferences;
+import 'scanner.dart' show NoCamera, Scanner;
 
 /// **The relay, as the shell needs it**: the client's [Carrier], the dial, the watch, and the one claim a phone with no
 /// key may send.
@@ -82,33 +85,15 @@ final class Relay implements PhoneRelay {
 }
 
 /// A carrier built from the deployment's relay URL. `main` passes this; a test passes its own.
-PhoneRelay dialRelay(Uri relay, KeyStore keys) => Relay(
-      RelayCarrier(relay: relay, keys: keys),
-    );
+PhoneRelay dialRelay(Uri relay, KeyStore keys) =>
+    Relay(RelayCarrier(relay: relay, keys: keys));
 
 /// **The deployment's relay, parsed, or `null` when none is configured.**
 ///
 /// Empty, unparseable, or a scheme this build cannot dial is the same state: **no relay is configured**, and the
 /// overview says so without naming the value (`INV-08`). A URL is a measurement of somebody's deployment, not a fact
 /// about this phone, so a malformed one is not printed back at the operator either.
-Uri? parseRelay(String configured) {
-  if (configured.isEmpty) {
-    return null;
-  }
-  final Uri relay;
-  try {
-    relay = Uri.parse(configured);
-  } on FormatException {
-    return null;
-  }
-  if (relay.host.isEmpty || relay.port == 0) {
-    return null;
-  }
-  return switch (relay.scheme) {
-    'tcp' || 'tls' => relay,
-    _ => null,
-  };
-}
+Uri? parseRelay(String configured) => parseDialableRelay(configured);
 
 /// **The app.** The pairing screen before a key, the overview after it, and the relay under both.
 final class PhoneShell extends StatefulWidget {
@@ -116,6 +101,8 @@ final class PhoneShell extends StatefulWidget {
     super.key,
     required this.relay,
     required this.keys,
+    this.scanner,
+    this.preferences,
     this.openRelay,
     this.clock,
     this.log,
@@ -127,6 +114,13 @@ final class PhoneShell extends StatefulWidget {
 
   /// Where the device key lives. Read once on start to decide whether this phone is paired.
   final KeyStore keys;
+
+  /// How a camera is opened on the pairing screen. `null` is [NoCamera], which says so in words and leaves typing
+  /// working; `main` passes the plugin. No widget test constructs a camera.
+  final Scanner? scanner;
+
+  /// Where the relay field's value is kept. `null` is [MemoryRelayPreferences], which is the test's and the fallback.
+  final RelayPreferences? preferences;
 
   /// How a carrier is built; `null` is [dialRelay]. A test hands over a fake.
   final PhoneRelay Function(Uri relay, KeyStore keys)? openRelay;
@@ -150,8 +144,17 @@ final class _PhoneShellState extends State<PhoneShell> {
   PhoneRelay? _phone;
   StreamSubscription<Projection>? _publishes;
 
+  /// The relay this run uses: the remembered value when there is one, then the compiled default. It is what the
+  /// pairing screen starts its field with and what a phone that already has a key dials.
+  late Uri? _relay = widget.relay;
+
   /// The phone has no key yet: the pairing screen is the only screen before the overview.
   bool _pairing = false;
+
+  /// Resolved once, so a rebuild cannot swap the store under a field that is being typed into.
+  late final Scanner _scanner = widget.scanner ?? const NoCamera();
+  late final RelayPreferences _preferences =
+      widget.preferences ?? MemoryRelayPreferences();
 
   @override
   void initState() {
@@ -174,11 +177,13 @@ final class _PhoneShellState extends State<PhoneShell> {
   /// **Read the key, then decide.** A phone with a key has a wall to read; a phone without one has a code to type; a
   /// phone with no relay has nowhere to dial, which is a state and not a crash (#264).
   Future<void> _start() async {
-    final relay = widget.relay;
-    if (relay == null) {
-      _controller.offline(why: noRelayConfigured);
-      return;
-    }
+    // **The remembered relay is the field's value on the next run** (#271): a scan or a typed address outlives the
+    // process, and it is a URL rather than a secret, so it lives in preferences and not the key store. A remembered
+    // value that is no longer dialable is ignored, and the compiled default remains.
+    final remembered = await _preferences.relay();
+    final relay = parseRelay(remembered ?? '') ?? widget.relay;
+    _relay = relay;
+
     String? key;
     try {
       key = await widget.keys.key();
@@ -194,9 +199,15 @@ final class _PhoneShellState extends State<PhoneShell> {
       return;
     }
     if (key == null) {
+      // **No relay yet is still a pairing screen** (#271): the field is empty, and the operator can type or scan the
+      // address the wall is reachable at. A phone that has a key and no relay is `not connected`, as before.
       setState(() {
         _pairing = true;
       });
+      return;
+    }
+    if (relay == null) {
+      _controller.offline(why: noRelayConfigured);
       return;
     }
     await _open(relay);
@@ -204,7 +215,10 @@ final class _PhoneShellState extends State<PhoneShell> {
 
   /// **Dial, connect, read** — the client's first rule, made the app's (`mobile-remote.md` decision 1).
   Future<void> _open(Uri relay) async {
-    final phone = _phone ??= (widget.openRelay ?? dialRelay)(relay, widget.keys);
+    final phone = _phone ??= (widget.openRelay ?? dialRelay)(
+      relay,
+      widget.keys,
+    );
     await _session(phone);
   }
 
@@ -253,8 +267,9 @@ final class _PhoneShellState extends State<PhoneShell> {
 
   /// One line, and **never a field**: no address, no code, no key (`INV-08`).
   void _log(String message) =>
-      (widget.log ??
-          (message) => developer.log(message, name: 'arcons-phone'))(message);
+      (widget.log ?? (message) => developer.log(message, name: 'arcons-phone'))(
+        message,
+      );
 
   /// **The claim landed.** The carrier that claimed holds the key, so the shell adopts it: the same connection reads
   /// first and then watches, and the phone's identity is the key the store now holds.
@@ -268,11 +283,12 @@ final class _PhoneShellState extends State<PhoneShell> {
 
   @override
   Widget build(BuildContext context) {
-    final relay = widget.relay;
-    if (_pairing && relay != null) {
+    if (_pairing) {
       return PairingScreen(
-        relay: relay,
+        relay: _relay,
         keys: widget.keys,
+        scanner: _scanner,
+        preferences: _preferences,
         openRelay: widget.openRelay ?? dialRelay,
         onPaired: _adopt,
       );

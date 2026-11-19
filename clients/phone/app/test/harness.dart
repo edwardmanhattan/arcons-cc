@@ -21,6 +21,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:arcons_phone_app/controller.dart';
 import 'package:arcons_phone_app/overview.dart';
 import 'package:arcons_phone_app/pairing.dart';
+import 'package:arcons_phone_app/preferences.dart' show RelayPreferences;
+import 'package:arcons_phone_app/scanner.dart' show Scanner;
 import 'package:arcons_phone_app/shell.dart' show PhoneRelay;
 
 /// The recording, by path from this package: `clients/phone/app/` → the repository's root.
@@ -534,5 +536,59 @@ Future<void> enterCode(WidgetTester tester, String code) async {
 TextField codeField(WidgetTester tester) =>
     tester.widget<TextField>(find.byKey(pairCodeKey));
 
+TextField relayField(WidgetTester tester) =>
+    tester.widget<TextField>(find.byKey(pairRelayKey));
+
 TextField nameField(WidgetTester tester) =>
     tester.widget<TextField>(find.byKey(pairNameKey));
+
+
+/// **A camera a test owns** (#271): the seam's one method, and no plugin, no permission dialog, no device. An answer is
+/// the payload a wall's QR holds; a failure is a [CameraUnavailable] the test scripts, so the refusal path is a test and
+/// not a hope.
+final class FakeScanner implements Scanner {
+  FakeScanner([this.payload]);
+
+  /// The raw payload the next scan answers with. `null` is the operator backing out of the camera.
+  String? payload;
+
+  /// An error the next scan throws, or `null` for a scan that answers [payload]. It is the same type the real seam
+  /// throws, so the screen's `on CameraUnavailable` is the branch under test.
+  Object? failure;
+
+  /// How many times the screen asked for a camera.
+  int scans = 0;
+
+  @override
+  Future<String?> scan(BuildContext context) async {
+    scans++;
+    final error = failure;
+    if (error != null) {
+      throw error;
+    }
+    return payload;
+  }
+}
+
+/// **A relay preference a test owns** (#271): the remembered URL and every write, with no platform channel.
+final class RecordingRelayPreferences implements RelayPreferences {
+  RecordingRelayPreferences([this.value]);
+
+  /// The value the next read answers, or `null` when nothing is remembered.
+  String? value;
+
+  /// Every URL the screen remembered, in order.
+  final List<String> remembered = <String>[];
+
+  @override
+  Future<String?> relay() async => value;
+
+  @override
+  Future<void> rememberRelay(String relay) async {
+    value = relay;
+    remembered.add(relay);
+  }
+
+  @override
+  String toString() => 'a relay preference (its value is not printed)';
+}

@@ -20,6 +20,8 @@ import 'package:arcons_phone/relay.dart' show KeyStore;
 import 'package:material_ui/material_ui.dart';
 
 import 'keystore.dart';
+import 'preferences.dart' show RelayPreferences, SharedRelayPreferences;
+import 'scanner.dart' show CameraScanner, Scanner;
 import 'shell.dart';
 
 /// The variable the deployment sets: `flutter run --dart-define=ARCONS_RELAY=tcp://HOST:PORT`.
@@ -34,6 +36,10 @@ void main() {
       // Android, behind one channel. ADR-0008 decision 4 — the key itself is in neither a file nor a `Map` a crash dump
       // can read, and on Android the wrapped blob in the app's own preferences is useless without the keystore key.
       keys: PlatformKeyStore(),
+      // **The camera** (#271): the plugin lives behind the `Scanner` seam, and this is the only place it is named.
+      scanner: const CameraScanner(),
+      // **The relay field's memory** (#271): a URL is a setting, not a secret, so the platform's own preferences.
+      preferences: SharedRelayPreferences(),
     ),
   );
 }
@@ -44,6 +50,8 @@ final class PhoneApp extends StatelessWidget {
     super.key,
     required this.relay,
     required this.keys,
+    this.scanner,
+    this.preferences,
     this.openRelay,
     this.clock,
     this.log,
@@ -55,6 +63,13 @@ final class PhoneApp extends StatelessWidget {
 
   /// Where the device key lives. A phone with no key pairs first.
   final KeyStore keys;
+
+  /// How the pairing screen opens a camera. `null` is a build that says the camera is unavailable; a test hands over
+  /// a fake and no camera is constructed.
+  final Scanner? scanner;
+
+  /// Where the relay field's value is kept. `null` is the in-memory fallback a test gets.
+  final RelayPreferences? preferences;
 
   /// How a carrier is built; `null` is the relay's socket. A test hands over a fake.
   final PhoneRelay Function(Uri relay, KeyStore keys)? openRelay;
@@ -78,6 +93,8 @@ final class PhoneApp extends StatelessWidget {
         body: PhoneShell(
           relay: relay,
           keys: keys,
+          scanner: scanner,
+          preferences: preferences,
           openRelay: openRelay,
           clock: clock,
           log: log,
@@ -90,6 +107,6 @@ final class PhoneApp extends StatelessWidget {
 
 /// The update button's default: one line, no retry, and no address in it.
 void _noStorePage() => developer.log(
-      'this build cannot speak the wall\'s protocol: this package has no store page to open',
-      name: 'arcons-phone',
-    );
+  'this build cannot speak the wall\'s protocol: this package has no store page to open',
+  name: 'arcons-phone',
+);

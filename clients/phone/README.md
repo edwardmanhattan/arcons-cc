@@ -18,12 +18,16 @@ cd clients/phone/app                  # the app, against a deployment's relay
 flutter run --dart-define=ARCONS_RELAY=tcp://HOST:PORT
 ```
 
-**The relay is deployment configuration and never a secret.** It is read from `ARCONS_RELAY` at build time
-(`tcp://` or `tls://`), never written in the tree; a build without it starts in `not connected · no relay is
-configured`, which is a state and not a crash. The **device key** is the platform's business (#265): the Keychain on iOS
-and an AES key in the AndroidKeyStore on Android, behind one `MethodChannel` — see `app/lib/keystore.dart` and the
-`phone-android` / `phone-ios` jobs in CI. The platform code is the one part of this tree no test here can run, and it is
-proved to **compile** by CI and to **work** only by a human with a phone.
+**The relay is deployment configuration and never a secret.** A build can carry one from `ARCONS_RELAY`
+(`tcp://` or `tls://`), and the pairing screen can also read the wall's QR or take a typed address; whichever it uses is
+remembered in the platform's ordinary preferences, never in the device-key store and never written in the tree. A build
+with no relay and no remembered value starts on the pairing screen with an empty Relay field; a paired phone with
+neither is `not connected · no relay is configured`, which is a state and not a crash. The **device key** is the
+platform's business (#265): the Keychain on iOS and an AES key in the AndroidKeyStore on Android, behind one
+`MethodChannel` — see `app/lib/keystore.dart` and the `phone-android` / `phone-ios` jobs in CI. The platform code is the
+one part of this tree no test here can run, and it is proved to **compile** by CI and to **work** only by a human with a
+phone. The **camera** is the same kind of claim (#271): `mobile_scanner` compiles in both platform jobs, and only a phone
+in a room with a wall can say it read the QR.
 
 `app/` has its own `analysis_options.yaml` on purpose: the analyzer looks **upward** for the nearest options file, and
 the package's excludes `app/**`, so without one `flutter analyze` in the app directory would analyse nothing.
@@ -42,6 +46,7 @@ SDK and no Xcode (`docs/verification.md`).
 | `lib/cells.dart` | the tiling laid into a rectangle the caller gives it: `Layout::cells`, `view::panes_on`, `Layout::drop_for`, `Layout::apply` (the tiling a drop previews), `Layout::borders` (the gutters) and the clamp a resize is previewed through — as ratios and never as the wall's pixels (#249, #257) |
 | `lib/client.dart` | **a client's rules**, over a `Carrier` of three methods: it reads before it acts, a connection that comes back knows nothing, a wall changed elsewhere is read rather than corrected, and a version it cannot speak is a stop (#250). The wall's own client is `src/control/client.rs` (#197) |
 | `lib/relay.dart` | **the carrier** (#256): a socket to the relay — one JSON object per line, `tcp://` or `tls://`, the device key in `device` — with a dial that backs off, a watch asked only after a read has landed ([`RelayCarrier.watch`]) and publishes delivered as projections that know their `watch`. The key arrives through a `KeyStore` this package does not implement: the Keychain and the Keystore are the app's (#265) |
+| `lib/pairing.dart` | **the wall's pairing QR** (#271): `parsePairingUri` turns `arcons://pair?relay=…&code=…` into a relay and six digits, or one of six **named** refusals, with no default arm. It shares `parseDialableRelay` with the app, so the compiled default, the field and a scanned payload cannot disagree about what a relay is |
 | `test/corpus_test.dart` | the recording, line by line: every answer parses, every tiling leaf is a pane id the workspace holds, every ratio is inside the wall's clamp, every refusal kind has an action, and the watch's stream is **not** in it (a stream is a race, not a fixture) |
 | `test/cells_test.dart` | the nine cases in `fixtures/control/tiling/`: the recorded cells, the recorded rectangles and every recorded release, compared with `==` because the arithmetic is the wall's `f32` — plus the shapes a preview draws and the gutters a hand grabs |
 | `test/client_test.dart` | the four rules as four named tests over a fake carrier, and the fifth: **a refusal is mapped from its `kind`, never from its sentence** (#198, #250). No socket, no network, no clock it does not control |
@@ -50,13 +55,15 @@ SDK and no Xcode (`docs/verification.md`).
 | `app/lib/controller.dart` | **the four states** (#257, #264): the projection the last read gave, the lift, the landing and the gutter — decided by `cells.dart` — and the one place this app puts a change on the wire. `offline` is a phone with nowhere to dial; `published` takes a watch's projection one `seq` after the one it holds and reads on a gap |
 | `app/lib/intents.dart` | the two verbs the canvas sends — `pane.drop` and `pane.resize` — and the **one** place their fields are written, so the hand and the list cannot produce different request lines |
 | `app/lib/shell.dart` | **the app's join** (#264): `ARCONS_RELAY` parsed, the `KeyStore` read on start, a `RelayCarrier` over `PhoneRelay`, the read and then the watch, and the publish stream the watch grants. No corpus: a phone with no relay is `not connected`, not a replay |
-| `app/lib/pairing.dart` | **the pairing screen** (#264): six digit boxes over one field, `Name this phone`, one `Pair`, and the three refusals' steps as `docs/mobile-ui.md` gives them. A burnt code is `no pairing is open` and takes that row's step |
+| `app/lib/pairing.dart` | **the pairing screen** (#264, #271): six digit boxes over one field, `Scan the wall's QR`, a Relay field, `Name this phone`, one `Pair`, and the three refusals' steps as `docs/mobile-ui.md` gives them. A scan fills the code and the relay together; a refused payload fills nothing and names its refusal; a denied camera leaves typing working. A burnt code is `no pairing is open` and takes that row's step |
+| `app/lib/scanner.dart` | **the camera seam** (#271): one `Scanner` method, `mobile_scanner` behind a full-screen route, and the two camera refusals in words. No test constructs the plugin, and `main` is the only place that names `CameraScanner` |
+| `app/lib/preferences.dart` | **the relay field's memory** (#271): `shared_preferences` behind a seam, because a relay URL is a setting and not a secret. The KeyStore stays the only home for the device key |
 | `app/lib/keystore.dart` | **the device key's home** (#265): `PlatformKeyStore implements KeyStore` over **one `MethodChannel`** — `key.read`, `key.remember`, `key.forget` — with a platform failure surfaced as `KeyStoreUnavailable`, a value that is not 64 lowercase hex read as "not paired", and the channel injectable so the contract is a `flutter test` |
-| `app/lib/main.dart` | the app: `PhoneApp`, the relay from `String.fromEnvironment('ARCONS_RELAY')`, the platform key store, and `runApp` |
+| `app/lib/main.dart` | the app: `PhoneApp`, the relay from `String.fromEnvironment('ARCONS_RELAY')`, the platform key store, the camera seam, the relay preference, and `runApp` |
 | `app/test/overview_test.dart` | the corpus's own projection, held to `cells.dart`'s rects, read out loud in the drawn order, and rendered as two goldens — `live` and `not connected` |
 | `app/test/drag_test.dart` | the drag against a fake carrier: one release is one intent, nothing is optimistic, the refusal table's four kinds, **the hand and the list produce the same request line**, the gutter's clamp, and a golden of a card mid-drag |
 | `app/test/states_test.dart` | **the four states as the app's** (#264): `connecting` with no diagram from a previous life, `live` silent, `not connected` dimmed under its age and sending nothing, `update required` one screen with the wall's words and one button — plus the watch's `seq` rule. Three goldens: `connecting`, `not connected`, `update required` |
-| `app/test/pairing_test.dart` | **the pairing screen** (#264): six boxes, the defaulted name, one Pair; the claim's code and name, the key's one write, and the overview after it; each of the three refusals and its step; the key never in a widget's text. Goldens: empty and with a burnt code |
+| `app/test/pairing_test.dart` | **the pairing screen** (#264, #271): six boxes, the relay, the defaulted name, Scan and one Pair; the claim's code and name, the key's one write, and the overview after it; a scan filling both fields and the wall's own payload; the precedence scan → field → compiled default; a refused payload that fills nothing and names its refusal; a denied camera that leaves typing working; each of the three wall refusals and its step; the key never in a widget's text. Goldens: empty, burnt code, payload refused and camera denied. **No test opens a camera** |
 | `app/test/shell_test.dart` | **the shell** (#264): no relay is a state, the app starts in `connecting`, asks for the watch only after the read, sends the screen's intents, dims on a dropped read, shows the update screen, draws a publish — and `lib/` reads no fixture |
 | `app/test/keystore_test.dart` | **the key's platform home** (#265), with the platform injected through `setMockMethodCallHandler`: read/remember/forget, one channel and three methods and no other traffic, a refusing channel as a refusal, a value that is not a key, the shell reading through the channel, the key in no `toString`/log line/widget text — and the Dart strings held to the Kotlin's and the Swift's |
 | `app/android/…/PlatformKeyStore.kt` | **the Android half** (#265): an AES-256 key in the AndroidKeyStore wrapping the secret, the wrapped blob in this app's private `SharedPreferences`, forgotten on a blob it cannot unwrap. Compiled by `phone-android`, **not runnable here** |
@@ -64,6 +71,9 @@ SDK and no Xcode (`docs/verification.md`).
 
 ## What is not here yet, and why
 
+- **The camera on a phone** (#271). `mobile_scanner` is compiled by `phone-android` and `phone-ios`, and the parser,
+  the fill-in and both refusal paths are `flutter test`; no test here opens a camera, and no machine here has scanned a
+  real wall's QR. That is a checklist for a human with a phone, not a claim of this suite.
 - **The platform store's behaviour** (#265). The Keychain and the Keystore are written and compile in CI; no test here
   can say a key is written, survives a restart, a reboot or an uninstall, or is refused after `pair.forget` on the wall.
   That is the checklist in #265's PR, run by a human with a phone, and it is the one claim in this package that a command

@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The pairing QR (#271). The camera is optional: typing the six digits is the path for a phone that denies
+         this permission or has no camera, so the app must still install and run without the hardware. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <application
         android:label="phone"
         android:name="${applicationName}"

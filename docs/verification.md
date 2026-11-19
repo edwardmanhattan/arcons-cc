@@ -47,16 +47,18 @@ command, which is why a change to those lines is decided there even when a local
 ## The phone's platform half is compiled by CI, and by nothing else
 
 Two jobs in `.github/workflows/ci.yml`, beside `phone`, compile the only code in this repository that no test here can
-run: the device key's two homes, written by hand because ADR-0008 decision 4 says so.
+run: the device key's two homes, written by hand because ADR-0008 decision 4 says so, and the camera plugin that the
+pairing QR needs (#271).
 
 | job | runner | what it proves |
 | --- | --- | --- |
-| `phone-android` | `ubuntu-latest` | `flutter build apk --debug` compiles `android/app/src/main/kotlin/…` — an AES key generated in the **AndroidKeyStore**, wrapping the secret whose blob is in the app's own `SharedPreferences` |
-| `phone-ios` | `macos-latest` | `flutter build ios --no-codesign --debug` compiles `ios/Runner/AppDelegate.swift` — the **Keychain** item through `SecItemAdd` / `SecItemCopyMatching` / `SecItemDelete`, with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` |
+| `phone-android` | `ubuntu-latest` | `flutter build apk --debug` compiles `android/app/src/main/kotlin/…` — an AES key generated in the **AndroidKeyStore**, wrapping the secret whose blob is in the app's own `SharedPreferences` — and links `mobile_scanner`'s CameraX + bundled ML Kit half |
+| `phone-ios` | `macos-latest` | `flutter build ios --no-codesign --debug` compiles `ios/Runner/AppDelegate.swift` — the **Keychain** item through `SecItemAdd` / `SecItemCopyMatching` / `SecItemDelete`, with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` — and links `mobile_scanner`'s AVFoundation/Vision half through the Podfile |
 
 **What they prove is narrow, and it is written down rather than assumed: the platform code compiles.** No command on any
-machine here says a key is written, that it survives a reboot, or that it is gone after an uninstall. That is a hand, a
-phone and the checklist in #265's PR body, and a green pair of jobs is not evidence in its place.
+machine here says a key is written, that it survives a reboot, or that it is gone after an uninstall — and none says a
+camera read a QR off a wall's glass. Those are a hand, a phone and the checklists in #265's and #271's PR bodies, and a
+green pair of jobs is not evidence in their place.
 
 **They are separate from the gate on purpose.** `scripts/verify.sh` is Rust: it needs no Java, no Android SDK and no
 Xcode, and it renders pixels. These two need those toolchains between them, so folding them into the gate would make the

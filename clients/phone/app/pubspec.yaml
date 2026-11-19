@@ -14,6 +14,11 @@ dependencies:
   arcons_phone:
     path: ../
   material_ui: ^1.11.1
+  # The pairing QR's camera and decoder (#271), behind `lib/scanner.dart`'s seam. BSD-3-Clause, and the only package
+  # that touches a camera: CameraX + the bundled ML Kit barcode model on Android, AVFoundation/Vision on iOS.
+  mobile_scanner: ^7.5.0
+  # The relay field's memory (#271): a URL is a setting, not a secret, so it is not in the KeyStore.
+  shared_preferences: ^2.5.6
 
 dev_dependencies:
   flutter_test:

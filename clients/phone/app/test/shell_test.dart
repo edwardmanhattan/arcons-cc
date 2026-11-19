@@ -12,10 +12,12 @@ import 'dart:io';
 
 import 'package:arcons_phone/wire.dart' show Projection, decodeAnswer, protocol;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'package:arcons_phone_app/controller.dart' show noRelayConfigured;
 import 'package:arcons_phone_app/main.dart' show PhoneApp;
 import 'package:arcons_phone_app/overview.dart';
+import 'package:arcons_phone_app/pairing.dart' show pairRelayKey;
 import 'package:arcons_phone_app/shell.dart' show parseRelay;
 
 import 'harness.dart';
@@ -101,6 +103,65 @@ void main() {
               'network, and the sentence names the field instead',
         );
       }
+    });
+  });
+
+  group('the relay field, before a key (#271)', () {
+    testWidgets('no key and no relay is still a pairing screen, with an empty field and a typed path', (tester) async {
+      await pumpApp(
+        tester,
+        PhoneApp(
+          relay: null,
+          keys: RecordingKeyStore(),
+          clock: () => now,
+          openRelay: (relay, keys) => throw StateError(
+            'the pairing screen dialled before a claim: no relay has been chosen yet',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Pair with a wall'),
+        findsOneWidget,
+        reason: 'a phone with no key and no compiled relay was refused a pairing screen: #271 gives it a field for the '
+            'address, and the typed six digits still have to reach a wall',
+      );
+      final field = tester.widget<TextField>(find.byKey(pairRelayKey));
+      expect(
+        field.controller!.text,
+        isEmpty,
+        reason: 'a build with no compiled relay did not start with an empty field',
+      );
+    });
+
+    testWidgets('a remembered relay is the field\'s value and the relay a paired phone dials', (tester) async {
+      final remembered = RecordingRelayPreferences('tcp://remembered.invalid:7000');
+      final fake = FakeRelay([first]);
+      Uri? dialled;
+      await pumpApp(
+        tester,
+        PhoneApp(
+          relay: null,
+          keys: RecordingKeyStore(testDeviceKey),
+          preferences: remembered,
+          clock: () => now,
+          openRelay: (relay, keys) {
+            dialled = relay;
+            fake.keys = keys;
+            return fake;
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        dialled,
+        Uri.parse('tcp://remembered.invalid:7000'),
+        reason: 'a paired phone ignored the relay the operator scanned or typed: the remembered value is the field\'s '
+            'value on the next run (#271)',
+      );
+      expect(find.byKey(canvasKey), findsOneWidget);
     });
   });
 
