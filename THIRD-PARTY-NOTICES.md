@@ -75,6 +75,7 @@ Pulled in through Rune's audio features (Ogg/WebM), not used by this app directl
 | `symphonia`, `symphonia-core`, `symphonia-codec-vorbis`, `symphonia-format-ogg`, `symphonia-format-mkv`, `symphonia-metadata`, `symphonia-utils-xiph` 0.5.5 | MPL-2.0 |
 | `opuscule` 0.2.2 | MPL-2.0 |
 | `spellbook` 0.4.2 | MPL-2.0 |
+| `downloader` 0.2.8 | LGPL-3.0-or-later |
 
 MPL-2.0 is file-level copyleft: these crates stay under MPL-2.0, unmodified. If a future build does
 not need them, dropping Rune's `ogg-audio` feature removes them from the lockfile — and this table
@@ -86,6 +87,13 @@ so that a lockfile diff does not have to be read to find it.
 
 `r-efi` is dual-licensed `MIT OR Apache-2.0 OR LGPL-2.1-or-later`; this project takes it under
 MIT/Apache-2.0 and is not subject to the LGPL.
+
+`downloader` is a **build-time** dependency of the vendored map engine: `maplibre_native`'s build script
+uses it to fetch the precompiled core, and none of it is linked into either binary. It entered the
+lockfile when #276 made this repository a workspace, because cargo makes a path dependency under the
+workspace root a workspace member, and a member's build graph is resolved even when the `map` feature is
+off. It is named rather than hidden: it is in the lockfile, so it is in the audit.
+
 
 Two transitive crates arrived with the Rune rev bump of #159 and are neither copyleft nor used by this app
 directly: `icu_normalizer` (Unicode licence; `rune-kit`'s search folding) and `objc2-core-text` (MIT/Apache-2.0;

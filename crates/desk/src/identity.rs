@@ -21,10 +21,10 @@ pub const FILE: &str = "desk-device-id";
 
 /// The directory both binaries keep their configuration in, beside the wall's.
 pub fn config_dir() -> Option<PathBuf> {
-    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-        if !xdg.is_empty() {
-            return Some(PathBuf::from(xdg).join("arcons-cc"));
-        }
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME")
+        && !xdg.is_empty()
+    {
+        return Some(PathBuf::from(xdg).join("arcons-cc"));
     }
     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config").join("arcons-cc"))
 }

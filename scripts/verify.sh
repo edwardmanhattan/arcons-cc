@@ -59,8 +59,8 @@ have() { [ -x "$1" ]; }
 # ---------------------------------------------------------------------------
 if have_crate; then
   step "cargo fmt --check"           cargo fmt --all -- --check
-  step "cargo clippy -D warnings"    cargo clippy --workspace --all-targets -- -D warnings
-  step "cargo test"                  cargo test --workspace --all-targets
+  step "cargo clippy -D warnings"    cargo clippy --all-targets -- -D warnings
+  step "cargo test"                  cargo test --all-targets
   # **The gate does not build the map feature**, and cannot: that is MapLibre's C++ and the gate may need
   # no compiler, no network and no GPU. The cost of the hole is real — `#[cfg(feature = "map")]` code can rot
   # without a red line here (#101: a rename of a `State` field left one `drag_pane` assigning the old one).
