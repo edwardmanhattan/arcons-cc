@@ -111,4 +111,6 @@ fixtures/scenes/ the 40-vessel feed the scenes load; golden/ the captures they m
 docs/            verification contract, invariants, ADRs, control.md (the control plane), mobile-remote.md (the phone), mobile-ui.md (its screen), runbook.md
 clients/phone/   the phone: a Dart package the corpus holds to the protocol (ADR-0008, #248). `dart test`, not the gate
 tools/dev-relay/ a development relay: the phone's path with real sockets on both ends (#268). Not the contract
+crates/desk/     the desk: this installation's device id and the time field that says live or backfill
+                 (#275, ADR-0009). `cargo run` is the wall; `cargo run -p desk` is the desk
 ```

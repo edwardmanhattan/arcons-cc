@@ -59,8 +59,8 @@ have() { [ -x "$1" ]; }
 # ---------------------------------------------------------------------------
 if have_crate; then
   step "cargo fmt --check"           cargo fmt --all -- --check
-  step "cargo clippy -D warnings"    cargo clippy --all-targets -- -D warnings
-  step "cargo test"                  cargo test --all-targets
+  step "cargo clippy -D warnings"    cargo clippy --workspace --all-targets -- -D warnings
+  step "cargo test"                  cargo test --workspace --all-targets
   # **The gate does not build the map feature**, and cannot: that is MapLibre's C++ and the gate may need
   # no compiler, no network and no GPU. The cost of the hole is real — `#[cfg(feature = "map")]` code can rot
   # without a red line here (#101: a rename of a `State` field left one `drag_pane` assigning the old one).
@@ -73,8 +73,9 @@ if have_crate; then
   # tolerates warnings, and a warning in code nothing compiles is rot that has already started. CI's `map`
   # jobs run the same command on the two platforms that have a precompiled core.
   if [ "${VERIFY_WITH_MAP:-0}" = "1" ]; then
+    # `-p arcons-cc`, because `--features map` names a feature of the wall's package, not the workspace's.
     step "map feature, clippy -D warnings" \
-      cargo clippy --features map --all-targets -- -D warnings
+      cargo clippy -p arcons-cc --features map --all-targets -- -D warnings
   else
     skip "map feature compiles" "VERIFY_WITH_MAP=1 to check it here; CI's map jobs do"
   fi
@@ -104,7 +105,7 @@ elif have scripts/capture.sh; then
     local ok=0
     # The captures run the binary, not a test harness: build it here so `capture.sh` in CI and on a
     # laptop runs the same file.
-    cargo build -q || return 1
+    cargo build -q -p arcons-cc || return 1
     # **The scenes come from the binary, not from a list in this script.** `photo` was added in #41 and
     # never rendered by the gate, because this line named four scenes by hand — and it spent ten days
     # drawing the NATO symbol over a golden that had been regenerated blind (`#54`). A scene that exists is
@@ -135,7 +136,7 @@ fi
 if [ "$FAST" -eq 1 ]; then
   skip "budgets" "--fast"
 elif have_crate; then
-  step "budgets (frame CPU, memory)" cargo test --all-targets -- --include-ignored --nocapture budget
+  step "budgets (frame CPU, memory)" cargo test -p arcons-cc --all-targets -- --include-ignored --nocapture budget
 else
   skip "budgets" "no crate yet"
 fi
