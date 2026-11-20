@@ -82,6 +82,30 @@ impl Month {
         self.month
     }
 
+    /// The month's name in words, for the calendar's title.
+    ///
+    /// English, like every other label on this form, and a table rather than a formatting crate:
+    /// the names are a fixed vocabulary, not arithmetic, and a locale arrives with a locale.
+    pub fn name(&self) -> &'static str {
+        const NAMES: [&str; 12] = [
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ];
+        // `new` is the only constructor and it refuses anything outside 1–12, so the subtraction
+        // cannot leave the table.
+        NAMES[self.month.saturating_sub(1) as usize % 12]
+    }
+
     /// The month's days as rows of seven, Monday first. `None` is a cell before the first or after the
     /// last day of the month, and there is never a whole row of them.
     ///

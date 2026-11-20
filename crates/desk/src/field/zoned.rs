@@ -100,3 +100,39 @@ fn civil_as_utc_ms(civil: CivilTime) -> i64 {
         + i64::from(civil.minute) * 60_000
         + i64::from(civil.second) * 1_000
 }
+
+/// The instant a civil time and a known offset name: `civil - offset`.
+///
+/// A paste that carried `+05:30` already says which offset it meant, so nothing has to be resolved
+/// — but the conversion is still arithmetic, and it belongs beside [`resolve`] rather than in a
+/// screen. `civil` is assumed committed, like [`resolve`]'s argument.
+pub fn epoch_ms_of(civil: CivilTime, offset_ms: i32) -> i64 {
+    civil_as_utc_ms(civil) - i64::from(offset_ms)
+}
+
+/// The civil time an instant reads as at `offset_ms` — [`epoch_ms_of`]'s inverse.
+///
+/// This is what turns a pasted `14:03:22+05:30` into the fields the field shows when the field's
+/// zone is WIB, and what the readout beside the field would show for any other offset.
+pub fn at_offset(epoch_ms: i64, offset_ms: i32) -> CivilTime {
+    utc_civil(epoch_ms + i64::from(offset_ms))
+}
+
+/// The UTC fields of an instant.
+///
+/// Not a zone lookup: no offset is applied, and the result is the reading a UTC clock would show.
+/// It is here, not in a view, because the derived readout `= 07:03:22Z` is the inverse of
+/// [`epoch_ms_of`] and a screen that divided milliseconds itself would be a second calendar.
+pub fn utc_civil(epoch_ms: i64) -> CivilTime {
+    let days = epoch_ms.div_euclid(86_400_000);
+    let in_day = epoch_ms.rem_euclid(86_400_000);
+    let (year, month, day) = civil::civil_from_days(days);
+    CivilTime {
+        year,
+        month,
+        day,
+        hour: (in_day / HOUR_MS) as u32,
+        minute: (in_day % HOUR_MS / 60_000) as u32,
+        second: (in_day % 60_000 / 1_000) as u32,
+    }
+}

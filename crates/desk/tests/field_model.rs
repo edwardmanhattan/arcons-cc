@@ -9,7 +9,7 @@ use desk::field::calendar::Month;
 use desk::field::civil::{civil_from_days, days_from_civil, days_in_month, is_leap, weekday};
 use desk::field::paste::{PasteError, parse};
 use desk::field::segment::{Field, FieldError, Segments};
-use desk::field::zoned::{Resolution, resolve};
+use desk::field::zoned::{Resolution, at_offset, epoch_ms_of, resolve, utc_civil};
 
 fn at(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> CivilTime {
     CivilTime {
@@ -550,6 +550,46 @@ fn a_partly_typed_segment_is_not_read_as_its_digits() {
     assert_eq!(segments.value(Field::Month), None);
 }
 
+#[test]
+fn a_segment_can_be_chosen_without_walking_to_it() {
+    let mut segments = Segments::new(sample());
+    segments.select(Field::Second);
+    assert_eq!(segments.active(), Field::Second);
+    segments.select(Field::Year);
+    segments.step(1);
+    assert_eq!(segments.value(Field::Year), Some(2027));
+}
+
+#[test]
+fn a_segment_can_be_given_a_whole_value_and_reads_zero_padded() {
+    let mut segments = Segments::new(sample());
+    segments.set(Field::Day, 5);
+    segments.set(Field::Month, 3);
+    segments.set(Field::Year, 2027);
+    assert_eq!(segments.date_text(), "05 / 03 / 2027");
+    assert_eq!(
+        segments.segment_text(Field::Day),
+        "05",
+        "a segment is one slot per digit, and the display draws it that way"
+    );
+    assert_eq!(segments.commit().expect("valid"), at(2027, 3, 5, 14, 3, 22));
+}
+
+#[test]
+fn an_empty_segment_reads_as_placeholders_not_zeroes() {
+    let mut segments = Segments::new(sample());
+    segments.clear();
+    assert_eq!(segments.segment_text(Field::Year), "----");
+    assert_eq!(segments.segment_text(Field::Minute), "--");
+}
+
+#[test]
+fn a_month_is_named_in_words() {
+    assert_eq!(Month::new(2026, 11).expect("November").name(), "November");
+    assert_eq!(Month::new(2026, 1).expect("January").name(), "January");
+    assert_eq!(Month::new(2026, 12).expect("December").name(), "December");
+}
+
 // ---------------------------------------------------------------------------
 // paste: the four forms, and nothing else
 // ---------------------------------------------------------------------------
@@ -822,4 +862,32 @@ fn the_answer_does_not_depend_on_a_clock_being_read() {
     let before = only(resolve(at(2026, 6, 1, 12, 0, 0), synthetic));
     let after = only(resolve(at(2026, 6, 1, 12, 0, 0), synthetic));
     assert_eq!(before, after);
+}
+
+#[test]
+fn an_instant_reads_as_its_utc_fields() {
+    let recorded = at(2026, 11, 20, 14, 3, 22);
+    let instant = epoch_ms_of(recorded, 7 * 3_600_000);
+    assert_eq!(utc_civil(instant), at(2026, 11, 20, 7, 3, 22));
+    assert_eq!(
+        utc_civil(-1),
+        at(1969, 12, 31, 23, 59, 59),
+        "an instant before the epoch must floor, not truncate toward zero"
+    );
+}
+
+#[test]
+fn an_offset_moves_a_pasted_time_between_zones() {
+    let in_india = at(2026, 11, 20, 14, 3, 22);
+    let instant = epoch_ms_of(in_india, 5 * 3_600_000 + 1_800_000);
+    assert_eq!(
+        at_offset(instant, 5 * 3_600_000 + 1_800_000),
+        in_india,
+        "a time read at its own offset comes back unchanged"
+    );
+    assert_eq!(
+        at_offset(instant, 7 * 3_600_000),
+        at(2026, 11, 20, 15, 33, 22),
+        "14:03:22 at +05:30 is 15:33:22 on the WIB clock the field shows"
+    );
 }

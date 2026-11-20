@@ -195,6 +195,27 @@ impl Segments {
         self.active
     }
 
+    /// Put the cursor on `field` without walking through the segments between.
+    ///
+    /// A press on a segment and a calendar that sets the day both need this; stepping with
+    /// [`Segments::right`] would work only by accident of the display order.
+    pub fn select(&mut self, field: Field) {
+        self.active = field;
+    }
+
+    /// Put `value` into `field` as a complete entry, for a caller that already knows the number —
+    /// the calendar's day press is the one today.
+    ///
+    /// The value is truncated to the segment's digit width rather than refused: a calendar can
+    /// only produce a day the month has, and a caller with a larger number is a bug the commit's
+    /// range check will name. Treating it as a range error here would be a second validator.
+    pub fn set(&mut self, field: Field, value: u32) {
+        let index = field.index();
+        let width = field.width();
+        self.values[index] = value % 10u32.pow(width);
+        self.digits[index] = width as u8;
+    }
+
     /// The value a segment currently shows, or `None` when no digit has been typed into it.
     ///
     /// `None` is not zero: an empty day is a day the operator has not supplied, and treating it as the
@@ -305,6 +326,14 @@ impl Segments {
     /// Both lines on one line, as the field reads left to right: `dd / mm / yyyy hh:mm:ss`.
     pub fn text(&self) -> String {
         format!("{} {}", self.date_text(), self.time_text())
+    }
+
+    /// One segment as the field draws it: its digits, zero-padded, or one `-` per empty slot.
+    ///
+    /// The display splits its own lines so a segment can be given a caret, and it must not need to
+    /// know how an empty slot reads — that is the field's decision, made once here.
+    pub fn segment_text(&self, field: Field) -> String {
+        self.render(field)
     }
 
     /// The value, if the six segments name a real date and time.

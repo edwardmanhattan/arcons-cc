@@ -21,6 +21,13 @@ use rune::tok::TextStyle;
 /// The default window: 1280×720 is a capture the tests can reason about, and it fits a 1080p wall.
 pub const WINDOW_SIZE: (f32, f32) = (1280.0, 720.0);
 
+/// **The desk's window** (#276): the wireframe's right-hand panel, at the size the drawing names.
+///
+/// It lives here because this file is the only one allowed to name a size — including the desk's.
+/// The desk reads the wall's tokens through `arcons-cc` rather than keeping a palette of its own
+/// (ADR-0009, decision 5), so a second application cannot drift into a second look.
+pub const DESK_WINDOW: (f32, f32) = (1440.0, 900.0);
+
 /// Below this the picture stops being readable at wall distance, so the window refuses to shrink.
 pub const MIN_WINDOW: (f32, f32) = (640.0, 360.0);
 
