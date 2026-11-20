@@ -9,6 +9,7 @@
 pub mod batch;
 pub mod field;
 pub mod identity;
+pub mod picker;
 pub mod scene;
 pub mod time;
 pub mod ui;
