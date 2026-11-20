@@ -4,7 +4,8 @@
 //! month:
 //!
 //! 1. **Rune is pinned to a rev, and ADR-0001 quotes the same one.** A bump is a deliberate commit,
-//!    not a sentence that drifts.
+//!    not a sentence that drifts — and every crate the bump vendors has a reason in `vendor/README.md`
+//!    and a sentence in the ADR (#247).
 //! 2. **The refusal codes in `realtime-protocol.md` §7 equal the variants in `live::Refusal`.** A
 //!    new code upstream is a red build here, before it can become a silent default (`INV-07`).
 //! 3. **The map seed path ADR-0001 names exists on disk.** A path in a document that nothing
@@ -68,6 +69,63 @@ fn rune_is_pinned_by_rev_and_the_adr_quotes_it() {
         "docs/adr/0001-rune-and-maplibre.md does not quote the Rune rev pinned in Cargo.toml ({first}).\n  \
          A rev bump is one commit that changes both, and says which revs and why — otherwise the ADR is a sentence that ages."
     );
+}
+
+/// Every crate the root manifest patches to a `vendor/` path: our copies, and nothing else.
+fn vendored_crates(manifest: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_patch = false;
+    for line in manifest.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_patch = trimmed == "[patch.crates-io]";
+            continue;
+        }
+        if !in_patch || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((name, rest)) = trimmed.split_once('=') else {
+            continue;
+        };
+        if rest.contains("path = \"vendor/") {
+            out.push(name.trim().to_string());
+        }
+    }
+    out
+}
+
+/// **A vendored copy is a debt with a reason attached, and the reason is written down** (#247).
+///
+/// `[patch.crates-io]` decides what the wall builds; `vendor/README.md` is the only place that says *what upstream does
+/// wrong, what we changed, and when to drop it*; ADR-0001 is where a rev bump argues the set. A copy that appears in
+/// one and not the others is a dependency nobody can retire: #185 carried two of the pin's four patches for a hundred
+/// commits because the list was in a script, and `scripts/vendor-patches.sh` now derives it from the rev. This is the
+/// document half of that guard.
+#[test]
+fn every_vendored_crate_has_a_reason_and_the_adr_names_it() {
+    let manifest = read("Cargo.toml");
+    let vendored = vendored_crates(&manifest);
+    assert!(
+        !vendored.is_empty(),
+        "Cargo.toml patches no crate to a vendor/ path: `cargo metadata` would fail, or the parser stopped matching the manifest's shape"
+    );
+
+    let readme = read("vendor/README.md");
+    let adr = read("docs/adr/0001-rune-and-maplibre.md");
+    for name in &vendored {
+        assert!(
+            readme.contains(&format!("## `{name}`")),
+            "vendor/README.md has no `## `{name}`` section.\n  \
+             {name} is in `[patch.crates-io]`, so it is a copy we build against; the section is what says what upstream's\n  \
+             patch does, why we carry it, what it costs and when to drop it — the four things that retire it."
+        );
+        assert!(
+            adr.contains(&format!("`{name}`")),
+            "docs/adr/0001-rune-and-maplibre.md never names `{name}`, which `[patch.crates-io]` vendors.\n  \
+             A rev bump argues the vendored set in the ADR (#247); a crate that arrives without a sentence is a copy\n  \
+             nobody agreed to carry."
+        );
+    }
 }
 
 /// **The wall's own exit deadline is shorter than the unit's `TimeoutStopSec`** (#174).
