@@ -532,3 +532,112 @@ Goldens were regenerated with `scripts/capture.sh --update-goldens` and read bef
 **What would take the pin further.** `parley_engine`'s `line-dictionaries` being published (then the remaining 80
 commits to `dev` are a normal bump again), or Rune gating the feature. Neither is ours to fix. What is ours is the
 cost of the next bump: one `scripts/vendor-winit.sh` run and one review of the pictures.
+
+### Taken: `4af66a0` → `d0eaf33` — 197 commits, and the vendored set becomes the rev's (#247)
+
+#247 was filed against `f54cbcfa`, which was `dev` when it was written. `dev` had moved by the time this was taken:
+`git ls-remote … refs/heads/dev` answered `d0eaf332c9c1ff8f3ab599be8e57012a72921c9a`, **35 commits past the issue's
+rev** and 197 past the pin (2026-11-13 → 2026-11-19). Both `rune` and `rune-kit` move to it. The issue's `f54cbcfa` was
+already superseded before the branch was cut, which is the whole reason the pin is a rev and not a branch: the rev a
+review was written against is not the rev a bump takes, so a bump records the one it took.
+
+**The rev resolves, and the vendored `parley_engine` is why.** #939 held the pin because Rune's `#861` asks for
+`parley_engine`'s `line-dictionaries`, a feature that exists in no published version. Upstream has since pinned
+`parley = 0.12` / `parley_engine = 0.12` with `default-features = false` *and* patched `parley_engine` from its own vendor
+tree — so a consumer needs the same copy. Removing our `[patch.crates-io]` line for it fails exactly as it did at #939,
+now naming the extracted crate:
+
+```
+error: failed to select a version for `parley_engine`.
+    ... required by package `rune-text v0.0.1 (…?rev=d0eaf332…#d0eaf332)`
+package `rune-text` depends on `parley_engine` with feature `line-dictionaries`
+but `parley_engine` does not have that feature.
+help: available features: bytemuck, complex-scripts, default, libm, std
+```
+
+The feature is asked for under `cfg(target_os = "windows")` and the resolver still sees it on Linux, so this is not a
+Windows-only hazard: **no copy, no build anywhere**. The section above guessed the copy would make the rev resolvable;
+it is the thing that does.
+
+**The vendored set is now the rev's list, six crates, and it was four at the old rev.** `4af66a06`'s manifest already
+listed `parley_engine` and `accesskit_windows` beside `winit` and `wgpu-hal`, and #185 carried two. Neither missing copy
+showed: `parley_engine` reached a Linux build only as `parley`'s own dependency, from crates.io and unpatched — enough
+while nothing asked it for `line-dictionaries` — and `accesskit_windows` is in no Linux or macOS graph at all. So the pin
+stood with half its patches uncarried and every gate green. `d0eaf332` adds `sctk-adwaita` (`#1188`, Wayland's rounded
+bottom corners) and `accesskit_macos` (`#975`, headings in VoiceOver). The lesson is the list's *source*, so
+`scripts/vendor-patches.sh` now reads `[patch.crates-io]` from the rev's manifest: it copies what the rev patches, fails
+with the lines to add when our manifest is short, and fails with the three things to delete when the rev has dropped one.
+
+| crate | at the pin | at `d0eaf33` |
+| --- | --- | --- |
+| `winit` | 7 files, 313 lines | 16 files, 617 lines |
+| `wgpu-hal` | 4 files, 163 lines | 8 files, 440 lines |
+| `parley_engine` | in the rev's list, **not** carried | carried, 10 files, 708 lines |
+| `accesskit_windows` | in the rev's list, **not** carried | carried, 6 files, 1,785 lines |
+| `sctk-adwaita` | not in the rev's list | carried, 4 files, 917 lines |
+| `accesskit_macos` | not in the rev's list | carried, 6 files, 1,176 lines |
+
+Beside the rev's six, `[patch.crates-io]` carries one crate for the wall's own reason — `tokio-centrifuge`, patched so
+Minos reads the wall's token from the connect frame's `data` (#4). It moves with the socket SDK, never with the pin, and
+`vendor/README.md` says when it goes.
+
+What the gate compiles here: `winit`, `wgpu-hal`, `sctk-adwaita` and `parley_engine` are all in a Linux build.
+`sctk-adwaita` is now **load-bearing on Linux** — dropping the copy fails the build at our own `winit`, which asks for it:
+
+```
+error[E0599]: no method named `content_corner_radius` found for reference `&AdwaitaFrame<WinitState>`
+note: `WindowExtWayland` defines an item `content_corner_radius`, perhaps you need to implement it
+error: could not compile `winit` (lib) due to 1 previous error
+```
+
+`accesskit_windows` and `accesskit_macos` are not in any Linux graph; `check (windows-latest)` and `check (macos-latest)`
+are the only places they are compiled, which is why they are the two crates a bump can leave behind without a red gate.
+
+**What moves the wall's pixels.** The app-facing API did not change: `El`, `text`, `icon`, `col`/`row`/`spacer`,
+`AppSpec`, `Runtime`, `Cx`, `Tx`, the pointer/wheel/drag events, `shape::Shape`, `tok::TextStyle`, `Color`/`oklch` all
+compile and behave as they did, so `src/` is untouched by this bump and the new ways upstream added (`Tx::prepare_text`,
+`El::press_on_down`, `El::wheel_scrolls`, `Latest`, `memo`) are not adopted here — they are not renames of anything the
+wall does. What moved is under the API:
+
+- `#935` — **text at rest lays out from its box's exact place**, and a leaf's content draws from its exact box rounded
+  once on the paint containment's grid, so pens, baselines and glyph masks round where Chromium's do. This is the change
+  the captures are: every glyph, in every scene, at the same place.
+- `#1147` — text in a scrolling list moves in whole pixels with its box, so a scroll offset or a growth window on a
+  fraction no longer leaves text drifting against its row.
+- `#963` — text under `El::offset` moves with its box again (the tree pane's camera pan draws through it), and
+  side-by-side underlines meet without overlapping a pixel.
+- `#948` — a text laid out again in its own box fits, so a shrink-to-fit label (a chip sized to its text) no longer wraps
+  its last word at a thousandth of a pixel. It is named because it *could* have changed layout; the captures say it did
+  not.
+- `#1116` — a colour-only span resolves its ink at glyph emission, before mask dilation and gamma, instead of through a
+  separate shaping run.
+- `#1035` (`rune_kit::Markdown`'s outside list discs in device pixels), `#943` and `#1050` (glyph atlas pages, grayscale
+  edge blending at byte precision — GPU paths, not the headless CPU painter), and `#1188` (a Wayland window's rounded
+  corners — the frame, not the pictures) are named for the next reader, not because they moved a capture.
+
+The frame order was refactored (#1236: one `frame::host_step` for the window, overlay, layer, headless and virtual
+desktop hosts) and it is a refactor: no frame the wall draws changed phase, no handler ran in a new order, and nothing in
+`src/ui/` had to change. The codebase was also split into `rune-core`, `rune-text`, `rune-gpu`, `rune-media`,
+`rune-image`, `rune-spell` and `rune-edit` (`#1189`–`#1209`), which changed the lockfile and not one line of ours.
+
+**What the review found: all 51 scenes moved, by sub-pixel rounding, and not one of them by layout.** Differing pixels
+(a channel past 2, which is the comparison's own tolerance) run 1,063–11,767 a scene, 134,845 across the set; the largest
+channel delta is 23–207. Every scene's best alignment against its golden is **no shift at all** — all nine one-pixel
+translations were tried and every one of them matched worse — so nothing reflowed, no chip widened, no line rewrapped.
+In one marker label the ink's centroid sits 0.39 device px higher and 0.16 px left of the old one, with the ink's extent
+and total unchanged; over the newsroom's eleven text lines the ink in each 60-row band matches within 0.09%, and the
+list's ink as a whole within 0.02%. The workspace chip's glyph moves a fifth of a pixel the same way, which is the same
+rounding reaching a leaf's content rather than text. Read at 4–8×, the same letters on the same pixels with edges one
+step brighter or darker.
+
+Goldens were regenerated with `scripts/capture.sh --update-goldens` and read before they were taken, as
+`docs/verification.md` requires; `scripts/assert.sh` answers every structural and colour question on the new captures
+before that.
+
+**What could not be run.** `VERIFY_WITH_MAP=1` needs a C++ toolchain this machine does not have, so the map feature is
+compiled by CI's `map (macos-latest)` and `map (windows-latest)` jobs alone; `map (windows-latest)` is red for the parked
+reason in #228 and that red is expected, not this bump's.
+
+**What would take the pin further.** `parley_engine` publishing `line-dictionaries` would let the wall carry one fewer
+copy; until then, a bump is `scripts/vendor-patches.sh` — which now copies whatever the rev patches — one reading of the
+picture diff, and a review of the goldens that moved.

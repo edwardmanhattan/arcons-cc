@@ -12,9 +12,13 @@ from this file, or when a copyleft crate appears in the lockfile unnamed.
 
 | component | licence | what it is |
 | --- | --- | --- |
-| **Rune** (`rune`, `rune-kit`) | MIT, © 2026 Anomaly | The UI framework. <https://github.com/anomalyco/rune>, pinned to rev `4af66a06b554ba6a489e971eb88b03af1161f448`. Vendored before release; the full licence text then lives at `vendor/rune/LICENSE`. |
+| **Rune** (`rune`, `rune-kit`, and the crates it is built from: `rune-core`, `rune-text`, `rune-edit`, `rune-gpu`, `rune-image`, `rune-media`, `rune-spell`) | MIT, © 2026 Anomaly | The UI framework. <https://github.com/anomalyco/rune>, pinned to rev `d0eaf332c9c1ff8f3ab599be8e57012a72921c9a`. Vendored before release; the full licence text then lives at `vendor/rune/LICENSE`. The seven crate names arrived with the `#247` rev bump: Rune's sources are split into them, all still MIT and all still part of Rune. |
 | **winit** 0.30.13 (vendored) | Apache-2.0 OR MIT | Window, input and the event loop. Not the wall's dependency: it is Rune's, copied so Rune's macOS input-method path compiles — `vendor/README.md`. Licence text at `vendor/winit/LICENSE`. |
 | **wgpu-hal** 30.0.1 (vendored) | Apache-2.0 OR MIT | The GPU backend under `wgpu`. Not the wall's dependency either: Rune's DX12 partial presents live in its patched copy, and Rune does not compile on Windows without it — `vendor/README.md`. |
+| **sctk-adwaita** 0.10.1 (vendored) | MIT | Wayland's adwaita client-side window frame. Rune's copy rounds a decorated window's bottom corners under it, and Rune does not compile on Linux without the additions — `vendor/README.md`. |
+| **parley_engine** 0.12.0 (vendored) | Apache-2.0 OR MIT | The shaping engine under `parley`, which shapes the wall's text. Rune's copy carries `line-dictionaries` (which exists in no published version) and two shaping fixes; the pin is only resolvable because the wall patches it — `vendor/README.md`. |
+| **accesskit_windows** 0.35.2 (vendored) | MIT OR Apache-2.0 | Windows' UI Automation adapter. Rune's copy reports headings and landmarks; Windows only — `vendor/README.md`. |
+| **accesskit_macos** 0.27.2 (vendored) | MIT OR Apache-2.0 | macOS' NSAccessibility adapter. Rune's copy reports headings VoiceOver can find; macOS only — `vendor/README.md`. |
 | **MapLibre Native** (`maplibre_native` 0.9.3, vendored) | BSD-2-Clause | The map engine, vendored for two checkout-cache fixes — see `vendor/README.md`. <https://github.com/maplibre/maplibre-native>. Behind the `map` feature, which the gate does not enable. |
 | **Inter**, **IBM Plex Mono** | SIL Open Font License 1.1 | Typefaces bundled with Rune. |
 | **milsymbol** (`spatialillusions/milsymbol`) | MIT — © 2017 Mans Beckman | NATO/APP-6 icon geometry, pinned by the sister project at `f5134380…` v3.0.5. **Not linked or vendored yet**: `docs/research/sheets/wall-symbol-icons.svg` is derived from it (#33), and lifting the module needs this row to stay and the licence text to travel with the copy. |
@@ -87,3 +91,10 @@ Two transitive crates arrived with the Rune rev bump of #159 and are neither cop
 directly: `icu_normalizer` (Unicode licence; `rune-kit`'s search folding) and `objc2-core-text` (MIT/Apache-2.0;
 CoreText's fallback fonts, Apple-only, so it is in the lockfile and never in a Linux build). They are named so
 that the next auditor does not have to read a lockfile diff to find them.
+
+Four more arrived with the Rune rev bump of #247, none copyleft and none used by this app directly: `stacker`
+(MIT OR Apache-2.0) and its `psm` (MIT OR Apache-2.0), which `rune-taffy` uses to run its layout recursion on a
+larger stack, and `psm`'s build-time `ar_archive_writer` (Apache-2.0 WITH LLVM-exception) and `object`
+(Apache-2.0 OR MIT). The
+same bump **removed** `zbus` 6, `zbus_macros` 6, `zbus_utils` and `zruntime`: Rune's Linux path moved to `zbus` 5,
+which was already in the lockfile.
