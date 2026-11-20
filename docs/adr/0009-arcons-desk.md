@@ -75,9 +75,15 @@ row independently removable. So:
 - the tray is the batch: one card per vessel, its time, its regime, and a way to drop it;
 - a send is a loop. Per-vessel answers are the result, and there is no global "sent" that is true of nothing.
 
-The desk sends its own `device_id`: a stable id for the workstation, stored beside its credential. The field means
-"the handset" in the contract; a desk telling Minos which workstation it is is the honest reading until Minos says
-otherwise (see the open questions).
+`device_id` is a **UUIDv4 the desk mints for itself on first run**, stored beside its credential, and kept for the
+life of that installation. It is not derived from the hostname, the MAC address or the login name: a value computed
+from the machine would name it to Minos, and the rule that no host or username leaves this process (`INV-08`) is not
+kept by a field that merely looks like an identifier. Sixteen bytes from the OS, the version and variant bits set,
+written once at mode 0600, and the same id on every request from that workstation.
+
+The field means "the handset" in the contract; a desk reporting which workstation said so is the honest reading.
+Deleting the file or reinstalling mints a new id, which is the right behaviour — it is an installation identity, not a
+licence, and two desks with the same id would make the audit trail lie.
 
 The batch is a **draft, not a queue**. It survives a restart so a mis-click does not lose ten minutes of typing; it
 is never sent with the time it had when it was drafted (see decision 3).
@@ -187,6 +193,9 @@ becomes its value and stops being local-only.
 
 ## Rejected
 
+- **A `device_id` derived from the hostname, the MAC address or the account name.** It would be a stable id with a
+  free side effect: telling Minos which machine, and under whose login, reported a fix. The version-4 UUID says
+  "this installation" and nothing else.
 - **A web app, which the UI SDK would suit.** It would be a second rendering stack, a second credential store, no
   offline map, and a second definition of "the picture" beside the wall's.
 - **A second repository.** See decision 1.
@@ -227,14 +236,12 @@ becomes its value and stops being local-only.
 
 ## Open questions for Minos (blocked, not guessed)
 
-1. **`device_id` for a non-handset client.** Is a workstation id acceptable, or does the field become optional and
-   typed?
-2. **An idempotency key, and a `source` field.** One so a retry is not two fixes; one so a desk report is
+1. **An idempotency key, and a `source` field.** One so a retry is not two fixes; one so a desk report is
    distinguishable from a beacon in the audit trail. Without the second, the audit cannot answer the question the
    whole app exists to make answerable — who said this, and how did they know — and decision 6's local note is the
    stopgap.
-3. **A future `recorded_at` beyond +60 s.** The contract says it is treated as live and re-stamped; decision 3's last
+2. **A future `recorded_at` beyond +60 s.** The contract says it is treated as live and re-stamped; decision 3's last
    row depends on that being the rule rather than an accident of the implementation.
-4. **The intended path for a shore account's `403`.** The desk treats it as a late, per-vessel verdict because no
+3. **The intended path for a shore account's `403`.** The desk treats it as a late, per-vessel verdict because no
    reportable-set read exists. If a widened `/live-feed/me` or a `read`-style policy is planned, that changes what
    the picker can promise; until then the desk does not guess.
