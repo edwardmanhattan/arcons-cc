@@ -5,6 +5,7 @@
 - Ticket: epic [#275](https://github.com/edwardmanhattan/arcons-cc/issues/275), first ticket
   [#276](https://github.com/edwardmanhattan/arcons-cc/issues/276)
 - Context: ADR-0002 (the Minos client), `docs/spec/minos-api.yaml`, `docs/minos-backend-postman.json`
+- Wireframe: `~/Documents/Arcons Desk — wireframe.tldraw` (outside the tree until the screens settle)
 
 ## Context
 
@@ -21,16 +22,19 @@ the ship becomes the author of a fact it did not observe.
 standing picture, lets the operator place what the source said, and posts the fixes. The name is the room, not the
 role: in `CONTEXT.md` "operator" remains the human at the wall, and the code says `desk`.
 
-Three facts from the Minos contract shape it, and none of them is the payload's shape:
+Four facts from the Minos contract shape it, and none of them is the payload's shape:
 
 1. **One vessel per request.** `id_unit` is top-level, up to 60 fixes, all of one vessel. Sending five vessels is
-   five requests.
+   five requests. The desk never reaches the 60: it records **one** fix per vessel (decision 2).
 2. **`recorded_at` decides the report's kind.** Within ±60 s of the server's clock the fix is *live* and
    re-stamped with server time; 60 s to 30 days old it is *backfill* and its own time is kept; older than 30 days
    it is refused, permanently, and counted; more than 60 s in the future it is re-stamped live and logged as a
    warning.
-3. **A 200 is an answer.** `{accepted, rejected}` — a batch in which every fix was refused is still a 200. `403`
+3. **A 200 is an answer.** `{accepted, rejected}` — a request in which the fix was refused is still a 200. `403`
    is "you are not this vessel's commander", `404` is "no such vessel", and the two remedies differ.
+4. **Nothing says which vessels a desk may report.** `/live-feed/me` returns the vessels the caller *commands*, and
+   a shore account commands none. There is no reportable-set read, so `403` is discovered by sending, not by
+   filtering a list.
 
 ## Decision 1 — one workspace, `crates/desk`
 
@@ -53,15 +57,30 @@ What that costs, stated plainly:
 Rejected: a module inside the wall's binary. The wall's process should not hold a token that can write, and a form
 beside a map is a different application with a different window.
 
-## Decision 2 — the unit of work is one vessel
+## Decision 2 — the desk records the last fix of a vessel, and a batch is many vessels
 
-The operator composes a report **per vessel**, because the wire does. The review screen groups by vessel, and the
-tray shows each vessel's state separately — accepted, partly rejected, refused — rather than one global "sent" that
-is true of nothing.
+There is one **fix row per vessel**, holding that vessel's most recent observation. A hull never contributes a second
+row, and the desk never composes a track: Minos already holds the last fix, and the desk's job is to say what the
+picture does not yet know. A batch is therefore N vessels → N rows → **N requests**, one `id_unit` each.
+
+This is the whole shape of the screen, and it is not a simplification of a richer model we declined to build: a
+desk that collected six positions for one hull would be writing a track nobody asked for, at a precision the source
+does not have, and one `403` would cost six fixes instead of one.
+
+The batch is where the operator's leverage is: twenty hulls reported in one pass, each independently answered, each
+row independently removable. So:
+
+- the list shows every vessel from the standing picture, in age order, each with its pending state;
+- selecting a vessel opens **that vessel's single row** for editing — select, then edit, never an editable grid;
+- the tray is the batch: one card per vessel, its time, its regime, and a way to drop it;
+- a send is a loop. Per-vessel answers are the result, and there is no global "sent" that is true of nothing.
 
 The desk sends its own `device_id`: a stable id for the workstation, stored beside its credential. The field means
 "the handset" in the contract; a desk telling Minos which workstation it is is the honest reading until Minos says
 otherwise (see the open questions).
+
+The batch is a **draft, not a queue**. It survives a restart so a mis-click does not lose ten minutes of typing; it
+is never sent with the time it had when it was drafted (see decision 3).
 
 ## Decision 3 — time is edited as the operator's clock, stored as UTC, and the regime is shown before submit
 
@@ -69,6 +88,10 @@ The field edits local civil time. The value is epoch milliseconds plus the offse
 string sent is unambiguous and the screen can say what clock it was read from. `rune::LocalTime` gives the OS zone's
 fields and offset for an instant; the inverse — a chosen wall clock back to an instant — is ours, because a DST gap
 has no answer and a fold has two.
+
+The wall clock is **WIB**, because that is what the operator is reading, with the derived UTC shown beside it as a
+readout (`= 07:03:22Z`) that cannot be typed into. The wire is UTC; the arithmetic is the field's job, not the
+operator's.
 
 The ±60 s boundary is not a formatting detail. It is a different report, so the field says which one is being
 written:
@@ -87,26 +110,33 @@ overwrite it, so the desk blocks it beyond the clock skew it measured.
 
 Two consequences for the control:
 
-- **Seconds, not minutes.** The payload carries milliseconds and a backfill's value is the shape of a track.
+- **Seconds, not minutes.** The record is one observation, and the difference between 14:03:22 and 14:03 is the
+  difference between a live fix and a backfill.
 - **Paste is a first-class input.** `2026-11-20T14:03:22Z`, `+07:00`, `20/11/2026 14:03`, `14:03` (today). The
   operator is reading times off reports; typing six segments is the slow path.
 
 The server's clock is read from a response header and the skew is kept beside the credential. The verdict is
-computed against the server's clock, because Minos decides by its own.
+computed against the server's clock, because Minos decides by its own. One function answers "what will this time
+do", and the field, the row and the send all call it.
 
-## Decision 4 — a drop on the map is a claim about now, and it becomes a pending row
+## Decision 4 — a drop on the map is a claim about now, and it fills that vessel's row
 
 Minos has no "replace this fix" and no planned position on the live feed: every fix is an observation. Dragging a
 ship's marker therefore does not move it. It reports that the ship is there.
 
 So a drop:
 
-- creates a **pending row** — ship, lat/lon, time — in the tray, with the old position drawn as history and a tether
-  to the new one;
-- never submits by itself, because the operator is usually placing several vessels before sending;
+- fills the selected vessel's row with lat/lon and a time of **now**, and draws the old position as history with a
+  tether to the new one;
+- never submits by itself, because the operator is usually reporting several vessels before sending;
 - is undoable;
-- is refused for a hull that is not in the reportable set, with the reason on screen, rather than at submit with a
-  403.
+- is a *guess at the present*, so it is only as good as the clock — the regime line is what says whether the
+  server will keep the time or replace it.
+
+A vessel the account may not report is **not knowable in advance** (context fact 4). The desk lists every hull and
+learns about a `403` at send, per vessel; the row stays on the board with the reason, so a granted command makes it
+retryable. A picker that pre-filtered by a set Minos does not expose would be a guess wearing a permission's
+clothes.
 
 The map's camera belongs to the UI, as it already does on the wall, so the drop's latitude and longitude are
 `unproject(camera, viewport, x, y)` at the moment of the drop — no round trip to the render thread, no marker that
@@ -130,8 +160,24 @@ arithmetic is about 120 lines; the segment typing rules about 300; both get test
 Rejected as borrowings: CSS-variable theming, slots and parts, SSR, the primitive factory. Each exists to work around
 a DOM Rune does not have.
 
+## Decision 6 — a source note is kept locally, per batch
+
+The payload has no provenance field. `recorded_at` says when, `device_id` says which workstation, and nothing says
+*how the desk knew*. That is the gap this application exists to close, so the desk keeps the answer itself: one free
+text note per batch ("Plot 4 · phone call 14:03"), carried from the previous batch, overridable per row, stored in
+the desk's own config directory, and never sent.
+
+It is optional. A mandatory note is a note filled with "x" by the second day, and a field that is always "x" is
+worse than an empty one, because it looks like evidence.
+
+The note is the desk's own record, not Minos's. If Minos later grows a `source` field (open question 3), the note
+becomes its value and stops being local-only.
+
 ## What the desk does not do
 
+- **More than one fix per vessel.** It records the last, not a track (decision 2).
+- **Import a track.** A pasted column of positions is a backlog Minos is not asking for, and a source that hands
+  over a track is a source to integrate, not a form to fill.
 - **Planned positions.** `PUT /games/{id}/units/{unit_id}/position` is the exercise plot, and it does not feed the
   live picture.
 - **Editing history.** A fix is an observation and cannot be revised; a correction is another fix.
@@ -146,6 +192,10 @@ a DOM Rune does not have.
 - **A second repository.** See decision 1.
 - **The wall's credential with `POST` added.** One process would then hold a write token to draw a map, and a display
   in a room is the easiest place to leave one.
+- **A table of many fixes for one vessel.** It is the shape Minos's ceiling suggests and the shape the work is not:
+  a vessel has one last position, and a six-row track for it is precision the source does not have.
+- **A picker filtered by a reportable set.** Minos does not publish one for a shore account; inventing it locally
+  would hide a vessel the operator can actually report (decision 4).
 - **Auto-submit on drop.** The gesture says where; it does not say "send now", and a mis-drop would be a fix with no
   undo on the wire.
 - **A default `recorded_at` of now, filled silently.** It converts a backfill into a live fix before the operator
@@ -157,7 +207,9 @@ a DOM Rune does not have.
 ## The test that would make this wrong
 
 - A drop that submits without review, or a report whose time the operator did not see before it left.
-- Two places deciding live versus backfill: the field and the submit path must ask one function.
+- Two places deciding live versus backfill: the field, the row and the send must ask one function.
+- A vessel with two rows in one batch, or a batch sent as one payload.
+- A list that hides a vessel because the desk guessed it could not report it.
 - A shared module through which the wall can post a fix, or a wall build that compiles the desk's write path.
 - The desk needing a DOM, a browser, or a second layout engine.
 - A queued report sent later with its original time and no indication that its regime changed.
@@ -171,17 +223,18 @@ a DOM Rune does not have.
   `--self-check` says which client it is checking. No secret in the tree, in a log line, or in a panic (`INV-08`
   applies to both binaries).
 - `tests/notices.rs` covers any dependency the desk adds; `tests/doc_claims.rs` may grow a claim that the desk still
-  groups by vessel, because that is the contract, not a layout choice.
+  writes one fix per vessel and one request per vessel, because that is the contract, not a layout choice.
 
 ## Open questions for Minos (blocked, not guessed)
 
-1. **A reportable-set read for a shore account.** `/live-feed/me` returns the vessels the caller commands, and a desk
-   commands none. A `GET /live-feed/reportable`, or a permission that widens `/me`, is the difference between a
-   picker and a guess.
-2. **`device_id` for a non-handset client.** Is a workstation id acceptable, or does the field become optional and
+1. **`device_id` for a non-handset client.** Is a workstation id acceptable, or does the field become optional and
    typed?
-3. **An idempotency key, and a `source` field.** One so a retry is not two fixes; one so a desk report is
+2. **An idempotency key, and a `source` field.** One so a retry is not two fixes; one so a desk report is
    distinguishable from a beacon in the audit trail. Without the second, the audit cannot answer the question the
-   whole app exists to make answerable — who said this, and how did they know.
-4. **A future `recorded_at` beyond +60 s.** The contract says it is treated as live and re-stamped; decision 3's last
+   whole app exists to make answerable — who said this, and how did they know — and decision 6's local note is the
+   stopgap.
+3. **A future `recorded_at` beyond +60 s.** The contract says it is treated as live and re-stamped; decision 3's last
    row depends on that being the rule rather than an accident of the implementation.
+4. **The intended path for a shore account's `403`.** The desk treats it as a late, per-vessel verdict because no
+   reportable-set read exists. If a widened `/live-feed/me` or a `read`-style policy is planned, that changes what
+   the picker can promise; until then the desk does not guess.
