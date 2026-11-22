@@ -28,6 +28,12 @@ pub const WINDOW_SIZE: (f32, f32) = (1280.0, 720.0);
 /// (ADR-0009, decision 5), so a second application cannot drift into a second look.
 pub const DESK_WINDOW: (f32, f32) = (1440.0, 900.0);
 
+/// **The desk's report panel** (#276): the width the wireframe gives one vessel's form.
+///
+/// The finished screen puts the vessel list and the map beside it (#277), so the form is a column and
+/// not the window. Named here for the same reason as `DESK_WINDOW`: a size is named in this file.
+pub const DESK_PANEL: f32 = 360.0;
+
 /// Below this the picture stops being readable at wall distance, so the window refuses to shrink.
 pub const MIN_WINDOW: (f32, f32) = (640.0, 360.0);
 

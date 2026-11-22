@@ -130,6 +130,15 @@ impl State {
         self.refresh();
     }
 
+    /// A press outside the calendar: close it and change nothing else.
+    ///
+    /// The catcher and Escape both come here, so dismissing a surface cannot be a second path that also
+    /// commits a half-typed value. Escape additionally reverts the segments (see [`State::revert`]),
+    /// which is a different promise: "forget what I typed", not "stop covering the field".
+    pub fn dismiss_calendar(&mut self) {
+        self.calendar_open = false;
+    }
+
     /// Clear every segment. The banner stays the last committed value's until something valid is
     /// typed, because an empty field is not a time to have a verdict about.
     pub fn clear(&mut self) {
@@ -344,20 +353,55 @@ pub fn on_key(state: &mut State, event: &rune::KeyEvent, tx: &mut rune::Tx) -> b
 // The drawing. Every colour and every size is the wall's (ADR-0009, decision 5).
 // ---------------------------------------------------------------------------
 
-/// The screen: the form, and the calendar open beside it.
+/// The screen: the report panel at the wireframe's width, and the calendar as an overlay.
+///
+/// The panel is pinned rather than grown, because that is the width the finished screen gives it: the
+/// vessel list and the map take the rest (#277). The area they will take says so in one grey line, so a
+/// capture of this ticket does not look like a finished application with its picture missing.
 pub fn view(state: &State, _cx: &mut Cx<State>) -> El {
-    let mut screen = row()
+    let body = row()
         .w_full()
         .h_full()
         .items_start()
         .padding(tokens::PAD)
         .gap(tokens::PAD)
         .fill(tokens::bg())
+        .child(
+            col()
+                .grow(1.0)
+                .h_full()
+                .items_start()
+                .child(caption("The vessel list and the map arrive in #277")),
+        )
         .child(form(state));
-    if state.calendar_open {
-        screen = screen.child(calendar(state));
+    calendar_overlay(state, body)
+}
+
+/// **The calendar is a popover, not a column.** It is attached at the root, after its anchor, because a
+/// popover laid out as a sibling takes a share of the window instead of covering it — and then the field
+/// moves when the calendar opens, which is the layout version of "the answer changed while I was reading
+/// the question".
+///
+/// Rune places it below `observed-at` and flips it above when the window has no room below, the same
+/// mechanism the wall's filter panel uses. The catcher is a transparent press over the whole window: a
+/// press outside dismisses the calendar and does nothing else, so dismissing a surface never also edits
+/// the field underneath it.
+fn calendar_overlay(state: &State, body: El) -> El {
+    if !state.calendar_open {
+        return body;
     }
-    screen
+    let panel = calendar(state).anchored(
+        "observed-at",
+        rune::Side::Bottom,
+        rune::Align::Start,
+        tokens::GAP,
+    );
+    body.child(
+        el().key("calendar-catcher")
+            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .on_press(|state: &mut State| state.dismiss_calendar())
+            .child(panel),
+    )
 }
 
 fn caption(words: impl Into<String>) -> El {
@@ -378,7 +422,7 @@ fn separator(mark: &'static str) -> El {
 
 fn form(state: &State) -> El {
     let mut form = col()
-        .grow(1.0)
+        .w(tokens::DESK_PANEL)
         .h_full()
         .gap(tokens::GAP)
         .child(caption("REPORT · 1 OF 1 VESSELS"))
@@ -390,6 +434,7 @@ fn form(state: &State) -> El {
         .child(hairline())
         .child(
             row()
+                .key("observed-at")
                 .w_full()
                 .gap(tokens::GAP)
                 .items_center()
@@ -801,6 +846,62 @@ mod tests {
                 .is_some_and(|label| label == "20 November 2026, selected"),
             "the twentieth is announced as {:?}",
             twentieth.label
+        );
+    }
+
+    /// **A popover, not a column.** The claim is structural and behavioural: there is a catcher for a
+    /// press outside, and that press cannot commit a half-typed time on its way past.
+    #[test]
+    fn the_calendar_is_a_popover_and_dismissing_it_commits_nothing() {
+        let runtime = frame_once(scene::state_for("time-field"));
+        assert!(
+            runtime.find("calendar-catcher").is_some(),
+            "the calendar has no catcher: a press outside would leave it covering the field"
+        );
+        assert!(runtime.find("calendar-popover").is_some());
+
+        let mut state = scene::state_for("time-field");
+        let committed = state.committed;
+        state.type_digit(0);
+        state.dismiss_calendar();
+        assert!(!state.calendar_open);
+        assert_eq!(
+            state.committed, committed,
+            "dismissing a surface must not commit the digits typed under it"
+        );
+    }
+
+    /// **The anchor, measured.** Rune reports each element's rect, so this is not a description of the
+    /// layout but a reading of it: with the calendar open the field is in the same place, and the
+    /// popover's top edge is at or below the field's bottom edge.
+    #[test]
+    fn opening_the_calendar_does_not_move_the_field() {
+        let mut closed_state = scene::state_for("time-field");
+        closed_state.calendar_open = false;
+        let mut open_state = scene::state_for("time-field");
+        open_state.calendar_open = true;
+
+        let closed = frame_once(closed_state);
+        let open = frame_once(open_state);
+        let field_closed = element(&closed, "segments").rect;
+        let field_open = element(&open, "segments").rect;
+        assert_eq!(
+            field_closed, field_open,
+            "the field moved when the calendar opened: {field_closed:?} -> {field_open:?}"
+        );
+
+        // Rune resolves the placement in the headless runtime too, so this is a measurement and not a
+        // description: the popover is one gap below the row that names the time, left-aligned with it.
+        let anchor = element(&open, "observed-at").rect;
+        let popover = element(&open, "calendar-popover").rect;
+        assert_eq!(
+            popover[0], anchor[0],
+            "the popover is not left-aligned with its anchor: anchor {anchor:?}, popover {popover:?}"
+        );
+        assert_eq!(
+            popover[1],
+            anchor[1] + anchor[3] + tokens::GAP,
+            "the popover is not one gap below the row that names the time: anchor {anchor:?}, popover {popover:?}"
         );
     }
 
