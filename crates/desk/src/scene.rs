@@ -5,9 +5,10 @@
 //! builds. Rune starts a scene at logical time zero, and the desk reads no clock of its own, so
 //! two runs are the same picture.
 //!
-//! **`--snap` without `--scene` draws the same screen**, because the default state is the sample
-//! too: the desk has one screen, and its idle state is the field with the calendar open. The scene
-//! exists so a capture can name what it rendered, and so a test can build the same state.
+//! **Two states of one screen**, because the calendar is the one thing that covers the panel it
+//! belongs to: `time-field` is the panel at rest, with the regime line and the UTC readout visible, and
+//! `time-calendar` is the same panel with the popover open. A single scene with the calendar open would
+//! hide the banner the ticket exists to show, which is how the first capture of this screen was wrong.
 
 use crate::ui::State;
 
@@ -15,11 +16,19 @@ use crate::ui::State;
 pub type Scene = (&'static str, fn(&mut State));
 
 /// Every scene the binary can render, in the order `--scenes` prints them.
-pub const SCENES: &[Scene] = &[("time-field", time_field)];
+pub const SCENES: &[Scene] = &[("time-field", time_field), ("time-calendar", time_calendar)];
 
-/// The desk's one screen, at the sample ADR-0009's wireframe names: 20 November 2026, 14:03:22
-/// WIB, the calendar open, and the server's clock three seconds behind the wall clock.
+/// The sample ADR-0009's wireframe names: 20 November 2026, 14:03:22 WIB, the calendar closed, and the
+/// server's clock three seconds behind the wall clock. Closed, so the regime line and the UTC readout
+/// are in the picture: they are what this ticket's proof is about.
 fn time_field(state: &mut State) {
+    *state = State::sample();
+    state.calendar_open = false;
+}
+
+/// The same panel with the calendar open, to witness the anchoring: it covers what is behind it and
+/// moves nothing.
+fn time_calendar(state: &mut State) {
     *state = State::sample();
 }
 

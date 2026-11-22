@@ -128,6 +128,30 @@ else
   skip "captures" "scripts/capture.sh missing (ticket #9)"
 fi
 
+# The desk's scenes are rendered too (#276). It is a separate step because they are a separate binary
+# with its own scene list, and because `capture.sh` is the wall's harness down to its flags. What this
+# proves today is that every desk scene renders and that two runs agree; the golden under
+# `fixtures/golden/desk/` is recorded for review, and comparing against it needs the desk's own bounds —
+# the wall's are measured per wall scene, and a byte compare across two rasterisers is red for reasons
+# nothing here changed. The ticket that adds bounds turns this step into an assertion.
+if [ "$FAST" -eq 1 ]; then
+  skip "desk captures" "--fast"
+elif have scripts/capture-desk.sh; then
+  run_desk_scenes() {
+    local ok=0
+    cargo build -q -p desk || return 1
+    local scenes="${DESK_SCENES:-$(./target/debug/desk --scenes | paste -sd, -)}"
+    [ -n "$scenes" ] || { echo "  the desk listed no scenes"; return 1; }
+    for scene in ${scenes//,/ }; do
+      scripts/capture-desk.sh "$scene" || ok=1
+    done
+    return $ok
+  }
+  step "desk captures" run_desk_scenes
+else
+  skip "desk captures" "scripts/capture-desk.sh missing"
+fi
+
 # ---------------------------------------------------------------------------
 # 4. Budgets. Numbers, not vibes. Named as tests that print the measured value — and `--nocapture` puts
 # that number in CI's log, because a budget whose measurement is only visible on failure cannot be audited

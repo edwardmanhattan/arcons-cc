@@ -382,7 +382,7 @@ pub fn view(state: &State, _cx: &mut Cx<State>) -> El {
 /// moves when the calendar opens, which is the layout version of "the answer changed while I was reading
 /// the question".
 ///
-/// Rune places it below `observed-at` and flips it above when the window has no room below, the same
+/// Rune places it below the segments and flips it above when the window has no room below, the same
 /// mechanism the wall's filter panel uses. The catcher is a transparent press over the whole window: a
 /// press outside dismisses the calendar and does nothing else, so dismissing a surface never also edits
 /// the field underneath it.
@@ -391,7 +391,7 @@ fn calendar_overlay(state: &State, body: El) -> El {
         return body;
     }
     let panel = calendar(state).anchored(
-        "observed-at",
+        "segments",
         rune::Side::Bottom,
         rune::Align::Start,
         tokens::GAP,
@@ -470,13 +470,23 @@ fn form(state: &State) -> El {
         Regime::Unknown => tokens::ink_dim(),
     };
     let utc = zoned::utc_civil(state.epoch_ms);
+    // **The banner, not a line of small print.** This sentence is the whole reason the field exists:
+    // it says whether the time will be kept or replaced. The wireframe draws it as a filled block, and a
+    // block is also what a reader can find at arm's length without hunting for one grey line among five.
     form = form
         .child(
-            text(state.verdict.regime.sentence())
-                .key("regime")
-                .role("status")
-                .font(tokens::LABEL)
-                .color(banner_colour),
+            el().key("regime-banner")
+                .w_full()
+                .padding(tokens::CHIP_PAD)
+                .border(tokens::HAIRLINE, banner_colour)
+                .radius(tokens::PANEL_RADIUS)
+                .child(
+                    text(state.verdict.regime.sentence())
+                        .key("regime")
+                        .role("status")
+                        .font(tokens::TITLE)
+                        .color(banner_colour),
+                ),
         )
         .child(
             text(format!(
@@ -793,7 +803,7 @@ mod tests {
 
     #[test]
     fn the_sample_screen_draws_the_field_the_calendar_and_the_batch_button() {
-        let runtime = frame_once(scene::state_for("time-field"));
+        let runtime = frame_once(scene::state_for("time-calendar"));
         for key in [
             "segments",
             "regime",
@@ -824,7 +834,7 @@ mod tests {
 
     #[test]
     fn the_calendar_is_a_grid_of_labelled_cells_with_the_twentieth_selected() {
-        let runtime = frame_once(scene::state_for("time-field"));
+        let runtime = frame_once(scene::state_for("time-calendar"));
         let grid = element(&runtime, "calendar-grid");
         assert_eq!(grid.role, "grid");
         let cells: Vec<_> = runtime
@@ -853,7 +863,7 @@ mod tests {
     /// press outside, and that press cannot commit a half-typed time on its way past.
     #[test]
     fn the_calendar_is_a_popover_and_dismissing_it_commits_nothing() {
-        let runtime = frame_once(scene::state_for("time-field"));
+        let runtime = frame_once(scene::state_for("time-calendar"));
         assert!(
             runtime.find("calendar-catcher").is_some(),
             "the calendar has no catcher: a press outside would leave it covering the field"
@@ -892,7 +902,7 @@ mod tests {
 
         // Rune resolves the placement in the headless runtime too, so this is a measurement and not a
         // description: the popover is one gap below the row that names the time, left-aligned with it.
-        let anchor = element(&open, "observed-at").rect;
+        let anchor = element(&open, "segments").rect;
         let popover = element(&open, "calendar-popover").rect;
         assert_eq!(
             popover[0], anchor[0],
@@ -901,13 +911,13 @@ mod tests {
         assert_eq!(
             popover[1],
             anchor[1] + anchor[3] + tokens::GAP,
-            "the popover is not one gap below the row that names the time: anchor {anchor:?}, popover {popover:?}"
+            "the popover is not one gap below the field it belongs to: field {anchor:?}, popover {popover:?}"
         );
     }
 
     #[test]
     fn the_primary_button_and_the_calendar_arrows_are_buttons_in_words() {
-        let runtime = frame_once(scene::state_for("time-field"));
+        let runtime = frame_once(scene::state_for("time-calendar"));
         for (key, name) in [
             ("update-batch", "Update in batch"),
             ("previous-month", "Previous month"),
