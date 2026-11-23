@@ -161,7 +161,8 @@ fn a_vessel_with_no_commander_is_a_403_and_the_row_survives_it() {
     );
     assert_eq!(
         verdict.sentence(),
-        format!("no commander appointed, so there is no report to attribute: {message}")
+        format!("the row is kept: {message}"),
+        "the row says what Minos said, once, and that the fix was not lost"
     );
 }
 

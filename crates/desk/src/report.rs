@@ -253,9 +253,9 @@ impl Verdict {
             Self::Unauthenticated { .. } => {
                 "the credential expired: sign in again, then send this row".to_string()
             }
-            Self::NoCommander { message } => {
-                format!("no commander appointed, so there is no report to attribute: {message}")
-            }
+            // The server's own sentence already says why, and says what to do about it. Prefixing it with a
+            // summary of itself made the row say the same thing twice.
+            Self::NoCommander { message } => format!("the row is kept: {message}"),
             Self::NoSuchVessel => "no such vessel: Minos does not have this hull".to_string(),
             Self::Unreadable { message } => {
                 format!("this client sent a body Minos could not read: {message}")
