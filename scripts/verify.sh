@@ -73,13 +73,11 @@ if have_crate; then
   # tolerates warnings, and a warning in code nothing compiles is rot that has already started. CI's `map`
   # jobs run the same command on the two platforms that have a precompiled core.
   if [ "${VERIFY_WITH_MAP:-0}" = "1" ]; then
-    # `-p arcons-cc`, because `--features map` names a feature of the wall's package, not the workspace's.
-    # `--no-deps`: the workspace conversion (#276) made the vendored `maplibre_native` a **member**, and
-    # a member is linted by name — so `-p arcons-cc` no longer stops at the wall and `-D warnings` started
-    # failing on MapLibre's own build script, which is not ours to police. Dependencies are still built;
-    # they are just not linted.
+    # Both binaries that own a `map` feature, and `--no-deps`: the workspace made the vendored
+    # `maplibre_native` a member, so `-p` no longer stops at our crates and `-D warnings` would police
+    # MapLibre's own build script (#276). Dependencies are still built; they are just not linted.
     step "map feature, clippy -D warnings" \
-      cargo clippy -p arcons-cc --features map --all-targets --no-deps -- -D warnings
+      cargo clippy -p arcons-cc -p desk --features map --all-targets --no-deps -- -D warnings
   else
     skip "map feature compiles" "VERIFY_WITH_MAP=1 to check it here; CI's map jobs do"
   fi

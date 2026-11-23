@@ -436,6 +436,7 @@ pub fn run(passthrough: Vec<String>) -> std::process::ExitCode {
         min_size: Some(tokens::MIN_WINDOW),
         on_key: Some(on_key),
         scenes: crate::scene::SCENES,
+        poll: Some(poll),
         ..rune::AppSpec::new(TITLE, tokens::DESK_WINDOW, State::sample, view)
     };
     let result = rune::try_run_windows_with_args(
@@ -449,6 +450,23 @@ pub fn run(passthrough: Vec<String>) -> std::process::ExitCode {
             eprintln!("desk: cannot open a window: {message}");
             std::process::ExitCode::FAILURE
         }
+    }
+}
+
+/// **What changed while nobody was pressing anything** (#277).
+///
+/// Rune runs the view once and then leaves the screen alone until something asks for another frame. On
+/// this screen the map's thread is that something: it finishes a frame asynchronously, so the pass that
+/// draws it has to be requested. Without this the chart says `the chart is opening` for the life of the
+/// window, with a finished picture sitting in the handle it is not drawing.
+fn poll(_state: &mut State, _elapsed: f64, _tx: &mut rune::Tx) -> bool {
+    #[cfg(feature = "map")]
+    {
+        crate::chart::engine::frame_arrived()
+    }
+    #[cfg(not(feature = "map"))]
+    {
+        false
     }
 }
 
@@ -639,7 +657,7 @@ pub fn view(state: &State, _cx: &mut Cx<State>) -> El {
                         .grow(1.0)
                         .h_full()
                         .gap(tokens::GAP)
-                        .child(crate::ui::chart::view(state))
+                        .child(crate::ui::chart::view(state, _cx.env().scale))
                         .child(desk::tray(state)),
                 )
                 .child(form(state)),

@@ -28,7 +28,9 @@ const NUDGE: f64 = 10.0;
 const NUDGE_COARSE: f64 = 50.0;
 
 /// The whole chart: the water, the hulls, and the controls that are not the water.
-pub(super) fn view(state: &State) -> El {
+pub(super) fn view(state: &State, scale: f32) -> El {
+    // The scale is the engine's business only; without the feature the chart draws in points.
+    let _ = scale;
     let chart = state.chart;
     let mut layer = el()
         .key("chart")
@@ -68,8 +70,57 @@ pub(super) fn view(state: &State) -> El {
             }
         });
 
-    for line in graticule(chart) {
-        layer = layer.child(line);
+    // **The water, when there is water to draw** (#277, `--features map`).
+    //
+    // Absent until the thread has rendered, because a black rectangle looks like the sea at night rather
+    // than like a map that is still opening; while it is absent the chart draws the graticule instead,
+    // which is the structure a picture-less chart has and the one thing a basemap turns into noise.
+    #[allow(unused_mut)]
+    let mut water: Option<El> = None;
+    #[cfg(feature = "map")]
+    {
+        let viewport = chart.viewport();
+        let device = (
+            (viewport.w * f64::from(scale)).round().max(1.0) as u32,
+            (viewport.h * f64::from(scale)).round().max(1.0) as u32,
+        );
+        if let Some(pixels) = crate::chart::engine::pixels(chart.camera(), device)
+            && crate::chart::engine::has_frame()
+        {
+            water = Some(el().key("chart-frame").w_full().h_full().pixels(&pixels));
+        }
+        // A chart with no water says why, in the corner, rather than looking like the sea at night.
+        if !crate::chart::engine::has_frame() && crate::chart::engine::error().is_none() {
+            let height = chart.viewport().h as f32;
+            layer = layer.child(
+                text("the chart is opening")
+                    .key("chart-opening")
+                    .font(tokens::LABEL)
+                    .color(tokens::ink_dim())
+                    .absolute(tokens::PAD, height - tokens::NAME_H * 2.0 - tokens::GAP),
+            );
+        }
+        if let Some(error) = crate::chart::engine::error() {
+            let height = chart.viewport().h as f32;
+            layer = layer.child(
+                text(format!("chart: {error}"))
+                    .key("chart-error")
+                    .font(tokens::LABEL)
+                    .color(tokens::ink_dim())
+                    .absolute(tokens::PAD, height - tokens::NAME_H * 2.0 - tokens::GAP),
+            );
+        }
+    }
+
+    if let Some(frame) = water {
+        layer = layer.child(frame);
+    } else {
+        // No picture: a degree grid is the smallest honest structure, and the step follows the zoom, so a
+        // one-degree line at z14 is a wall and a one-degree line at z5 is a dot. Over real water it would
+        // be noise on top of a map that already says where it is.
+        for line in graticule(chart) {
+            layer = layer.child(line);
+        }
     }
     for mark in markers(state) {
         layer = layer.child(mark);
@@ -151,6 +202,10 @@ fn markers(state: &State) -> Vec<El> {
         } else {
             tokens::ink()
         };
+        // **A dot has to read over water and over the panel.** The colour that carries meaning is the
+        // operator's own ink; the halo is the panel's background, which is the one colour that stands
+        // against a light basemap and against the empty chart alike.
+        marks.push(halo(point, tokens::DESK_MARK + 3.0, tokens::bg()));
         let half = f64::from(tokens::DESK_MARK) / 2.0;
         marks.push(
             el().key(format!("hull-{}", vessel.id_unit))
@@ -196,6 +251,15 @@ fn markers(state: &State) -> Vec<El> {
         }
     }
     marks
+}
+
+/// A disc behind a marker: the reason a light dot survives a light basemap.
+fn halo(point: (f64, f64), size: f32, colour: rune::Color) -> El {
+    let half = size / 2.0;
+    el().absolute(point.0 as f32 - half, point.1 as f32 - half)
+        .size(size, size)
+        .radius(half)
+        .fill(colour)
 }
 
 fn ring(point: (f64, f64), size: f32, colour: rune::Color) -> El {

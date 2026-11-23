@@ -29,6 +29,16 @@ const USAGE: &str = "\
   --rounding N      how many pixels may differ by exactly one step (default: the scene's, 600)";
 
 fn main() -> ExitCode {
+    let code = run();
+    // **The engine is stopped before the process is.** A static is never dropped, so MapThread's
+    // join-on-drop would be skipped and MapLibre would abort tearing down a context under a thread that is
+    // still rendering (`--features map` only; a no-op otherwise).
+    #[cfg(feature = "map")]
+    desk::chart::engine::shutdown();
+    code
+}
+
+fn run() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("--version") => {

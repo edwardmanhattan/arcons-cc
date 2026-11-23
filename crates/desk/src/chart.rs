@@ -7,12 +7,16 @@
 //! tell it where it was pointing. A marker that trails the pointer is a marker that lies about where the
 //! operator clicked.
 //!
-//! Nothing here draws. The engine's frame arrives in the commit after this one; what exists now is the
-//! arithmetic, the camera, and the placement — which is exactly the part a test can hold.
+//! This module is the arithmetic, the camera and the placement — the part a test can hold. The engine's
+//! frame is [`engine`] behind `--features map`; without it the chart draws the graticule and the hulls and
+//! no water, which is a chart that still means what it says.
 
 use arcons_cc::map::geometry::{
     Camera, MAX_ZOOM, MIN_ZOOM, Viewport, pan, project, unproject, zoom_about,
 };
+
+#[cfg(feature = "map")]
+pub mod engine;
 
 /// The zoom a click on `+` or `−` moves by. A whole level is the map convention, and half of one is the
 /// difference between "the operator adjusted the view" and "the view jumped somewhere else".
