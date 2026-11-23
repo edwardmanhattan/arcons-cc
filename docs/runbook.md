@@ -352,3 +352,24 @@ Run them in order. A failing line is a bug with a symptom, not a guess — which
 
 Line 5 is the shape `docs/control.md` names: a refusal for a key no row holds is written **with no `to`**, so a phone can
 observe the silence and nothing else.
+
+## Reporting one test fix from the desk (#278)
+
+The desk writes `POST /live-feed/fixes/relayed` — the route for a position somebody ashore typed in on a commander's
+behalf, not the beacon's. It takes its deployment and credential from the environment and from nowhere else:
+
+```sh
+MINOS_BASE_URL=https://<deployment>/api/v1 \
+MINOS_IDENTIFIER=<operator> MINOS_PASSWORD=<password> \
+cargo run -p desk --features map
+```
+
+Then: pick a hull that **has a commander appointed** (a hull without one is refused `403` — that is the answer, not a
+failure), set the time in the field, place the vessel on the chart, and press **Send N reports**. The line under the
+tray names what each vessel's own answer was: `recorded — the picture moved`, `recorded — … so the picture did not
+move` (a report older than what the vessel's handset already sent), or the field Minos refused.
+
+**The credential is the environment's for now.** ADR-0009 says the desk's credential lives where the wall's does —
+`$XDG_CONFIG_HOME/arcons-cc/`, mode 0600 — and that file is not written yet; until it is, a desk start *is* three
+environment variables, and there is nothing on disk to rotate. Nothing about a token, a password or a host is logged
+(`INV-08`), and a send that cannot reach the deployment says so in the tray rather than showing a spinner forever.
