@@ -31,6 +31,30 @@ impl Picker {
         Self { vessels }
     }
 
+    /// Every hull in the picture, in the order the picture gave them.
+    ///
+    /// The list draws these when the query is empty, and the screen counts them for the filter chips; a
+    /// picker that could only be searched would make the rail invent its own copy of the picture.
+    pub fn vessels(&self) -> &[Vessel] {
+        &self.vessels
+    }
+
+    /// One hull by its id, or `None` when the picture does not hold it.
+    ///
+    /// The tray needs a hull's number from an id alone (a [`Row`](crate::batch::Row) carries the name but
+    /// not the number), and the inspector needs the hull a selection names.
+    pub fn get(&self, id_unit: u64) -> Option<&Vessel> {
+        self.vessels.iter().find(|vessel| vessel.id_unit == id_unit)
+    }
+
+    pub fn len(&self) -> usize {
+        self.vessels.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.vessels.is_empty()
+    }
+
     /// Match `query` against every hull, best first.
     ///
     /// Matching and ranking are both case- and diacritic-insensitive; see [`super::fold`] for the exact

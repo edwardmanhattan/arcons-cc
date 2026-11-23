@@ -27,6 +27,30 @@ pub struct LastKnown {
     pub accuracy_m: Option<f64>,
 }
 
+impl LastKnown {
+    /// The age as the list writes it: `45 s`, `2 m`, `5 h`, `30 d`.
+    ///
+    /// **The one place a carried age becomes words.** The list is forbidden a clock, and dividing the
+    /// response's seconds by sixty in a view would make the format a second fact that drifts from the
+    /// value. Truncating rather than rounding keeps "59 s" from reading "1 m" a second early, and the
+    /// largest unit that fits keeps the column narrow: the operator reads the magnitude, then the fix.
+    ///
+    /// A negative age cannot come from the wire; it is clamped, because a card that said `-3 s` would be a
+    /// bug made visible rather than a fact.
+    pub fn age_words(&self) -> String {
+        let seconds = self.age_seconds.max(0.0);
+        if seconds < 60.0 {
+            format!("{} s", seconds.trunc() as i64)
+        } else if seconds < 3_600.0 {
+            format!("{} m", (seconds / 60.0).trunc() as i64)
+        } else if seconds < 86_400.0 {
+            format!("{} h", (seconds / 3_600.0).trunc() as i64)
+        } else {
+            format!("{} d", (seconds / 86_400.0).trunc() as i64)
+        }
+    }
+}
+
 /// A hull the desk may report, whether or not it has ever reported.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Vessel {

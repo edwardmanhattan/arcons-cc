@@ -39,6 +39,21 @@ pub enum Reason {
     BadValue(FixError),
 }
 
+impl Reason {
+    /// **Why the row stays, in the operator's words.** One sentence per reason, beside the reason itself, so
+    /// the tray and a test cannot describe "no position" two different ways. The field is named rather than
+    /// the whole value: the operator has one row to fix and the name says where to look.
+    pub fn sentence(self) -> String {
+        match self {
+            Self::NoPosition => "both coordinates are needed".to_string(),
+            Self::RefusedForAge => "older than 30 days, so Minos refuses it".to_string(),
+            Self::FutureTime => "ahead of the server's clock".to_string(),
+            Self::UnknownClock => "the server's clock has not answered".to_string(),
+            Self::BadValue(error) => error.to_string(),
+        }
+    }
+}
+
 /// A vessel's one row in the batch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {

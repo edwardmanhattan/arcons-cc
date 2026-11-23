@@ -34,6 +34,23 @@ pub const DESK_WINDOW: (f32, f32) = (1440.0, 900.0);
 /// not the window. Named here for the same reason as `DESK_WINDOW`: a size is named in this file.
 pub const DESK_PANEL: f32 = 360.0;
 
+/// **The desk's vessel rail** (#277): the standing picture's list, at the wireframe's width.
+///
+/// Beside the inspector and the chart, and named here for the same reason as the two above: a size is
+/// named in this file, even when the window that uses it is the desk's.
+pub const DESK_LIST: f32 = 320.0;
+
+/// One vessel in the rail (#277): two lines, the name over the hull, with room for the age and its marks.
+pub const DESK_ROW_H: f32 = 48.0;
+
+/// One card in the batch tray (#277): the ship, its hull, its regime and its remove control.
+pub const DESK_CARD_W: f32 = 216.0;
+pub const DESK_CARD_H: f32 = 64.0;
+
+/// The rail's minimum scrolling height. Zero on purpose, like the filter panel's: a scroll viewport inside
+/// a flex column needs a named zero or it grows to its content and never scrolls.
+pub const DESK_SCROLL_MIN_H: f32 = 0.0;
+
 /// Below this the picture stops being readable at wall distance, so the window refuses to shrink.
 pub const MIN_WINDOW: (f32, f32) = (640.0, 360.0);
 

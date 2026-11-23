@@ -52,6 +52,18 @@ impl Batch {
         self.rows.iter().find(|row| row.id_unit == id_unit)
     }
 
+    /// How many rows this hull holds. Zero or one, and the one place the list's badge asks.
+    ///
+    /// The answer is a count rather than a flag because that is what the badge says: a hull in the batch
+    /// shows its count beside its name instead of a second row somewhere else. The model guarantees the
+    /// count is never two, so a two would be the bug the badge exists to make impossible to draw.
+    pub fn count(&self, id_unit: u64) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| row.id_unit == id_unit)
+            .count()
+    }
+
     /// The rows in the order they were added, which is the order the operator built the report in.
     pub fn rows(&self) -> &[Row] {
         &self.rows

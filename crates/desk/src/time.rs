@@ -60,6 +60,20 @@ impl Regime {
             Self::Unknown => "clock not checked — no verdict until the server answers",
         }
     }
+
+    /// What a **card** says, where the sentence would be four lines: the verdict's name and nothing else.
+    ///
+    /// The field keeps [`Regime::sentence`] because it is read before a time is sent; a tray card is a
+    /// glance, and a glance that has to be read left to right is not one.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Backfill => "backfill",
+            Self::Refused => "refused",
+            Self::Future => "in the future",
+            Self::Unknown => "clock not checked",
+        }
+    }
 }
 
 impl fmt::Display for Regime {

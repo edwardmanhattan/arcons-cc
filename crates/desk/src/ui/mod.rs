@@ -1,14 +1,15 @@
-//! **The desk's one screen** — the time field, drawn by Rune (ADR-0009, decisions 3 and 5).
+//! **The desk's screen** — the vessel list, the batch tray, and the time field (ADR-0009, decisions 2–5).
 //!
 //! The rules are not here. A regime is [`crate::time::verdict`]'s answer, a calendar is
 //! [`crate::field::calendar`]'s grid, a typed time is [`crate::field::segment`]'s, a pasted one is
-//! [`crate::field::paste`]'s, and a wall clock becomes an instant through [`crate::field::zoned`].
-//! This module composes them into elements and nothing else: no boundary arithmetic, no calendar
-//! arithmetic and no date parsing, so a colour or a rule that changes has one place to change.
+//! [`crate::field::paste`]'s, and a wall clock becomes an instant through [`crate::field::zoned`]. The
+//! picture, the batch and the operator's place in them are [`desk::Desk`]'s. This module composes them
+//! into elements and nothing else: no boundary arithmetic, no calendar arithmetic and no list filtering,
+//! so a colour or a rule that changes has one place to change.
 //!
 //! **Nothing here reads a clock or does I/O.** `State` carries the server's clock and "today" as
 //! values a scene fixes, which is what makes `--snap` byte-identical between runs (`INV-11`'s
-//! rule, applied to the desk). The real clock and the OS zone arrive with the client (#277, #278);
+//! rule, applied to the desk). The real clock and the OS zone arrive with the client (#278);
 //! until then the field's zone is WIB and its "now" is the sample the scene supplies.
 //!
 //! **The field owns the keyboard.** Rune routes a key to the focused control first, so a button
@@ -19,11 +20,17 @@
 use arcons_cc::ui::tokens;
 use rune::{Cx, El, col, el, row, spacer, text};
 
+use crate::batch::{Fix, Readiness, Row};
 use crate::field::calendar::Month;
 use crate::field::segment::{Field, Segments};
 use crate::field::zoned::{self, Resolution};
 use crate::field::{CivilTime, FieldError, civil, paste};
+use crate::picker::Vessel;
 use crate::time::{self, Regime, Verdict};
+
+pub mod desk;
+
+use desk::Desk;
 
 /// The window title: one window, one application, one name.
 pub const TITLE: &str = "Arcons Desk";
@@ -33,12 +40,7 @@ pub const TITLE: &str = "Arcons Desk";
 /// wall's tokens.
 pub const WIB_OFFSET_MS: i32 = 7 * 60 * 60 * 1000;
 
-/// The vessel the wireframe's panel is about. A fixed sample for this ticket; the standing
-/// picture and the reportable set arrive with the client (#277).
-const VESSEL_NAME: &str = "KRI Sultan Hasanuddin";
-const VESSEL_HULL: &str = "Hull 366 · corvette · 1 of 1";
-const LAST_KNOWN: &str = "−6.10230, 106.88120 · 14:02:11 WIB · 12.4 kn · 284°";
-const SOURCE_NOTE: &str = "Plot 4 · phone call 14:03";
+/// The hedge the field draws when the verdict is close to a line it could cross while it is read.
 const HEDGE: &str = "near a line — this can change before it is sent";
 
 /// `CivilTime` from literal fields, for the sample and its tests. Not arithmetic: a constructor.
@@ -72,6 +74,8 @@ pub struct State {
     pub error: Option<FieldError>,
     /// A paste's refusal or acceptance, in the field's own words.
     pub notice: Option<String>,
+    /// The picture, the batch, the selection and the list's keyboard (#277).
+    pub desk: Desk,
 }
 
 impl State {
@@ -95,6 +99,7 @@ impl State {
             calendar_open: true,
             error: None,
             notice: None,
+            desk: Desk::default(),
         }
     }
 
@@ -168,13 +173,94 @@ impl State {
         }
     }
 
-    /// The batch button: commit the field, and say the one thing this ticket can honestly say
-    /// about the batch. The tray and the send are #277 and #278.
-    pub fn hold_in_batch(&mut self) {
-        self.enter();
-        if self.error.is_none() {
-            self.notice = Some("1 vessel in the batch — the send arrives with #278".to_string());
-        }
+    /// **Select a hull, and open its row.** The field is prefilled from the batch's row when the hull has
+    /// one, else from the picture's last known position, else left at the time the operator already had —
+    /// a hull that never reported has no time to offer, and the field is still the operator's clock reading.
+    ///
+    /// Nothing here asks the network: the picture is already in memory, which is why a lost connection does
+    /// not empty the screen the operator is writing into.
+    pub fn select(&mut self, id_unit: u64) {
+        let Some(time) = self.desk.time_of(id_unit) else {
+            // A hull with no last known and no row: select it, keep the time on the field.
+            self.desk.select(id_unit);
+            return;
+        };
+        self.desk.select(id_unit);
+        let civil = zoned::at_offset(time.0, time.1);
+        self.segments = Segments::new(civil);
+        self.committed = civil;
+        self.month = Month::of_days(civil::days_from_civil(civil.year, civil.month, civil.day));
+        self.error = None;
+        self.notice = None;
+        self.epoch_ms = time.0;
+        self.verdict = time::verdict(time.0, Some(self.server_now_ms));
+    }
+
+    /// Enter in the list: select the row the keyboard is on. Returns the hull it selected, or `None` when
+    /// the keyboard is not in the list.
+    pub fn select_cursor(&mut self) -> Option<u64> {
+        let id_unit = self.desk.cursor_vessel()?.id_unit;
+        self.select(id_unit);
+        Some(id_unit)
+    }
+
+    /// **Put the selected hull's draft in the batch** — the inspector's button and the tray's `+ Add
+    /// vessel` are the same action. The row is built from the draft (the batch's row when there is one,
+    /// else the picture) and the field's accepted time, which is what the operator is looking at.
+    ///
+    /// A row with no coordinates is still added: the ADR keeps a row that cannot be sent on the board with
+    /// its reason, because a `403` or a missing position is a fact about the vessel, not a reason to hide it.
+    pub fn add_selected(&mut self) {
+        let Some(id_unit) = self.desk.selected() else {
+            return;
+        };
+        let Some(name) = self.desk.vessel(id_unit).map(|vessel| vessel.name.clone()) else {
+            return;
+        };
+        let Some(fix) = self.draft_fix(id_unit) else {
+            return;
+        };
+        self.desk.add_row(Row { id_unit, name, fix });
+    }
+
+    /// `x` and a card's remove control: take the hull's row out of the draft. The selection stays, so the
+    /// operator can look at the card's removal without also losing the hull they were reading.
+    pub fn remove_from_batch(&mut self, id_unit: u64) {
+        self.desk.remove(id_unit);
+    }
+
+    /// Escape: clear the search first, and only then revert the field. A query is the thing the operator
+    /// just typed; the time is the thing they accepted, and it should not be thrown away by the key that
+    /// was aimed at the query.
+    pub fn clear_search(&mut self) -> bool {
+        self.desk.clear_query()
+    }
+
+    /// The fix the selected hull's row would carry right now: the draft's coordinates, the field's
+    /// accepted instant, and WIB as the offset the time was read at.
+    pub fn draft_fix(&self, id_unit: u64) -> Option<Fix> {
+        self.desk.vessel(id_unit)?;
+        let draft = self.desk.draft(id_unit);
+        Some(Fix {
+            recorded_at_ms: self.epoch_ms,
+            offset_ms: WIB_OFFSET_MS,
+            latitude: draft.latitude,
+            longitude: draft.longitude,
+            speed_kn: draft.speed_kn,
+            course_deg: draft.course_deg,
+            accuracy_m: draft.accuracy_m,
+        })
+    }
+
+    /// What would happen if the selected hull's draft were sent now, through the batch model's own rule.
+    ///
+    /// The inspector says this in words; the tray's plan says it per row. Both ask [`Row::readiness`], so
+    /// the empty state and the send cannot disagree about whether a row is sendable.
+    pub fn readiness(&self) -> Option<Readiness> {
+        let id_unit = self.desk.selected()?;
+        let name = self.desk.vessel(id_unit)?.name.clone();
+        let fix = self.draft_fix(id_unit)?;
+        Some(Row { id_unit, name, fix }.readiness(Some(self.server_now_ms)))
     }
 
     /// The calendar's day: it sets the whole date, because a calendar that changed only the day
@@ -282,6 +368,42 @@ pub fn run(passthrough: Vec<String>) -> std::process::ExitCode {
     }
 }
 
+/// **The list's keys, in one function**, reached two ways: the window's global key handler when nothing is
+/// focused, and the list's own `on_key` when a row or the list is. Two copies of "Tab walks, Enter selects"
+/// would drift the first time one of them changed.
+///
+/// The list yields the key when it has nothing to do with it, so the form's own keys still work: an empty
+/// picture gives Tab back to the six segments, and Escape with no query reverts the time.
+/// The list's keys are shared with the list's own `on_key`, so the window's fallback and the focused
+/// container cannot disagree about what Tab does.
+pub(super) fn list_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool {
+    match &event.key {
+        rune::Key::Tab => {
+            if state.desk.list_is_empty() {
+                return false;
+            }
+            state.desk.tab(if event.mods.shift { -1 } else { 1 });
+            true
+        }
+        rune::Key::Enter => {
+            if state.desk.cursor().is_none() {
+                return false;
+            }
+            state.select_cursor();
+            true
+        }
+        rune::Key::Text(words) if words.eq_ignore_ascii_case("x") => {
+            let Some(id_unit) = state.desk.selected() else {
+                return false;
+            };
+            state.remove_from_batch(id_unit);
+            true
+        }
+        rune::Key::Escape => state.clear_search(),
+        _ => false,
+    }
+}
+
 /// **The keys, in one place.** Digits fill the active segment, Up and Down step it, Left and
 /// Right move between segments, Backspace eats a digit, Tab moves on (Shift-Tab back), Enter
 /// commits, Escape reverts, and Cmd/Ctrl+V pastes through the model's parser.
@@ -296,6 +418,11 @@ pub fn on_key(state: &mut State, event: &rune::KeyEvent, tx: &mut rune::Tx) -> b
                 state.paste(content.text());
             },
         );
+        return true;
+    }
+    // The list first: it is the surface the operator is pointing at, and it yields the key when it has no
+    // row to move, select or drop.
+    if list_key(state, event, tx) {
         return true;
     }
     match &event.key {
@@ -330,6 +457,8 @@ pub fn on_key(state: &mut State, event: &rune::KeyEvent, tx: &mut rune::Tx) -> b
             true
         }
         rune::Key::Tab => {
+            // **Tab belongs to the list when there is a list.** A scene with an empty picture keeps Tab for
+            // the six segments, which is the form's own keyboard and the one the time-field scene proves.
             if event.mods.shift {
                 state.left();
             } else {
@@ -353,28 +482,72 @@ pub fn on_key(state: &mut State, event: &rune::KeyEvent, tx: &mut rune::Tx) -> b
 // The drawing. Every colour and every size is the wall's (ADR-0009, decision 5).
 // ---------------------------------------------------------------------------
 
-/// The screen: the report panel at the wireframe's width, and the calendar as an overlay.
+/// **The screen**: the rail, the chart's place and the tray, with the inspector at the wireframe's width
+/// and the calendar as an overlay.
 ///
-/// The panel is pinned rather than grown, because that is the width the finished screen gives it: the
-/// vessel list and the map take the rest (#277). The area they will take says so in one grey line, so a
-/// capture of this ticket does not look like a finished application with its picture missing.
+/// **The chart is a flat panel this commit.** The map is the next commit of #277; drawing one here would
+/// make a capture a reviewer reads as a finished picture. The panel says what is missing in one grey line,
+/// so the screen cannot be mistaken for a chart whose sea was left blank.
 pub fn view(state: &State, _cx: &mut Cx<State>) -> El {
-    let body = row()
+    let body = col()
         .w_full()
         .h_full()
-        .items_start()
+        .gap(tokens::GAP)
         .padding(tokens::PAD)
-        .gap(tokens::PAD)
         .fill(tokens::bg())
+        .child(title_bar())
         .child(
-            col()
+            row()
+                .w_full()
                 .grow(1.0)
-                .h_full()
-                .items_start()
-                .child(caption("The vessel list and the map arrive in #277")),
-        )
-        .child(form(state));
+                .items_stretch()
+                .gap(tokens::GAP)
+                .child(desk::rail(state))
+                .child(
+                    col()
+                        .grow(1.0)
+                        .h_full()
+                        .gap(tokens::GAP)
+                        .child(chart_placeholder())
+                        .child(desk::tray(state)),
+                )
+                .child(form(state)),
+        );
     calendar_overlay(state, body)
+}
+
+/// The wireframe's header: the application's name, and the room this desk is in.
+fn title_bar() -> El {
+    row()
+        .key("title-bar")
+        .w_full()
+        .items_center()
+        .gap(tokens::GAP)
+        .child(
+            text("ARCONS DESK")
+                .font(tokens::WORDMARK)
+                .color(tokens::ink()),
+        )
+        .child(spacer())
+        .child(caption("OPERATIONS · JAKARTA"))
+}
+
+/// The chart's place, flat and honest: #277's map is the next commit, and this panel says so.
+fn chart_placeholder() -> El {
+    col()
+        .key("chart-placeholder")
+        .w_full()
+        .grow(1.0)
+        .items_center()
+        .justify_center()
+        .radius(tokens::PANEL_RADIUS)
+        .fill(tokens::panel())
+        .border(tokens::HAIRLINE, tokens::card_edge())
+        .child(
+            text("The chart arrives with the next commit")
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim()),
+        )
 }
 
 /// **The calendar is a popover, not a column.** It is attached at the root, after its anchor, because a
@@ -404,15 +577,15 @@ fn calendar_overlay(state: &State, body: El) -> El {
     )
 }
 
-fn caption(words: impl Into<String>) -> El {
+pub(super) fn caption(words: impl Into<String>) -> El {
     text(words).font(tokens::LABEL).color(tokens::ink_dim())
 }
 
-fn line(words: impl Into<String>) -> El {
+pub(super) fn line(words: impl Into<String>) -> El {
     text(words).font(tokens::LABEL).color(tokens::ink())
 }
 
-fn hairline() -> El {
+pub(super) fn hairline() -> El {
     el().h(tokens::HAIRLINE).w_full().fill(tokens::hairline())
 }
 
@@ -420,17 +593,53 @@ fn separator(mark: &'static str) -> El {
     text(mark).font(tokens::TITLE).color(tokens::ink_dim())
 }
 
+/// The inspector: the panel the field has always been, now driven by the selected hull and its draft.
+///
+/// **What it shows is what would be sent.** The coordinates are the row's (or the picture's, before the row
+/// exists), the time is the field's accepted value, and the line under the field is [`Row::readiness`]'s
+/// answer in words. A hull with no last known gets the empty state rather than a plausible position: the
+/// whole point of this screen is that a guess at a position is worse than a blank.
 fn form(state: &State) -> El {
+    let selected = state.desk.selected_vessel();
+    let name = selected.map_or_else(
+        || "No vessel selected".to_string(),
+        |vessel| vessel.name.clone(),
+    );
+    let subtitle = selected.map_or_else(String::new, |vessel| {
+        let state_word = if vessel.last.is_none() {
+            "never reported"
+        } else if state.desk.in_batch(vessel.id_unit) {
+            "in the batch"
+        } else {
+            "prefilled"
+        };
+        format!("Hull {} · {state_word}", vessel.hull_number)
+    });
+    let last_known_label = if selected.and_then(|vessel| vessel.last.as_ref()).is_some() {
+        "LAST KNOWN"
+    } else {
+        "LAST KNOWN · NONE"
+    };
+
     let mut form = col()
+        .key("inspector")
         .w(tokens::DESK_PANEL)
         .h_full()
         .gap(tokens::GAP)
-        .child(caption("REPORT · 1 OF 1 VESSELS"))
-        .child(text(VESSEL_NAME).font(tokens::TITLE).color(tokens::ink()))
-        .child(caption(VESSEL_HULL))
+        .child(caption(report_header(state)).key("report-header"))
+        .child(
+            text(name)
+                .key("report-name")
+                .font(tokens::TITLE)
+                .color(tokens::ink()),
+        )
+        .child(caption(subtitle))
         .child(hairline())
-        .child(caption("LAST KNOWN"))
-        .child(line(LAST_KNOWN))
+        .child(caption(last_known_label).key("last-known-label"))
+        .child(last_known(selected))
+        .child(hairline())
+        .child(caption("THIS REPORT · ONE FIX"))
+        .child(coordinates(state))
         .child(hairline())
         .child(
             row()
@@ -505,37 +714,180 @@ fn form(state: &State) -> El {
                 .color(tokens::ink_dim()),
         );
     }
-    form.child(hairline())
+    form.child(readiness_line(state))
+        .child(hairline())
         .child(caption("SOURCE · KEPT HERE, NEVER SENT"))
-        .child(
-            el().key("source-note")
-                .role("note")
-                .label(format!("Source note, kept on this desk: {SOURCE_NOTE}"))
-                .w_full()
-                .padding(tokens::CHIP_PAD)
-                .border_sides([0.0, 0.0, tokens::HAIRLINE, 0.0], tokens::card_edge())
-                .child(line(SOURCE_NOTE)),
-        )
+        .child(source_note(state))
         .child(spacer())
+        .child(update_button(state))
+}
+
+/// `REPORT · 1 OF 2 VESSELS` when the hull has a row, `NOT IN THE BATCH` when it has not, and the empty
+/// word when nothing is selected. The position is the tray's, so the two panels count the same draft.
+fn report_header(state: &State) -> String {
+    let Some(vessel) = state.desk.selected_vessel() else {
+        return "REPORT · NO VESSEL SELECTED".to_string();
+    };
+    match state.desk.batch_position(vessel.id_unit) {
+        Some(position) => format!(
+            "REPORT · {} OF {} VESSELS",
+            position + 1,
+            state.desk.batch().len()
+        ),
+        None => "REPORT · NOT IN THE BATCH".to_string(),
+    }
+}
+
+/// The picture's last position in words, or the sentence that says there is none.
+///
+/// Absence is not zero: a hull that never reported has no coordinates, and the line says so instead of
+/// drawing `0.00000, 0.00000` — a real place in the Gulf of Guinea and a false fact about the ship.
+fn last_known(selected: Option<&Vessel>) -> El {
+    let Some(last) = selected.and_then(|vessel| vessel.last.as_ref()) else {
+        return line("no position in the standing picture").key("last-known");
+    };
+    let civil = zoned::at_offset(last.recorded_at_ms, WIB_OFFSET_MS);
+    let mut words = format!(
+        "{:.5}, {:.5} · {:02}:{:02}:{:02} WIB · {}",
+        last.latitude,
+        last.longitude,
+        civil.hour,
+        civil.minute,
+        civil.second,
+        last.age_words()
+    );
+    if last.backfilled {
+        words.push_str(" · backfilled");
+    }
+    if let Some(speed) = last.speed_kn {
+        words.push_str(&format!(" · {speed:.1} kn"));
+    }
+    if let Some(course) = last.course_deg {
+        words.push_str(&format!(" · {course:.0}°"));
+    }
+    line(words).key("last-known")
+}
+
+/// The two coordinate fields. A filled one is a solid box with the value the row would carry; an empty one
+/// is dashed and says `type or place`, because the map's drop is the next commit and the desk does not
+/// invent a coordinate to fill the gap.
+fn coordinates(state: &State) -> El {
+    let draft = state
+        .desk
+        .selected()
+        .map(|id_unit| state.desk.draft(id_unit))
+        .unwrap_or_default();
+    row()
+        .w_full()
+        .gap(tokens::GAP)
+        .items_end()
+        .child(coordinate("LATITUDE", "latitude", draft.latitude))
+        .child(coordinate("LONGITUDE", "longitude", draft.longitude))
+}
+
+fn coordinate(label: &'static str, key: &'static str, value: Option<f64>) -> El {
+    let filled = value.is_some();
+    let words = value.map_or_else(
+        || "type or place".to_string(),
+        |value| format!("{value:.5}"),
+    );
+    let mut field = el()
+        .key(format!("coordinate-{key}"))
+        .role("textbox")
+        .read_only(true)
+        .label(format!("{label}, {words}"))
+        .w_full()
+        .h(tokens::NAME_H + tokens::GAP)
+        .px(tokens::GAP)
+        .items_center()
+        .radius(tokens::GAP)
+        .fill(tokens::bg())
+        .border(
+            tokens::HAIRLINE,
+            if filled {
+                tokens::card_edge()
+            } else {
+                tokens::ink_dim()
+            },
+        )
+        .child(text(words).font(tokens::LABEL).color(if filled {
+            tokens::ink()
+        } else {
+            tokens::ink_dim()
+        }));
+    if !filled {
+        field = field.border_dash(tokens::CHIP_PAD, tokens::CARD_GAP);
+    }
+    col()
+        .grow(1.0)
+        .gap(tokens::CARD_GAP)
+        .child(caption(label))
+        .child(field)
+}
+
+/// The row's verdict in words, from the batch model's own rule. `nothing to send yet` is not a disabled
+/// form: it is the honest answer to "what would leave if I pressed send", with the reason beside it.
+fn readiness_line(state: &State) -> El {
+    let words = match state.readiness() {
+        None => "nothing to send yet — select a vessel".to_string(),
+        Some(Readiness::Sendable) => "ready — one fix, one request".to_string(),
+        Some(Readiness::Blocked(reason)) => format!("nothing to send yet — {}", reason.sentence()),
+    };
+    text(words)
+        .key("readiness")
+        .role("status")
+        .font(tokens::LABEL)
+        .color(tokens::ink_dim())
+}
+
+/// Decision 6's note is the desk's own record: kept here, never sent, and empty until the operator types
+/// one. An empty note says so rather than drawing an `"x"` that would look like evidence.
+fn source_note(state: &State) -> El {
+    let note = state
+        .desk
+        .batch()
+        .source_note
+        .as_deref()
+        .unwrap_or("no note yet");
+    el().key("source-note")
+        .role("note")
+        .label(format!("Source note, kept on this desk: {note}"))
+        .w_full()
+        .padding(tokens::CHIP_PAD)
+        .border_sides([0.0, 0.0, tokens::HAIRLINE, 0.0], tokens::card_edge())
+        .child(line(note))
+}
+
+/// The inspector's way into the draft. The same action as the tray's `+ Add vessel`, with the word the
+/// panel has always used for replacing a row the operator is editing.
+fn update_button(state: &State) -> El {
+    let enabled = state.desk.selected().is_some();
+    el().key("update-batch")
+        .role("button")
+        .label("Update in batch")
+        .disabled(!enabled)
+        .px(tokens::GAP)
+        .py(tokens::CHIP_PAD)
+        .radius(tokens::GAP)
+        .fill(if enabled {
+            tokens::accent()
+        } else {
+            tokens::name_plate()
+        })
+        .items_center()
+        .justify_center()
+        .on_press_tx(|state: &mut State, tx: &mut rune::Tx| {
+            state.add_selected();
+            tx.blur();
+        })
         .child(
-            el().key("update-batch")
-                .role("button")
-                .label("Update in batch")
-                .px(tokens::GAP)
-                .py(tokens::CHIP_PAD)
-                .radius(tokens::GAP)
-                .fill(tokens::accent())
-                .items_center()
-                .justify_center()
-                .on_press_tx(|state: &mut State, tx: &mut rune::Tx| {
-                    state.hold_in_batch();
-                    tx.blur();
-                })
-                .child(
-                    text("Update in batch")
-                        .font(tokens::LABEL)
-                        .color(tokens::bg()),
-                ),
+            text("Update in batch")
+                .font(tokens::LABEL)
+                .color(if enabled {
+                    tokens::bg()
+                } else {
+                    tokens::ink_dim()
+                }),
         )
 }
 
@@ -1112,6 +1464,307 @@ mod tests {
                 .starts_with("month:"),
             "the alert must name the month: {:?}",
             alert.text
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The working surface (#277)
+    // -----------------------------------------------------------------------
+
+    /// A press the way an operator makes one: the point the layout gave the element, pressed and released.
+    fn press(rt: &mut rune::Runtime<State>, key: &str) {
+        let (x, y) = rt
+            .find(key)
+            .unwrap_or_else(|| panic!("nothing keyed {key:?} is drawn"));
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+    }
+
+    fn key(rt: &mut rune::Runtime<State>, key: rune::Key) {
+        rt.key(rune::KeyEvent {
+            key,
+            mods: rune::Mods::default(),
+        });
+        rt.frame(0.0);
+    }
+
+    #[test]
+    fn the_surface_draws_the_rail_the_tray_and_a_flat_chart_that_says_it_comes_next() {
+        let runtime = frame_once(scene::state_for("desk-batch"));
+        for key in [
+            "vessel-search",
+            "vessel-list",
+            "vessel-row-1",
+            "vessel-row-3",
+            "batch-tray",
+            "tray-card-1",
+            "tray-card-2",
+            "add-vessel",
+            "send-reports",
+            "chart-placeholder",
+            "inspector",
+        ] {
+            assert!(
+                runtime.find(key).is_some(),
+                "the desk's surface has no {key}: the wireframe's screen is incomplete"
+            );
+        }
+        let chart = runtime
+            .elements()
+            .into_iter()
+            .filter_map(|element| element.text)
+            .any(|words| words.contains("chart arrives with the next commit"));
+        assert!(
+            chart,
+            "the map is not in this commit, and the panel must say so rather than draw an empty sea"
+        );
+    }
+
+    #[test]
+    fn a_row_is_announced_as_one_label_naming_the_vessel_its_hull_and_its_age() {
+        let runtime = frame_once(scene::state_for("desk-batch"));
+        let row = element(&runtime, "vessel-row-1");
+        let label = row.label.as_deref().unwrap_or_default();
+        assert_eq!(row.role, "option");
+        for needed in ["KRI DIPONEGORO", "368", "23 s"] {
+            assert!(
+                label.contains(needed),
+                "the row is announced as {label:?}, which does not name {needed:?}"
+            );
+        }
+        let never = element(&runtime, "vessel-row-2");
+        assert!(
+            never
+                .label
+                .as_deref()
+                .is_some_and(|label| label.contains("never")),
+            "a hull that never reported says so instead of drawing an age: {:?}",
+            never.label
+        );
+    }
+
+    #[test]
+    fn selecting_a_hull_prefills_the_inspector_and_the_field_from_the_picture() {
+        let state = scene::state_for("desk-batch");
+        assert_eq!(state.desk.selected(), Some(3), "the scene selects Halasan");
+        let runtime = frame_once(state);
+        assert_eq!(
+            element(&runtime, "report-name").text.as_deref(),
+            Some("KRI HALASAN")
+        );
+        assert_eq!(
+            element(&runtime, "report-header").text.as_deref(),
+            Some("REPORT · NOT IN THE BATCH"),
+            "the selected hull is not in the draft, and the header must not pretend it is"
+        );
+        let known = element(&runtime, "last-known").text.unwrap_or_default();
+        assert!(
+            known.contains("-6.10230") && known.contains("5 h") && known.contains("backfilled"),
+            "the last known line is {known:?}"
+        );
+        assert!(
+            element(&runtime, "coordinate-latitude")
+                .label
+                .as_deref()
+                .is_some_and(|label| label.contains("-6.10230")),
+            "the coordinate is prefilled from the picture, not left blank"
+        );
+        assert!(
+            element(&runtime, "readiness")
+                .text
+                .as_deref()
+                .is_some_and(|words| words.starts_with("ready")),
+            "a hull with a position and a backfilled time would be sent"
+        );
+    }
+
+    #[test]
+    fn a_hull_that_never_reported_has_the_empty_state_and_the_reason_in_words() {
+        let mut state = scene::state_for("desk-batch");
+        state.select(2);
+        let runtime = frame_once(state);
+        assert_eq!(
+            element(&runtime, "last-known-label").text.as_deref(),
+            Some("LAST KNOWN · NONE")
+        );
+        let placeholders = runtime
+            .elements()
+            .into_iter()
+            .filter(|element| element.text.as_deref() == Some("type or place"))
+            .count();
+        assert_eq!(
+            placeholders, 2,
+            "a hull with no position gets two dashed fields, not one and not none"
+        );
+        let readiness = element(&runtime, "readiness").text.unwrap_or_default();
+        assert!(
+            readiness.starts_with("nothing to send yet")
+                && readiness.contains("both coordinates are needed"),
+            "the empty state must say why, in the batch model's words: {readiness:?}"
+        );
+    }
+
+    #[test]
+    fn a_never_reported_hull_is_listed_and_is_not_stale() {
+        let mut state = scene::state_for("desk-batch");
+        state.desk.set_filter(desk::Filter::Never);
+        let never: Vec<u64> = state
+            .desk
+            .visible()
+            .iter()
+            .map(|vessel| vessel.id_unit)
+            .collect();
+        assert!(
+            never.contains(&2) && never.contains(&7) && never.contains(&8),
+            "every silent hull is listed under Never: {never:?}"
+        );
+        state.desk.set_filter(desk::Filter::Stale);
+        assert!(
+            !state
+                .desk
+                .visible()
+                .iter()
+                .any(|vessel| vessel.id_unit == 2),
+            "a hull that never reported has no age to have crossed the stale line"
+        );
+    }
+
+    #[test]
+    fn the_batch_shows_one_card_per_hull_and_a_badge_in_the_list_not_a_second_row() {
+        let runtime = frame_once(scene::state_for("desk-batch"));
+        let cards = runtime
+            .elements()
+            .into_iter()
+            .filter(|element| {
+                element
+                    .key
+                    .as_deref()
+                    .is_some_and(|key| key.starts_with("tray-card-"))
+            })
+            .count();
+        assert_eq!(cards, 2, "one card per vessel, and the draft holds two");
+        assert!(
+            runtime.find("batch-badge-1").is_some() && runtime.find("batch-badge-2").is_some(),
+            "a hull in the draft shows its count beside its row"
+        );
+        assert!(
+            runtime.find("batch-badge-3").is_none(),
+            "the selected hull is not in the draft, so it has no badge"
+        );
+        assert_eq!(
+            element(&runtime, "tray-foot").text.as_deref(),
+            Some("2 vessels · 2 fixes · nothing sent")
+        );
+        assert_eq!(
+            element(&runtime, "send-reports").label.as_deref(),
+            Some("Send 2 reports"),
+            "one request per vessel means the send names the same number as the footer"
+        );
+    }
+
+    #[test]
+    fn the_send_says_that_nothing_is_sent_until_278() {
+        let mut runtime = frame_once(scene::state_for("desk-batch"));
+        press(&mut runtime, "send-reports");
+        assert!(
+            runtime
+                .elements()
+                .into_iter()
+                .filter_map(|element| element.text)
+                .any(|words| words.contains("#278")),
+            "the send control must not pretend to send"
+        );
+    }
+
+    #[test]
+    fn tab_walks_the_list_enter_selects_x_removes_and_escape_clears_the_search() {
+        let mut state = scene::state_for("desk-batch");
+        state.select(1);
+        let mut runtime = frame_once(state);
+
+        key(&mut runtime, rune::Key::Tab);
+        key(&mut runtime, rune::Key::Enter);
+        assert_eq!(
+            element(&runtime, "report-name").text.as_deref(),
+            Some("KRI HALASAN"),
+            "Tab moved to the next row and Enter selected it"
+        );
+
+        runtime.key(rune::KeyEvent {
+            key: rune::Key::Tab,
+            mods: rune::Mods {
+                shift: true,
+                ..rune::Mods::default()
+            },
+        });
+        runtime.frame(0.0);
+        key(&mut runtime, rune::Key::Enter);
+        assert_eq!(
+            element(&runtime, "report-name").text.as_deref(),
+            Some("KRI DIPONEGORO"),
+            "Shift-Tab walked back"
+        );
+
+        key(&mut runtime, rune::Key::Text("x".into()));
+        assert!(
+            runtime.find("tray-card-1").is_none(),
+            "x removed the selected hull's row from the batch"
+        );
+        assert!(
+            runtime.find("batch-badge-1").is_none(),
+            "and the list's badge went with it"
+        );
+
+        let mut state = scene::state_for("desk-batch");
+        state.desk.set_query("makassar");
+        let mut runtime = frame_once(state);
+        assert!(
+            runtime.find("vessel-row-1").is_none(),
+            "the query narrowed the list to one hull"
+        );
+        key(&mut runtime, rune::Key::Escape);
+        assert!(
+            runtime.find("vessel-row-1").is_some(),
+            "Escape cleared the search and put the picture back"
+        );
+    }
+
+    #[test]
+    fn a_selected_row_is_filled_while_its_neighbours_are_not() {
+        let runtime = frame_once(scene::state_for("desk-batch"));
+        let selected = element(&runtime, "vessel-row-3");
+        let other = element(&runtime, "vessel-row-1");
+        assert_eq!(
+            selected.fill,
+            tokens::name_plate(),
+            "the selected row is the filled one"
+        );
+        assert_ne!(
+            other.fill,
+            tokens::name_plate(),
+            "an unselected row must not look selected"
+        );
+    }
+
+    #[test]
+    fn the_empty_desk_has_nothing_selected_and_a_disabled_send() {
+        let runtime = frame_once(scene::state_for("desk-empty"));
+        assert_eq!(
+            element(&runtime, "report-header").text.as_deref(),
+            Some("REPORT · NO VESSEL SELECTED")
+        );
+        assert_eq!(
+            element(&runtime, "tray-foot").text.as_deref(),
+            Some("0 vessels · 0 fixes · nothing sent")
+        );
+        assert_eq!(
+            element(&runtime, "send-reports").label.as_deref(),
+            Some("Send 0 reports")
+        );
+        assert!(
+            runtime.find("add-vessel").is_none(),
+            "there is no selection to add"
         );
     }
 }
