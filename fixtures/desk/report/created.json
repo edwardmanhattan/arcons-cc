@@ -1,0 +1,30 @@
+{
+  "recorded": null,
+  "derived_from": "minos@496ae25 — internal/dto/live_feed.go FeedRelayedResult, and internal/services/live_feed_service.go IngestRelayed (201 + response.CreateSuccess). NOT a wire exchange: recording one stores a fix for a real vessel.",
+  "request": {
+    "method": "POST",
+    "path": "/live-feed/fixes/relayed",
+    "body": {
+      "id_unit": 18,
+      "latitude": -6.1023,
+      "longitude": 106.8712,
+      "recorded_at": "2026-11-20T07:03:22.000Z",
+      "speed_kn": 8.1,
+      "course_deg": 91.0,
+      "accuracy_m": 7.2
+    }
+  },
+  "response": {
+    "status": 201,
+    "body": {
+      "status_code": 201,
+      "message": "Resource created successfully",
+      "data": {
+        "id_unit": 18,
+        "recorded_at": "2026-11-20T07:03:22Z",
+        "received_at": "2026-11-20T07:04:01.512Z",
+        "latest": false
+      }
+    }
+  }
+}

@@ -12,7 +12,8 @@ pub const LATITUDE_LIMIT_DEG: f64 = 90.0;
 pub const LONGITUDE_LIMIT_DEG: f64 = 180.0;
 /// A speed above this is not a vessel; it is a typo or a unit mistake.
 pub const SPEED_LIMIT_KN: f64 = 100.0;
-/// A course is a bearing, so it stops at a full turn. Our fence, not the contract's limit.
+/// A course is a bearing, so it stops at a full turn — and the contract refuses `360` itself (`lt=360`: a full
+/// turn is `0`, and a body carrying `360` comes back `400`). The fence is exclusive for the same reason.
 pub const COURSE_LIMIT_DEG: f64 = 360.0;
 /// A position claimed to be accurate to more than ten kilometres is not an observation worth reporting.
 pub const ACCURACY_LIMIT_M: f64 = 10_000.0;
@@ -58,7 +59,7 @@ impl fmt::Display for FixError {
                 write!(f, "speed_kn {value} is outside 0..={SPEED_LIMIT_KN}")
             }
             Self::CourseDeg { value } => {
-                write!(f, "course_deg {value} is outside 0..={COURSE_LIMIT_DEG}")
+                write!(f, "course_deg {value} is outside 0..<{COURSE_LIMIT_DEG}")
             }
             Self::AccuracyM { value } => {
                 write!(f, "accuracy_m {value} is outside 0..={ACCURACY_LIMIT_M}")
@@ -110,7 +111,7 @@ impl Fix {
             return Err(FixError::SpeedKn { value });
         }
         if let Some(value) = self.course_deg
-            && !(0.0..=COURSE_LIMIT_DEG).contains(&value)
+            && !(0.0..COURSE_LIMIT_DEG).contains(&value)
         {
             return Err(FixError::CourseDeg { value });
         }

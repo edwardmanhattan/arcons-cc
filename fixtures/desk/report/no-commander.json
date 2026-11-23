@@ -1,0 +1,26 @@
+{
+  "recorded": "2026-11-23",
+  "against": "the development deployment",
+  "request": {
+    "method": "POST",
+    "path": "/live-feed/fixes/relayed",
+    "body": {
+      "id_unit": 1,
+      "latitude": -6.1,
+      "longitude": 106.87,
+      "recorded_at": "2026-10-14T11:29:48.000Z"
+    }
+  },
+  "response": {
+    "status": 403,
+    "body": {
+      "status_code": 403,
+      "message": "Bad request",
+      "data": {
+        "errors": {
+          "id_unit": "This vessel has no commander appointed, so there is no report to attribute. Assign a commander first."
+        }
+      }
+    }
+  }
+}

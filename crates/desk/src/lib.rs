@@ -11,6 +11,7 @@ pub mod chart;
 pub mod field;
 pub mod identity;
 pub mod picker;
+pub mod report;
 pub mod scene;
 pub mod time;
 pub mod ui;

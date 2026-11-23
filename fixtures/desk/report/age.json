@@ -1,0 +1,26 @@
+{
+  "recorded": "2026-11-23",
+  "against": "the development deployment",
+  "request": {
+    "method": "POST",
+    "path": "/live-feed/fixes/relayed",
+    "body": {
+      "id_unit": 8,
+      "latitude": -6.1,
+      "longitude": 106.87,
+      "recorded_at": "2026-10-14T11:29:48.000Z"
+    }
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "status_code": 400,
+      "message": "Bad request",
+      "data": {
+        "errors": {
+          "recorded_at": "That position is more than 30 days old, so it cannot be recorded."
+        }
+      }
+    }
+  }
+}
