@@ -38,7 +38,9 @@ mkdir -p out
 
 fail() { printf '\033[31mSOAK FAILED\033[0m: %s\n' "$1" >&2; exit 1; }
 
-[ -x ./target/debug/arcons-cc ] || cargo build -q || fail "the binary does not build"
+cargo build -q || fail "the binary does not build"
+WALL="$(scripts/bin-path.sh arcons-cc arcons-cc)" || fail "cannot find the binary"
+[ -x "$WALL" ] || fail "the binary does not build"
 
 # The environment the wall reads: `.env` if there is one, and never a token on the command line.
 if [ -f .env ]; then set -a; . ./.env; set +a; fi
@@ -46,7 +48,7 @@ if [ -f .env ]; then set -a; . ./.env; set +a; fi
 
 # A scale factor below 1 would change the layout; the wall's own size is what a wall runs.
 printf '\033[1m▶ soak %s minutes\033[0m — log %s, deliberate drop at %s s\n' "$MINUTES" "$LOG" "$DROP_AFTER_S"
-./target/debug/arcons-cc --no-decorations --log-file "$LOG" \
+"$WALL" --no-decorations --log-file "$LOG" \
   --reconnect-after "$DROP_AFTER_S" >/dev/null 2>&1 &
 WALL=$!
 # A wall is the thing on the screen, so the soak asks the compositor to put it there. It is not required:

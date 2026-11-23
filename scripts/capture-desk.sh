@@ -26,7 +26,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 cargo build -q -p desk || exit 1
-mapfile -t SCENES_ALL < <(./target/debug/desk --scenes)
+# The binary's path is cargo's answer: this machine's `[build] target-dir` is a shared store off
+# `./target` (docs/build-environment.md), so `./target/debug/desk` is a path that stops existing.
+DESK="$(scripts/bin-path.sh desk desk)" || exit 1
+mapfile -t SCENES_ALL < <("$DESK" --scenes)
 [ ${#SCENES_ALL[@]} -gt 0 ] || { echo "capture-desk: the desk listed no scenes" >&2; exit 1; }
 
 UPDATE=0
@@ -48,7 +51,7 @@ status=0
 for scene in "${SCENES[@]}"; do
   printf '\n\033[1m▶ desk capture %s\033[0m\n' "$scene"
   png="out/desk-$scene.png"
-  if ! ./target/debug/desk \
+  if ! "$DESK" \
       --scene "$scene" \
       --at 2 \
       --fps 60 \
@@ -64,7 +67,7 @@ for scene in "${SCENES[@]}"; do
 
   # Determinism: the same scene twice must be the same bytes, or no golden means anything.
   cp "$png" "out/desk-$scene.first.png"
-  ./target/debug/desk --scene "$scene" --at 2 --fps 60 --size 1440x900 --scale 1 \
+  "$DESK" --scene "$scene" --at 2 --fps 60 --size 1440x900 --scale 1 \
     --snap "$png" > "out/desk-$scene.log" 2>&1
   if cmp -s "out/desk-$scene.first.png" "$png"; then
     echo "  two runs identical"
@@ -98,7 +101,7 @@ for scene in "${SCENES[@]}"; do
   if [ ! -f "$golden" ]; then
     echo "  no golden at $golden: run scripts/capture-desk.sh --update-goldens $scene" >&2
     status=1
-  elif ./target/debug/desk "${compare_args[@]}"; then
+  elif "$DESK" "${compare_args[@]}"; then
     :
   else
     status=1

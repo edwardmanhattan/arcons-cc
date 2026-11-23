@@ -111,7 +111,9 @@ elif have scripts/capture.sh; then
     # drawing the NATO symbol over a golden that had been regenerated blind (`#54`). A scene that exists is
     # a scene the gate renders; adding one without a golden is a red gate, which is the correct moment to
     # make a human look at it.
-    local scenes="${SCENES:-$(./target/debug/arcons-cc --scenes | paste -sd, -)}"
+    local wall
+    wall="$(scripts/bin-path.sh arcons-cc arcons-cc)" || return 1
+    local scenes="${SCENES:-$("$wall" --scenes | paste -sd, -)}"
     [ -n "$scenes" ] || { echo "  the binary listed no scenes"; return 1; }
     for scene in ${scenes//,/ }; do
       scripts/capture.sh "$scene" || ok=1
@@ -141,7 +143,9 @@ elif have scripts/capture-desk.sh; then
   run_desk_scenes() {
     local ok=0
     cargo build -q -p desk || return 1
-    local scenes="${DESK_SCENES:-$(./target/debug/desk --scenes | paste -sd, -)}"
+    local desk
+    desk="$(scripts/bin-path.sh desk desk)" || return 1
+    local scenes="${DESK_SCENES:-$("$desk" --scenes | paste -sd, -)}"
     [ -n "$scenes" ] || { echo "  the desk listed no scenes"; return 1; }
     for scene in ${scenes//,/ }; do
       scripts/capture-desk.sh "$scene" || ok=1

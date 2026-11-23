@@ -29,4 +29,5 @@ fi
 # Built every time, like `capture.sh`: CI and a human run the same command, and a stale binary is a
 # different wall. `cargo build` is a no-op when the binary is current.
 cargo build -q || exit 1
-./target/debug/arcons-cc --conformance "$CORPUS"
+WALL="$(scripts/bin-path.sh arcons-cc arcons-cc)" || exit 70
+"$WALL" --conformance "$CORPUS"
