@@ -129,7 +129,10 @@ jobs:
             echo "using the cached core at $MLN_CORE_LIBRARY_PATH"
           fi
           # `-p arcons-cc`: `map` is the wall's feature, and the workspace has a second binary (#275).
-          cargo clippy -p arcons-cc --features map --all-targets --locked -- -D warnings 2>&1 | tee map.log
+          # `--no-deps`: the workspace conversion made the vendored `maplibre_native` a member, so `-p`
+          # no longer stops at the wall and `-D warnings` began failing on MapLibre's build script (#276).
+          cargo clippy -p arcons-cc --features map --all-targets --no-deps --locked -- -D warnings \
+            2>&1 | tee map.log
         shell: bash
         env:
           # The precompiled core, when the platform has one: 378 MB of download beats an hour of C++. On
