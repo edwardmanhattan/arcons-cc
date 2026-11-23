@@ -9,6 +9,7 @@
 pub mod batch;
 pub mod chart;
 pub mod field;
+pub mod http;
 pub mod identity;
 pub mod picker;
 pub mod report;
