@@ -128,12 +128,13 @@ else
   skip "captures" "scripts/capture.sh missing (ticket #9)"
 fi
 
-# The desk's scenes are rendered too (#276). It is a separate step because they are a separate binary
-# with its own scene list, and because `capture.sh` is the wall's harness down to its flags. What this
-# proves today is that every desk scene renders and that two runs agree; the golden under
-# `fixtures/golden/desk/` is recorded for review, and comparing against it needs the desk's own bounds —
-# the wall's are measured per wall scene, and a byte compare across two rasterisers is red for reasons
-# nothing here changed. The ticket that adds bounds turns this step into an assertion.
+# The desk's scenes are rendered and compared too (#276). It is a separate step because they are a
+# separate binary with its own scene list, and because `capture.sh` is the wall's harness down to its
+# flags. `capture-desk.sh` proves every desk scene renders, that two runs agree, and that the capture
+# matches `fixtures/golden/desk/` within the bounds `desk::scene::bounds` states — through the same
+# `arcons_cc::verify::compare` the wall uses, never a second comparison. The desk's scenes have not
+# been measured on CI yet, so today they take the defaults, and the numbers are printed every run so
+# the first real measurement is a number in the log rather than a guess in a table.
 if [ "$FAST" -eq 1 ]; then
   skip "desk captures" "--fast"
 elif have scripts/capture-desk.sh; then

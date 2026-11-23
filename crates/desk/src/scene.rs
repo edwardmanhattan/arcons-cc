@@ -10,6 +10,8 @@
 //! `time-calendar` is the same panel with the popover open. A single scene with the calendar open would
 //! hide the banner the ticket exists to show, which is how the first capture of this screen was wrong.
 
+use arcons_cc::verify::Bounds;
+
 use crate::ui::State;
 
 /// One scene: a name and the function that builds its state.
@@ -53,4 +55,20 @@ pub fn state_for(name: &str) -> State {
 /// The scene names, one per line, as `--scenes` prints them.
 pub fn names() -> Vec<&'static str> {
     SCENES.iter().map(|(name, _)| *name).collect()
+}
+
+/// The bounds a desk golden is compared within.
+///
+/// **Unmeasured, and honestly so.** `arcons_cc::verify::golden_bounds` is keyed by the wall's scenes
+/// and does not name one of ours — the wall does not know what the desk draws (#276). Every desk scene
+/// therefore starts from its `DEFAULT_BOUNDS`: two steps of channel tolerance, 200 pixels changed by
+/// more than one step, and 600 pixels changed by exactly one — the numbers the wall's ordinary scenes
+/// use, and the numbers `--compare` prints on every run.
+///
+/// **Where a measurement goes:** here, beside the scene list it describes. When CI's lavapipe has
+/// rendered these scenes and the first real diff is recorded, this function returns that measured
+/// `Bounds` for the scene that measured it, exactly as `golden_bounds` does for the wall's exceptions.
+/// It does not go in the wall's table, and it is never a number picked to make a diff pass.
+pub fn bounds(name: &str) -> Bounds {
+    arcons_cc::verify::golden_bounds(name)
 }
