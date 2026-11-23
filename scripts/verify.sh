@@ -73,8 +73,13 @@ if have_crate; then
   # tolerates warnings, and a warning in code nothing compiles is rot that has already started. CI's `map`
   # jobs run the same command on the two platforms that have a precompiled core.
   if [ "${VERIFY_WITH_MAP:-0}" = "1" ]; then
+    # `-p arcons-cc`, because `--features map` names a feature of the wall's package, not the workspace's.
+    # `--no-deps`: the workspace conversion (#276) made the vendored `maplibre_native` a **member**, and
+    # a member is linted by name — so `-p arcons-cc` no longer stops at the wall and `-D warnings` started
+    # failing on MapLibre's own build script, which is not ours to police. Dependencies are still built;
+    # they are just not linted.
     step "map feature, clippy -D warnings" \
-      cargo clippy --features map --all-targets -- -D warnings
+      cargo clippy -p arcons-cc --features map --all-targets --no-deps -- -D warnings
   else
     skip "map feature compiles" "VERIFY_WITH_MAP=1 to check it here; CI's map jobs do"
   fi
@@ -104,13 +109,15 @@ elif have scripts/capture.sh; then
     local ok=0
     # The captures run the binary, not a test harness: build it here so `capture.sh` in CI and on a
     # laptop runs the same file.
-    cargo build -q || return 1
+    cargo build -q -p arcons-cc || return 1
     # **The scenes come from the binary, not from a list in this script.** `photo` was added in #41 and
     # never rendered by the gate, because this line named four scenes by hand — and it spent ten days
     # drawing the NATO symbol over a golden that had been regenerated blind (`#54`). A scene that exists is
     # a scene the gate renders; adding one without a golden is a red gate, which is the correct moment to
     # make a human look at it.
-    local scenes="${SCENES:-$(./target/debug/arcons-cc --scenes | paste -sd, -)}"
+    local wall
+    wall="$(scripts/bin-path.sh arcons-cc arcons-cc)" || return 1
+    local scenes="${SCENES:-$("$wall" --scenes | paste -sd, -)}"
     [ -n "$scenes" ] || { echo "  the binary listed no scenes"; return 1; }
     for scene in ${scenes//,/ }; do
       scripts/capture.sh "$scene" || ok=1
@@ -127,6 +134,33 @@ else
   skip "captures" "scripts/capture.sh missing (ticket #9)"
 fi
 
+# The desk's scenes are rendered and compared too (#276). It is a separate step because they are a
+# separate binary with its own scene list, and because `capture.sh` is the wall's harness down to its
+# flags. `capture-desk.sh` proves every desk scene renders, that two runs agree, and that the capture
+# matches `fixtures/golden/desk/` within the bounds `desk::scene::bounds` states — through the same
+# `arcons_cc::verify::compare` the wall uses, never a second comparison. The desk's scenes have not
+# been measured on CI yet, so today they take the defaults, and the numbers are printed every run so
+# the first real measurement is a number in the log rather than a guess in a table.
+if [ "$FAST" -eq 1 ]; then
+  skip "desk captures" "--fast"
+elif have scripts/capture-desk.sh; then
+  run_desk_scenes() {
+    local ok=0
+    cargo build -q -p desk || return 1
+    local desk
+    desk="$(scripts/bin-path.sh desk desk)" || return 1
+    local scenes="${DESK_SCENES:-$("$desk" --scenes | paste -sd, -)}"
+    [ -n "$scenes" ] || { echo "  the desk listed no scenes"; return 1; }
+    for scene in ${scenes//,/ }; do
+      scripts/capture-desk.sh "$scene" || ok=1
+    done
+    return $ok
+  }
+  step "desk captures" run_desk_scenes
+else
+  skip "desk captures" "scripts/capture-desk.sh missing"
+fi
+
 # ---------------------------------------------------------------------------
 # 4. Budgets. Numbers, not vibes. Named as tests that print the measured value — and `--nocapture` puts
 # that number in CI's log, because a budget whose measurement is only visible on failure cannot be audited
@@ -135,7 +169,7 @@ fi
 if [ "$FAST" -eq 1 ]; then
   skip "budgets" "--fast"
 elif have_crate; then
-  step "budgets (frame CPU, memory)" cargo test --all-targets -- --include-ignored --nocapture budget
+  step "budgets (frame CPU, memory)" cargo test -p arcons-cc --all-targets -- --include-ignored --nocapture budget
 else
   skip "budgets" "no crate yet"
 fi

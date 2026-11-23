@@ -20,10 +20,14 @@ cd "$ROOT"
 # every capture into a false diff (found while adding `pane-menu`, #77). `cargo build` is a no-op when the
 # binary is current, so this costs a check rather than a build.
 cargo build -q || exit 1
+# **The binary's path is cargo's answer, not a guess** (docs/build-environment.md): this machine's
+# `[build] target-dir` is a shared store off `./target`, so a script that spells `./target/debug/...`
+# fails after a build that printed `Finished`.
+WALL="$(scripts/bin-path.sh arcons-cc arcons-cc)" || exit 1
 # **The scene list comes from the binary**, not from a list written here: the gate renders what
 # `arcons-cc --scenes` prints (#54), and a golden pass with its own list silently skips a new scene —
 # which is what happened to `panes` the first time, in #68.
-mapfile -t SCENES_ALL < <(./target/debug/arcons-cc --scenes)
+mapfile -t SCENES_ALL < <("$WALL" --scenes)
 [ ${#SCENES_ALL[@]} -gt 0 ] || { echo "capture: the binary listed no scenes" >&2; exit 1; }
 
 UPDATE=0
@@ -53,7 +57,7 @@ for scene in "${SCENES[@]}"; do
   if [ -f "fixtures/scripts/$scene.json" ]; then
     SCRIPT=(--script "fixtures/scripts/$scene.json")
   fi
-  if ! ./target/debug/arcons-cc \
+  if ! "$WALL" \
       --scene "$scene" \
       --at 2 \
       --fps 60 \
@@ -78,7 +82,7 @@ for scene in "${SCENES[@]}"; do
   # Determinism on ANY machine: a second render of the same scene must be the same bytes as the
   # first. This is the part of INV-11 that is true everywhere, and it is the part CI can hold.
   cp "out/$scene.png" "out/$scene.first.png"
-  ./target/debug/arcons-cc --scene "$scene" --at 2 --fps 60 --size 1280x720 --scale 1 \
+  "$WALL" --scene "$scene" --at 2 --fps 60 --size 1280x720 --scale 1 \
     ${SCRIPT[@]+"${SCRIPT[@]}"} --snap "out/$scene.png" > "out/$scene.log" 2>&1
   if cmp -s "out/$scene.first.png" "out/$scene.png"; then
     echo "  two runs identical (INV-11)"
@@ -114,7 +118,7 @@ for scene in "${SCENES[@]}"; do
   if [ ! -f "$golden" ]; then
     echo "  no golden at $golden: run scripts/capture.sh --update-goldens $scene" >&2
     status=1
-  elif ./target/debug/arcons-cc "${compare_args[@]}"; then
+  elif "$WALL" "${compare_args[@]}"; then
     :
   else
     status=1

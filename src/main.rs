@@ -140,26 +140,15 @@ fn assert_capture(args: &config::Args) -> ExitCode {
 /// compare can only be the reference machine's, so CI used to skip goldens altogether. The numbers are
 /// printed on success too — a tolerance nobody can see the margin of is a tolerance that silently
 /// widens.
+///
+/// The counting and the sentence are [`arcons_cc::verify::compare`]'s (#276): the desk compares its
+/// own goldens with the same function, so a bound that moves moves for both, and the two binaries
+/// cannot disagree about what "the same picture" means.
 fn compare_captures(args: &config::Args) -> ExitCode {
     let (Some(candidate), Some(golden)) = (args.image.as_deref(), args.compare_with.as_deref())
     else {
         eprintln!("arcons-cc: --compare needs a golden and --image PATH for the candidate");
         return ExitCode::from(64);
-    };
-    let read = |path: &std::path::Path| arcons_cc::verify::Image::read(path);
-    let (candidate_image, golden_image) = match (read(candidate), read(golden)) {
-        (Ok(a), Ok(b)) => (a, b),
-        (Err(error), _) | (_, Err(error)) => {
-            eprintln!("arcons-cc: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let difference = match arcons_cc::verify::difference(&candidate_image, &golden_image) {
-        Ok(difference) => difference,
-        Err(error) => {
-            eprintln!("arcons-cc: {error}");
-            return ExitCode::FAILURE;
-        }
     };
     // **The scene's bounds** (#130): derived from the golden's name, which is the scene's identity by
     // construction (`fixtures/golden/<scene>.png`). A per-scene measurement lives in one place,
@@ -179,35 +168,19 @@ fn compare_captures(args: &config::Args) -> ExitCode {
     if let Some(rounding) = args.rounding {
         bounds.rounding = rounding;
     }
-    let verdict = arcons_cc::verify::within(difference, bounds);
-    match verdict {
-        Ok(()) if difference.is_identical() => {
-            println!("identical to {} — byte for byte", golden.display());
-            ExitCode::SUCCESS
-        }
-        Ok(()) => {
-            println!(
-                "matches {} within bounds: {} px differ ({} changed, {} rounding), max Δ{}/255 \
-                 (tolerance {}, change {}, rounding {})",
-                golden.display(),
-                difference.differing,
-                difference.changed,
-                difference.rounding,
-                difference.max_delta,
-                bounds.tolerance,
-                bounds.changed,
-                bounds.rounding
-            );
-            ExitCode::SUCCESS
-        }
-        Err(reason) => {
-            eprintln!(
-                "DIFFERS from {} — {reason} (tolerance {}, change {}, rounding {})",
-                golden.display(),
-                bounds.tolerance,
-                bounds.changed,
-                bounds.rounding
-            );
+    match arcons_cc::verify::compare(golden, candidate, bounds) {
+        Ok(comparison) => match comparison.verdict() {
+            Ok(()) => {
+                println!("{}", comparison.pass_line());
+                ExitCode::SUCCESS
+            }
+            Err(reason) => {
+                eprintln!("{}", comparison.fail_line(&reason));
+                ExitCode::FAILURE
+            }
+        },
+        Err(error) => {
+            eprintln!("arcons-cc: {error}");
             ExitCode::FAILURE
         }
     }

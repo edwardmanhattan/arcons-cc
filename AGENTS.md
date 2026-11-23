@@ -40,6 +40,20 @@ The gate parses our own claims, so some failures are about a document rather tha
 
 Every one of those messages names the claim, the file and the ticket that owns it. Read the message; it is the specification.
 
+## The build machine is configured, not default
+
+[`docs/build-environment.md`](docs/build-environment.md) is why a `map` build takes seconds instead
+of an afternoon: a shared artifact store, `debug = 1`, capped linker threads, and a **prebuilt**
+MapLibre core — so `VERIFY_WITH_MAP=1` no longer compiles 2003 C++ files, and the gate's map hole
+(#152) can close on every ticket instead of in CI alone.
+
+Read it before you touch a profile, `jobs`, a target directory or the vendored `maplibre_native`, and
+before any `cargo clean` — with no argument that command empties the store for every checkout, and
+the next build pays for all of them.
+
+A build that prints `-- Configuring Vulkan renderer backend` is not building what we measured: check
+`~/.cargo/config.toml` before you debug anything else.
+
 ## Commands
 
 ```sh
@@ -106,9 +120,11 @@ docs/spec/       the pinned Minos contract — read-only
 src/platform.rs  the log, SIGTERM, the start clock
 src/scene.rs     the named states a capture renders: fixture feed, no network, virtual clock
 src/verify.rs    --assert: pixel and structure questions with numbers
-scripts/         verify.sh (the gate), capture.sh <scene>, assert.sh <png>
+scripts/         verify.sh (the gate), capture.sh <scene>, assert.sh <png>, capture-desk.sh <scene>
 fixtures/scenes/ the 40-vessel feed the scenes load; golden/ the captures they must match
 docs/            verification contract, invariants, ADRs, control.md (the control plane), mobile-remote.md (the phone), mobile-ui.md (its screen), runbook.md
 clients/phone/   the phone: a Dart package the corpus holds to the protocol (ADR-0008, #248). `dart test`, not the gate
 tools/dev-relay/ a development relay: the phone's path with real sockets on both ends (#268). Not the contract
+crates/desk/     the desk: this installation's device id and the time field that says live or backfill
+                 (#275, ADR-0009). `cargo run` is the wall; `cargo run -p desk` is the desk
 ```

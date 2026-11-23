@@ -610,6 +610,11 @@ The numbers are **per scene**, in one place, `verify::golden_bounds`; the defaul
 exceptions carry the measurement that set them. A new scene takes the defaults, and the numbers are
 printed on every run — a bound nobody can see the margin of is a bound that quietly widens.
 
+**The desk compares with the same function** (#276): `desk --compare` calls `verify::compare`, so the
+counting and the printed line have one implementation. Its scenes have not been measured on CI yet, so
+every desk golden takes the defaults; when a run measures one, the number goes beside the desk's scene
+list in `desk::scene::bounds`, not in the wall's table — the wall does not name what the desk draws.
+
 ```
 matches fixtures/golden/panes-filter.png within bounds: 376 px differ (0 changed, 376 rounding), max Δ1/255
 (tolerance 2, change 200, rounding 550)

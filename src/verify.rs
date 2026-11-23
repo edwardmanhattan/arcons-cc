@@ -13,7 +13,7 @@
 //! The assertions are deliberately about geometry, presence and the tokens' colours. Antialiasing
 //! differs between rasterisers; "this pixel is exactly this shade" is a test of the rasteriser.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::map::geometry::{Camera, Rendered};
 use crate::scene;
@@ -5395,6 +5395,10 @@ pub const DEFAULT_BOUNDS: Bounds = Bounds::new(2, 200, 600);
 /// The numbers are **measured, then given a margin**, and printed on every run. A scene added later
 /// gets the defaults; a scene whose text is scaled by a transform — where two rasterisers put glyph
 /// coverage on different subpixel phases — is the case that needs a stated exception.
+///
+/// **This table is the wall's.** The desk's scenes are not named here (#276): a desk scene name in the
+/// wall would be the wall knowing what the desk draws. They take `DEFAULT_BOUNDS` until CI measures
+/// them, and the measurement goes in `crates/desk/src/scene.rs` beside the desk's own scene list.
 pub fn golden_bounds(scene: &str) -> Bounds {
     match scene {
         // **Hundreds of one-step pixels** (#110, #112, #127): labels, the filter panel's rows, and a
@@ -5499,6 +5503,93 @@ pub fn within(diff: Difference, bounds: Bounds) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// One capture compared with one golden: what differed, the bounds it was judged against, and the
+/// golden's path so a log line says which file was compared.
+///
+/// Built by [`compare`]; [`verdict`](Comparison::verdict) is the judgement, and
+/// [`pass_line`](Comparison::pass_line) / [`fail_line`](Comparison::fail_line) are the words the wall
+/// and the desk print. Both binaries print the same sentence because they print this report's, not
+/// because two format strings were kept in step by hand.
+#[derive(Clone, Debug)]
+pub struct Comparison {
+    /// The golden this capture was compared with.
+    pub golden: PathBuf,
+    /// The counted difference, before the bounds are applied.
+    pub difference: Difference,
+    /// The three numbers the difference was judged against.
+    pub bounds: Bounds,
+}
+
+impl Comparison {
+    /// Inside the bounds, or the sentence saying which count was over.
+    pub fn verdict(&self) -> Result<(), String> {
+        within(self.difference, self.bounds)
+    }
+
+    /// The line a passing comparison prints: bytes-identical gets its own sentence, everything else
+    /// prints the counts and all three bounds. **The numbers are printed on success too** — a bound
+    /// nobody can see the margin of is a bound that quietly widens.
+    pub fn pass_line(&self) -> String {
+        if self.difference.is_identical() {
+            format!("identical to {} — byte for byte", self.golden.display())
+        } else {
+            format!(
+                "matches {} within bounds: {} px differ ({} changed, {} rounding), max Δ{}/255 \
+                 (tolerance {}, change {}, rounding {})",
+                self.golden.display(),
+                self.difference.differing,
+                self.difference.changed,
+                self.difference.rounding,
+                self.difference.max_delta,
+                self.bounds.tolerance,
+                self.bounds.changed,
+                self.bounds.rounding
+            )
+        }
+    }
+
+    /// The line a failing comparison prints: what differed, which budget it broke, and all three
+    /// numbers, so the reader can tell a moved block from a widened allowance.
+    pub fn fail_line(&self, reason: &str) -> String {
+        format!(
+            "DIFFERS from {} — {reason} (tolerance {}, change {}, rounding {})",
+            self.golden.display(),
+            self.bounds.tolerance,
+            self.bounds.changed,
+            self.bounds.rounding
+        )
+    }
+}
+
+/// Compare one capture against one golden at a stated [`Bounds`] — the one comparison both binaries
+/// use. The wall's `--compare` and the desk's are thin callers of this; neither has its own counting.
+///
+/// `bounds` is the three numbers of #130, and each is a **measurement, never a taste**:
+///
+/// - `tolerance` — how far one channel may differ, in 255ths. Two steps is a rasteriser's rounding at
+///   a glyph edge; a scene that measured differently carries its exception in [`golden_bounds`].
+/// - `changed` — how many pixels may differ by **more than one step**. Those are ink where the golden
+///   has water, or a colour that moved, so this budget is deliberately tight: a label-sized block
+///   moved by a visible amount fails it.
+/// - `rounding` — how many pixels may differ by **exactly one step**. Generous enough for a
+///   rasteriser's text, and still bounded: a panel-sized area one step off fails.
+///
+/// The numbers come from runs on CI's lavapipe and on the reference machine, recorded beside the scene
+/// that measured them in [`golden_bounds`]; they are not chosen to make a particular diff pass. A
+/// different image size is an error rather than a difference — a golden of the wrong shape is a
+/// different picture, not a large one — and a missing or unreadable file is an error, never a silent
+/// pass.
+pub fn compare(golden: &Path, candidate: &Path, bounds: Bounds) -> Result<Comparison, String> {
+    let candidate_image = Image::read(candidate)?;
+    let golden_image = Image::read(golden)?;
+    let difference = difference(&candidate_image, &golden_image)?;
+    Ok(Comparison {
+        golden: golden.to_path_buf(),
+        difference,
+        bounds,
+    })
 }
 
 /// The whole check for one scene: its pixels, then its structure.
@@ -5792,6 +5883,145 @@ mod tests {
             a.set(0, 0, [0, 0, 0, 0]);
             let b = image(2, 2, [0, 0, 0, 255]);
             assert_eq!(difference(&a, &b).expect("same size").differing, 1);
+        }
+    }
+
+    /// **The one comparison both binaries call** (#276). These tests go through `compare` — read,
+    /// count, report — rather than through `within` alone, so a caller that skipped a step would be
+    /// red here even though the arithmetic was already covered.
+    mod comparison_tests {
+        use super::*;
+
+        /// A directory this test owns, under the OS temp dir: `compare` reads real PNGs, and a test
+        /// that writes into the tree leaves a file nobody meant to commit.
+        fn temp(name: &str) -> PathBuf {
+            let dir =
+                std::env::temp_dir().join(format!("arcons-compare-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("a temp directory");
+            dir
+        }
+
+        /// Write a capture the way the renderer does: 8-bit RGBA, no interlacing.
+        fn write(path: &Path, image: &Image) {
+            let file = std::fs::File::create(path).expect("a file to write");
+            let mut encoder =
+                png::Encoder::new(std::io::BufWriter::new(file), image.width, image.height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().expect("a PNG header");
+            writer.write_image_data(&image.pixels).expect("the pixels");
+            writer.finish().expect("a finished PNG");
+        }
+
+        /// **A rasteriser's rounding passes**, one step on 23 pixels — the worst measured between
+        /// lavapipe and this laptop's GPU — inside the ordinary rounding budget.
+        #[test]
+        fn a_one_step_difference_inside_the_rounding_budget_passes() {
+            let dir = temp("rounding");
+            let golden = Image::synthetic(100, 100, [10, 20, 30, 255]);
+            let mut candidate = Image::synthetic(100, 100, [10, 20, 30, 255]);
+            for i in 0..23 {
+                candidate.set(i, 0, [11, 20, 30, 255]);
+            }
+            write(&dir.join("golden.png"), &golden);
+            write(&dir.join("candidate.png"), &candidate);
+
+            let comparison = compare(
+                &dir.join("golden.png"),
+                &dir.join("candidate.png"),
+                DEFAULT_BOUNDS,
+            )
+            .expect("two captures of one size");
+            assert_eq!(
+                comparison.difference,
+                Difference {
+                    differing: 23,
+                    rounding: 23,
+                    changed: 0,
+                    max_delta: 1
+                }
+            );
+            assert!(comparison.verdict().is_ok(), "{:?}", comparison.verdict());
+            let line = comparison.pass_line();
+            assert!(
+                line.contains("23 px differ (0 changed, 23 rounding)"),
+                "the passing line prints the counts: {line}"
+            );
+            assert!(
+                line.contains("(tolerance 2, change 200, rounding 600)"),
+                "and the bounds, so the margin is visible: {line}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// **A block moved past the change budget fails, and the message names the count.** The
+        /// tolerance is 255 here so the count — not the colour of the moved ink — is the claim being
+        /// tested; the ordinary tolerance would fail first with the same verdict (#130).
+        #[test]
+        fn a_moved_block_fails_the_change_budget_and_the_line_names_the_count() {
+            let dir = temp("changed");
+            let mut golden = Image::synthetic(320, 80, [10, 20, 30, 255]);
+            let mut candidate = Image::synthetic(320, 80, [10, 20, 30, 255]);
+            // A label-sized block of ink at x=20, and the same block eight pixels to the right.
+            for y in 20..36 {
+                for x in 20..220 {
+                    golden.set(x, y, [240, 240, 235, 255]);
+                }
+                for x in 28..228 {
+                    candidate.set(x, y, [240, 240, 235, 255]);
+                }
+            }
+            // A rasteriser's own noise on top: 200 pixels one step off, which is not a change.
+            for i in 0..200 {
+                candidate.set(i % 320, 60 + i / 320, [11, 20, 30, 255]);
+            }
+            write(&dir.join("golden.png"), &golden);
+            write(&dir.join("candidate.png"), &candidate);
+
+            let bounds = Bounds::new(255, DEFAULT_BOUNDS.changed, DEFAULT_BOUNDS.rounding);
+            let comparison = compare(&dir.join("golden.png"), &dir.join("candidate.png"), bounds)
+                .expect("two captures of one size");
+            assert_eq!(
+                comparison.difference.changed, 256,
+                "the eight-pixel move trades 8 columns of ink for water twice: {}",
+                comparison.difference.changed
+            );
+            assert_eq!(
+                comparison.difference.rounding, 200,
+                "the one-step noise is inside its own budget"
+            );
+            let reason = comparison
+                .verdict()
+                .expect_err("a moved block is a change, not rounding");
+            assert!(
+                reason.contains("256 pixels changed by more than one step"),
+                "the reason names the count: {reason}"
+            );
+            assert!(reason.contains("budget 200"), "{reason}");
+            let line = comparison.fail_line(&reason);
+            assert!(
+                line.contains("256 pixels changed by more than one step"),
+                "{line}"
+            );
+            assert!(
+                line.contains("(tolerance 255, change 200, rounding 600)"),
+                "{line}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// A missing golden is an error naming the file, never a panic and never a pass: the desk's
+        /// `--compare` turns it into "run scripts/capture-desk.sh --update-goldens".
+        #[test]
+        fn a_missing_golden_is_an_error_that_names_the_file() {
+            let missing = std::env::temp_dir()
+                .join(format!("arcons-compare-absent-{}.png", std::process::id()));
+            let _ = std::fs::remove_file(&missing);
+            let error =
+                compare(&missing, &missing, DEFAULT_BOUNDS).expect_err("there is no such file");
+            assert!(error.contains("arcons-compare-absent-"), "{error}");
+            assert!(error.contains("cannot open"), "{error}");
         }
     }
 }

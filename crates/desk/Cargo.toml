@@ -1,0 +1,19 @@
+[package]
+name = "desk"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Arcons Desk — the shore client that writes the Minos live feed"
+# Proprietary, like the wall: no `license` field and no root `LICENSE`. See README and THIRD-PARTY-NOTICES.
+
+[dependencies]
+# The installation's identity: 16 bytes from the OS, formatted as a v4 UUID. Already in the graph for the
+# wall's pairing keys, so the desk adds no dependency of its own (#194).
+getrandom = "0.3"
+# The renderer. Pinned by rev in `[workspace.dependencies]`, like the wall's, so the two applications
+# cannot draw with two Runes (#276, ADR-0009 decision 1).
+rune = { workspace = true }
+# **The wall's tokens and only the wall's.** A colour or a size is named once, in
+# `src/ui/tokens.rs`, and the desk reads that file rather than keeping a second palette (#276,
+# decision 5). The wall's library, not its binary: nothing here can post a fix.
+arcons-cc = { path = "../.." }

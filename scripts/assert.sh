@@ -24,4 +24,5 @@ scene="$(basename "$png" .png)"
 args=(--assert "$scene" --image "$png")
 
 printf '\n\033[1m▶ assert %s\033[0m\n' "$scene"
-./target/debug/arcons-cc "${args[@]}"
+WALL="$(scripts/bin-path.sh arcons-cc arcons-cc)" || exit 70
+"$WALL" "${args[@]}"
