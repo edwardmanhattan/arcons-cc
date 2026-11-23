@@ -195,8 +195,9 @@ writes the token or the deployment's host into a file.
 | `unreadable.json` | **Recorded**: `"latitude": "-6.1"`, answered `422` on `_request` |
 | `created.json` | **Derived from Minos `496ae25`**, not recorded: `dto.FeedRelayedResult` and `IngestRelayed`'s `201`. Writing one would store a fix for a real vessel, so a human records it or it stays derived — and the file says which it is. It carries `latest: false`, the answer that says a late report did not move the picture |
 
-**Replace `created.json` with a recording the first time a human lets one through**, and keep the `latest: false`
-case: it is the one an operator is most likely to misread.
+**Replace `created.json` with a recording the first time a human lets one through** — the script has the lever for
+it, `scripts/record-desk-report.sh --write <id_unit> <lat> <lon>`, which sends one live fix for a hull you name and
+writes what came back — and keep the `latest: false` case: it is the one an operator is most likely to misread.
 
 ## `scenes/` and `golden/` — recorded 2026-11-07
 

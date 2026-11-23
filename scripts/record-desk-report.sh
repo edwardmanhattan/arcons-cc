@@ -4,11 +4,16 @@
 #   MINOS_BASE_URL=https://…/api/v1 \
 #   MINOS_IDENTIFIER=… MINOS_PASSWORD=… scripts/record-desk-report.sh
 #
-# **Only refusals are recorded.** Every exchange this script makes writes nothing: a missing field, a hull with
-# no commander appointed, a time older than 30 days, a hull that does not exist, and a body the route cannot
-# read. The accepted answer is a **201 that stores a fix for a real vessel**, so it is deliberately not here:
-# a human decides when one goes into a shared deployment, and the fixture is replaced by hand with the bytes
-# that came back.
+# **By default only refusals are recorded.** Every exchange this script makes writes nothing: a missing field, a
+# hull with no commander appointed, a time older than 30 days, a hull that does not exist, and a body the route
+# cannot read. The accepted answer is a **201 that stores a fix for a real vessel**, so it is behind an explicit
+# flag and never part of the default run:
+#
+#   scripts/record-desk-report.sh --write <id_unit> <latitude> <longitude>
+#
+# That sends one **live** fix for that hull at that position, now, and writes `created.json` from what came back.
+# A hull with no commander appointed cannot answer 201, so the flag names the hull and the script says which one it
+# used. Nothing here chooses a vessel for you.
 #
 # The credential arrives in the **environment**, never as an argument (an argument is in the shell's history and
 # in `ps`), and the token from `/auth/login` is never printed, never written to a fixture and never logged. What
@@ -50,6 +55,7 @@ fi
 
 # The instant every "too old" exchange is measured from: 40 days back from now, in UTC.
 old_at="$(python3 -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=40)).strftime("%Y-%m-%dT%H:%M:%S.000Z"))')"
+now_at="$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"))')"
 
 # post <name> <json-body>
 post() {
@@ -94,4 +100,14 @@ post no-such-vessel "$(python3 -c 'import json,sys; print(json.dumps({"id_unit":
 
 post unreadable '{"id_unit": 8, "latitude": "-6.1", "longitude": "106.87", "recorded_at": "not a time"}'
 
-echo "done. The accepted 201 is not recorded here: it writes a fix for a real hull."
+if [ "${1:-}" = "--write" ]; then
+  id_unit="${2:?--write needs an id_unit}"
+  latitude="${3:?--write needs a latitude}"
+  longitude="${4:?--write needs a longitude}"
+  echo "writing ONE live fix: hull $id_unit at $latitude, $longitude, recorded_at $now_at"
+  post created "$(python3 -c 'import json,sys; print(json.dumps({"id_unit": int(sys.argv[1]), "latitude": float(sys.argv[2]), "longitude": float(sys.argv[3]), "recorded_at": sys.argv[4]}))' "$id_unit" "$latitude" "$longitude" "$now_at")"
+  echo "created.json holds what the deployment answered. It is now a recording, not a shape."
+else
+  echo "done. The accepted 201 is not recorded: it writes a fix for a real hull. Pass --write <id_unit> <lat> <lon>"
+  echo "to record one, and note which hull the fix went to."
+fi
