@@ -13,6 +13,7 @@
 
 use std::time::Duration;
 
+use crate::deployment::Deployment;
 use crate::report::{Answer, Body, PATH};
 use crate::send::{Failure, Transport};
 
@@ -69,19 +70,37 @@ impl Client {
         })
     }
 
-    /// A base URL and a credential from the environment: `MINOS_BASE_URL`, `MINOS_IDENTIFIER`, `MINOS_PASSWORD`.
+    /// Start from a refresh token: the desk's preferred mode for a deployment, because a password at rest is a
+    /// password to rotate. The first refresh is what validates it.
+    pub fn with_refresh(base: &str, token: &str) -> Result<Self, Failure> {
+        let mut client = Self {
+            base: base.trim_end_matches('/').to_string(),
+            agent: agent()?,
+            access: String::new(),
+            refresh: Some(token.to_string()),
+        };
+        client.refresh()?;
+        Ok(client)
+    }
+
+    /// Connect to the deployment this installation is configured for (#278).
     ///
-    /// The environment rather than a file, because this is a deployment's setting and not the operator's: a value
-    /// in the tree is a value in the repository, and `INV-08` keeps both the host and the credential out of it.
-    pub fn from_environment() -> Result<Self, Failure> {
-        let base = std::env::var("MINOS_BASE_URL").map_err(|_| {
-            Failure::new("no deployment: set MINOS_BASE_URL (e.g. https://host/api/v1)")
-        })?;
-        let identifier = std::env::var("MINOS_IDENTIFIER")
-            .map_err(|_| Failure::new("no credential: set MINOS_IDENTIFIER and MINOS_PASSWORD"))?;
-        let password = std::env::var("MINOS_PASSWORD")
-            .map_err(|_| Failure::new("no credential: set MINOS_IDENTIFIER and MINOS_PASSWORD"))?;
-        Self::sign_in(&base, &identifier, &password)
+    /// The order and the rules are the wall's own ([`Deployment`]): `MINOS_BASE_URL` or `config.toml` for the
+    /// deployment, `MINOS_IDENTIFIER`+`MINOS_PASSWORD`/`MINOS_REFRESH_TOKEN` or `credentials.toml` (mode 0600) for
+    /// the credential. Refusals come back as a [`Failure`] the tray can show, because a desk that cannot say where
+    /// to send has nothing else to do with the batch.
+    pub fn connect() -> Result<Self, Failure> {
+        let deployment = Deployment::load().map_err(|refused| Failure::new(refused.to_string()))?;
+        let minos = &deployment.minos;
+        if let Some((identifier, password)) = minos.password() {
+            return Self::sign_in(minos.base_url(), identifier, password);
+        }
+        match minos.refresh_token() {
+            Some(token) => Self::with_refresh(minos.base_url(), token),
+            None => Err(Failure::new(
+                "no credential: set MINOS_IDENTIFIER and MINOS_PASSWORD, or MINOS_REFRESH_TOKEN",
+            )),
+        }
     }
 
     /// The base this client talks to, without a credential in it.

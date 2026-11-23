@@ -794,21 +794,32 @@ fn add_vessel() -> El {
 /// two and refused one has no single word that is true of it.
 fn footer(state: &State) -> El {
     let vessels = state.desk.batch().len();
-    let words = state.send_line().unwrap_or_else(|| {
-        format!(
-            "{} {} · {} {} · nothing sent",
-            vessels,
-            plural(vessels, "vessel", "vessels"),
-            vessels,
-            plural(vessels, "fix", "fixes")
-        )
-    });
+    let words = state
+        .send_line()
+        .or_else(|| state.review_line())
+        .unwrap_or_else(|| {
+            format!(
+                "{} {} · {} {} · nothing sent",
+                vessels,
+                plural(vessels, "vessel", "vessels"),
+                vessels,
+                plural(vessels, "fix", "fixes")
+            )
+        });
+    // **The button names the requests, not the cards.** A row the loop would skip is not a report, and a button
+    // that said "Send 2" beside "1 not sent" would be the count disagreeing with the line next to it.
+    let ready = state
+        .desk
+        .batch()
+        .plan(Some(state.server_now_ms))
+        .sendable
+        .len();
     let send = if state.sending() {
         "Sending…".to_string()
     } else {
-        format!("Send {vessels} {}", plural(vessels, "report", "reports"))
+        format!("Send {ready} {}", plural(ready, "report", "reports"))
     };
-    let enabled = vessels > 0 && !state.sending();
+    let enabled = ready > 0 && !state.sending();
     // "One request each" is a claim about the wire, and with nothing in the draft there is no each.
     let mut row = el()
         .key("tray-footer")

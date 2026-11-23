@@ -188,7 +188,10 @@ impl State {
         }
         let plan = self.desk.batch().plan(Some(self.server_now_ms));
         if plan.sendable.is_empty() {
-            self.send_failure = Some("nothing to send: no row is ready".to_string());
+            self.send_failure = Some(match self.review_line() {
+                Some(held) => format!("nothing to send — {held}"),
+                None => "nothing to send: no row is ready".to_string(),
+            });
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();
@@ -196,7 +199,7 @@ impl State {
         self.sent = None;
         self.send_failure = None;
         std::thread::spawn(move || {
-            let result = match crate::http::Client::from_environment() {
+            let result = match crate::http::Client::connect() {
                 Ok(mut client) => Ok(crate::send::send_all(&plan, &mut client)),
                 Err(failure) => Err(failure),
             };
@@ -233,6 +236,31 @@ impl State {
     /// Is a send out?
     pub fn sending(&self) -> bool {
         self.inbox.is_some()
+    }
+
+    /// **What the tray reviews before a send**: the rows that will not leave, and why.
+    ///
+    /// The tray already shows each row's regime, but a row can be held for a reason the card does not carry — no
+    /// position, a clock that has not answered, a value the fence refuses. Those rows are named here rather than
+    /// dropped from the loop in silence, which is the same rule as a `403` keeping its row: a fix that was typed is
+    /// not lost without a sentence. `None` when every row is ready, so the ordinary line stands.
+    pub fn review_line(&self) -> Option<String> {
+        let plan = self.desk.batch().plan(Some(self.server_now_ms));
+        if plan.blocked.is_empty() {
+            return None;
+        }
+        let parts: Vec<String> = plan
+            .blocked
+            .iter()
+            .map(|(id_unit, reason)| {
+                let name = self
+                    .desk
+                    .vessel(*id_unit)
+                    .map_or_else(|| id_unit.to_string(), |vessel| vessel.name.clone());
+                format!("{name}: {}", reason.sentence())
+            })
+            .collect();
+        Some(format!("not sent — {}", parts.join(" · ")))
     }
 
     /// The one-line account of the last send: what each vessel's own answer was.
@@ -1948,14 +1976,18 @@ mod tests {
             runtime.find("batch-badge-3").is_none(),
             "the selected hull is not in the draft, so it has no badge"
         );
+        // **The line reviews the send** (#278): the scene's second hull has no position, so the loop would skip
+        // it — and a row that will not leave is named with its reason instead of being dropped in silence. The
+        // count the footer used to carry is on the button, and `State::send_line` replaces this line with each
+        // vessel's answer once a send has happened.
         assert_eq!(
             element(&runtime, "tray-foot").text.as_deref(),
-            Some("2 vessels · 2 fixes · nothing sent")
+            Some("not sent — KRI BUNG TOMO: both coordinates are needed")
         );
         assert_eq!(
             element(&runtime, "send-reports").label.as_deref(),
-            Some("Send 2 reports"),
-            "one request per vessel means the send names the same number as the footer"
+            Some("Send 1 report"),
+            "the button names the requests that will be made, and one hull has no position to send"
         );
     }
 
@@ -2005,6 +2037,28 @@ mod tests {
         assert!(
             !line.contains("nothing sent"),
             "a send that reported two vessels does not say nothing was sent: {line}"
+        );
+    }
+
+    #[test]
+    fn a_row_a_send_would_leave_behind_is_named_with_its_reason() {
+        // The loop sends `plan.sendable`; a row it would skip must be said out loud, not dropped in silence.
+        let mut state = scene::state_for("batch");
+        let id_unit = state.desk.batch().rows()[0].id_unit;
+        let name = state.desk.vessel(id_unit).expect("the hull").name.clone();
+        let mut held = state.desk.batch().get(id_unit).expect("its row").clone();
+        held.fix.latitude = None;
+        held.fix.longitude = None;
+        state.desk.add_row(held);
+
+        let line = state.review_line().expect("a blocked row is a line");
+        assert!(
+            line.starts_with("not sent —"),
+            "the line says the row did not leave: {line}"
+        );
+        assert!(
+            line.contains(&name) && line.contains("coordinates"),
+            "the vessel and the reason are both named: {line}"
         );
     }
 

@@ -8,6 +8,7 @@
 
 pub mod batch;
 pub mod chart;
+pub mod deployment;
 pub mod field;
 pub mod http;
 pub mod identity;
