@@ -90,6 +90,13 @@ pub struct State {
     pub arming: bool,
     /// Where that crosshair is, in chart points.
     pub crosshair: (f64, f64),
+    /// The worker's answer comes through here, and `poll` asks for it. `Some` means a send is out.
+    pub inbox:
+        Option<std::sync::mpsc::Receiver<Result<Vec<crate::send::Trip>, crate::send::Failure>>>,
+    /// What each vessel's answer was, once the worker has answered — per row, never a batch's "sent".
+    pub sent: Option<Vec<crate::send::Trip>>,
+    /// Why nothing left, when nothing did.
+    pub send_failure: Option<String>,
 }
 
 impl State {
@@ -116,6 +123,9 @@ impl State {
             chart_origin: None,
             arming: false,
             crosshair: (360.0, 260.0),
+            inbox: None,
+            sent: None,
+            send_failure: None,
             error: None,
             notice: None,
             desk: crate::scene::sample_desk(epoch_ms),
@@ -164,6 +174,93 @@ impl State {
         };
         self.desk.add_row(row);
         self.notice = Some(format!("placed at {lat:.5}, {lon:.5} — not sent"));
+    }
+
+    /// **Send the batch**, one request per vessel, on a worker (#278).
+    ///
+    /// The UI thread never makes the request: a blocking POST in `view` would freeze the wall for as long as the
+    /// deployment takes to answer, and a hung socket for twenty seconds is a screen that cannot be trusted. The
+    /// plan is a snapshot taken here; the worker owns it from this point, and the answer arrives through
+    /// [`State::send_answered`] on the frame loop.
+    pub fn send(&mut self) {
+        if self.inbox.is_some() {
+            return;
+        }
+        let plan = self.desk.batch().plan(Some(self.server_now_ms));
+        if plan.sendable.is_empty() {
+            self.send_failure = Some("nothing to send: no row is ready".to_string());
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.inbox = Some(rx);
+        self.sent = None;
+        self.send_failure = None;
+        std::thread::spawn(move || {
+            let result = match crate::http::Client::from_environment() {
+                Ok(mut client) => Ok(crate::send::send_all(&plan, &mut client)),
+                Err(failure) => Err(failure),
+            };
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Has the worker answered? Asked every frame by [`poll`], which asks for a redraw when it has.
+    pub fn send_answered(&mut self) -> bool {
+        use std::sync::mpsc::TryRecvError;
+        let Some(inbox) = &self.inbox else {
+            return false;
+        };
+        match inbox.try_recv() {
+            Ok(Ok(trips)) => {
+                self.sent = Some(trips);
+                self.inbox = None;
+                true
+            }
+            Ok(Err(failure)) => {
+                self.send_failure = Some(failure.message);
+                self.inbox = None;
+                true
+            }
+            Err(TryRecvError::Empty) => false,
+            Err(TryRecvError::Disconnected) => {
+                self.send_failure = Some("the send ended without an answer".to_string());
+                self.inbox = None;
+                true
+            }
+        }
+    }
+
+    /// Is a send out?
+    pub fn sending(&self) -> bool {
+        self.inbox.is_some()
+    }
+
+    /// The one-line account of the last send: what each vessel's own answer was.
+    ///
+    /// Per row, because the route answers per row: a batch of three that recorded two and refused one has no
+    /// single word that is true of it, so the line names each vessel and its own sentence.
+    pub fn send_line(&self) -> Option<String> {
+        if let Some(failure) = &self.send_failure {
+            return Some(format!("nothing sent: {failure}"));
+        }
+        if self.sending() {
+            return Some("sending — one request per vessel".to_string());
+        }
+        let trips = self.sent.as_ref()?;
+        let mut lines: Vec<String> = trips
+            .iter()
+            .map(|trip| {
+                let name = self
+                    .desk
+                    .vessel(trip.id_unit)
+                    .map_or_else(|| trip.id_unit.to_string(), |vessel| vessel.name.clone());
+                format!("{name}: {}", trip.fate.sentence())
+            })
+            .collect();
+        if lines.is_empty() {
+            lines.push("nothing was sent".to_string());
+        }
+        Some(lines.join(" · "))
     }
 
     /// Arm the keyboard's placement: a crosshair in the middle of the chart, moved by the arrows.
@@ -459,14 +556,17 @@ pub fn run(passthrough: Vec<String>) -> std::process::ExitCode {
 /// this screen the map's thread is that something: it finishes a frame asynchronously, so the pass that
 /// draws it has to be requested. Without this the chart says `the chart is opening` for the life of the
 /// window, with a finished picture sitting in the handle it is not drawing.
-fn poll(_state: &mut State, _elapsed: f64, _tx: &mut rune::Tx) -> bool {
+fn poll(state: &mut State, _elapsed: f64, _tx: &mut rune::Tx) -> bool {
+    // **The send's answer arrives while nobody is pressing anything**, which is the same trap the map's first
+    // frame was: a static screen is never redrawn unless somebody asks.
+    let answered = state.send_answered();
     #[cfg(feature = "map")]
     {
-        crate::chart::engine::frame_arrived()
+        answered | crate::chart::engine::frame_arrived()
     }
     #[cfg(not(feature = "map"))]
     {
-        false
+        answered
     }
 }
 
@@ -1673,16 +1773,6 @@ mod tests {
     // The working surface (#277)
     // -----------------------------------------------------------------------
 
-    /// A press the way an operator makes one: the point the layout gave the element, pressed and released.
-    fn press(rt: &mut rune::Runtime<State>, key: &str) {
-        let (x, y) = rt
-            .find(key)
-            .unwrap_or_else(|| panic!("nothing keyed {key:?} is drawn"));
-        rt.pointer_down(x, y);
-        rt.pointer_up(x, y);
-        rt.frame(0.0);
-    }
-
     fn key(rt: &mut rune::Runtime<State>, key: rune::Key) {
         rt.key(rune::KeyEvent {
             key,
@@ -1870,16 +1960,66 @@ mod tests {
     }
 
     #[test]
-    fn the_send_says_that_nothing_is_sent_until_278() {
-        let mut runtime = frame_once(scene::state_for("batch"));
-        press(&mut runtime, "send-reports");
+    fn the_send_draws_each_vessel_s_own_answer_and_never_one_batch_word() {
+        // The route answers per vessel, so the tray's line does too (#278). The answers here are the recorded
+        // ones; no socket is opened, because what this test is about is the drawing of a result.
+        let mut state = scene::state_for("batch");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let dips = state.desk.batch().rows()[0].id_unit;
+        let bung = state.desk.batch().rows()[1].id_unit;
+        tx.send(Ok(vec![
+            crate::send::Trip {
+                id_unit: dips,
+                body: None,
+                fate: crate::send::Fate::Recorded { latest: false },
+            },
+            crate::send::Trip {
+                id_unit: bung,
+                body: None,
+                fate: crate::send::Fate::Refused(
+                    crate::report::Answer::new(
+                        403,
+                        r#"{"status_code":403,"message":"Bad request","data":{"errors":{"id_unit":"This vessel has no commander appointed, so there is no report to attribute. Assign a commander first."}}}"#,
+                    )
+                    .verdict(),
+                ),
+            },
+        ]))
+        .expect("the fake worker answers");
+        state.inbox = Some(rx);
         assert!(
-            runtime
-                .elements()
-                .into_iter()
-                .filter_map(|element| element.text)
-                .any(|words| words.contains("#278")),
-            "the send control must not pretend to send"
+            state.send_answered(),
+            "the answer is a change the screen must draw"
+        );
+
+        let runtime = frame_once(state);
+        let line = element(&runtime, "tray-foot").text.unwrap_or_default();
+        assert!(
+            line.contains("KRI DIPONEGORO") && line.contains("did not move"),
+            "the first vessel's own answer is in the line: {line}"
+        );
+        assert!(
+            line.contains("KRI BUNG TOMO") && line.contains("no commander appointed"),
+            "the second vessel's answer is its own, not the first's: {line}"
+        );
+        assert!(
+            !line.contains("nothing sent"),
+            "a send that reported two vessels does not say nothing was sent: {line}"
+        );
+    }
+
+    #[test]
+    fn a_send_with_nothing_ready_does_not_start_a_request() {
+        let mut state = scene::state_for("empty");
+        state.send();
+        assert!(!state.sending(), "nothing was ready, so nothing went out");
+        assert!(
+            state
+                .send_failure
+                .as_deref()
+                .is_some_and(|failure| failure.contains("nothing to send")),
+            "the operator is told why, got {:?}",
+            state.send_failure
         );
     }
 

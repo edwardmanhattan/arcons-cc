@@ -657,7 +657,6 @@ fn rail_footer(state: &State) -> El {
 
 /// The batch tray: the draft, and the one request each row will become.
 pub(super) fn tray(state: &State) -> El {
-    let vessels = state.desk.batch().len();
     let mut cards = row()
         .key("tray-cards")
         .w_full()
@@ -693,7 +692,7 @@ pub(super) fn tray(state: &State) -> El {
         .border(tokens::HAIRLINE, tokens::card_edge())
         .child(header)
         .child(cards)
-        .child(footer(vessels))
+        .child(footer(state))
 }
 
 /// One vessel in the draft: the ship, the hull, the regime the row's time earns, and a way to drop it.
@@ -790,18 +789,26 @@ fn add_vessel() -> El {
 /// The footer: how many vessels, how many fixes, how many requests, and the primary control.
 ///
 /// **One number.** `vessels` is the batch's length, and one row is one vessel and one request, so the
-/// footer and the button read the same value rather than three counts that could drift apart. The button
-/// does not send: #278 does, and until then it says so.
-fn footer(vessels: usize) -> El {
-    let words = format!(
-        "{} {} · {} {} · nothing sent",
-        vessels,
-        plural(vessels, "vessel", "vessels"),
-        vessels,
-        plural(vessels, "fix", "fixes")
-    );
-    let send = format!("Send {vessels} {}", plural(vessels, "report", "reports"));
-    let enabled = vessels > 0;
+/// footer and the button read the same value rather than three counts that could drift apart. After a send the
+/// left-hand sentence is **each vessel's own answer** (`State::send_line`), because a batch of three that recorded
+/// two and refused one has no single word that is true of it.
+fn footer(state: &State) -> El {
+    let vessels = state.desk.batch().len();
+    let words = state.send_line().unwrap_or_else(|| {
+        format!(
+            "{} {} · {} {} · nothing sent",
+            vessels,
+            plural(vessels, "vessel", "vessels"),
+            vessels,
+            plural(vessels, "fix", "fixes")
+        )
+    });
+    let send = if state.sending() {
+        "Sending…".to_string()
+    } else {
+        format!("Send {vessels} {}", plural(vessels, "report", "reports"))
+    };
+    let enabled = vessels > 0 && !state.sending();
     // "One request each" is a claim about the wire, and with nothing in the draft there is no each.
     let mut row = el()
         .key("tray-footer")
@@ -809,7 +816,7 @@ fn footer(vessels: usize) -> El {
         .items_center()
         .gap(tokens::GAP)
         .child(caption(words).key("tray-foot"));
-    if vessels > 0 {
+    if vessels > 0 && !state.sending() && state.sent.is_none() {
         row = row.child(caption("one request each"));
     }
     row.child(spacer()).child(
@@ -827,7 +834,7 @@ fn footer(vessels: usize) -> El {
             })
             .items_center()
             .justify_center()
-            .on_press(|state: &mut State| state.desk.say_send_arrives())
+            .on_press(|state: &mut State| state.send())
             .child(text(send).font(tokens::LABEL).color(if enabled {
                 tokens::bg()
             } else {
