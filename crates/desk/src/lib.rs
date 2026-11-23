@@ -13,5 +13,6 @@ pub mod identity;
 pub mod picker;
 pub mod report;
 pub mod scene;
+pub mod send;
 pub mod time;
 pub mod ui;
