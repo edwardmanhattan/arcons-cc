@@ -45,6 +45,15 @@ pub const DESK_ROW_H: f32 = 48.0;
 
 /// One card in the batch tray (#277): the ship, its hull, its regime and its remove control.
 pub const DESK_CARD_W: f32 = 216.0;
+
+/// One hull on the desk's chart (#277): small enough to be a position, large enough to be hit.
+pub const DESK_MARK: f32 = 7.0;
+
+/// The ring around the hull the inspector is for, and around a point the operator has placed.
+pub const DESK_RING: f32 = 22.0;
+
+/// The crosshair the keyboard moves when the chart is armed.
+pub const DESK_CROSSHAIR: f32 = 12.0;
 pub const DESK_CARD_H: f32 = 64.0;
 
 /// The rail's minimum scrolling height. Zero on purpose, like the filter panel's: a scroll viewport inside

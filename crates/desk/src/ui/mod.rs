@@ -20,7 +20,10 @@
 use arcons_cc::ui::tokens;
 use rune::{Cx, El, col, el, row, spacer, text};
 
+use arcons_cc::map::geometry::Camera;
+
 use crate::batch::{Fix, Readiness, Row};
+use crate::chart::Chart;
 use crate::field::calendar::Month;
 use crate::field::segment::{Field, Segments};
 use crate::field::zoned::{self, Resolution};
@@ -28,6 +31,7 @@ use crate::field::{CivilTime, FieldError, civil, paste};
 use crate::picker::Vessel;
 use crate::time::{self, Regime, Verdict};
 
+pub mod chart;
 pub mod desk;
 
 use desk::Desk;
@@ -78,6 +82,14 @@ pub struct State {
     pub desk: Desk,
     /// Which surface owns Tab, Enter, Up/Down and Escape, while both want them.
     pub focus: Focus,
+    /// The chart's camera and the rectangle it projects through (ADR-0009, decision 4).
+    pub chart: Chart,
+    /// The camera a pan started on, so the preview is absolute rather than a sum of deltas.
+    pub chart_origin: Option<Camera>,
+    /// The keyboard's placement: set by `Place`, moved by the arrows, closed by Enter or Escape.
+    pub arming: bool,
+    /// Where that crosshair is, in chart points.
+    pub crosshair: (f64, f64),
 }
 
 impl State {
@@ -100,6 +112,10 @@ impl State {
             month: Month::of_days(civil::days_from_civil(2026, 11, 20)),
             calendar_open: true,
             focus: Focus::Field,
+            chart: Chart::new((-6.10, 106.88), 8.5, (720.0, 520.0)),
+            chart_origin: None,
+            arming: false,
+            crosshair: (360.0, 260.0),
             error: None,
             notice: None,
             desk: crate::scene::sample_desk(epoch_ms),
@@ -111,6 +127,71 @@ impl State {
     pub fn selected_day(&self) -> Option<u32> {
         let civil = self.segments.commit().unwrap_or(self.committed);
         (civil.year == self.month.year() && civil.month == self.month.month()).then_some(civil.day)
+    }
+
+    /// **A press on the chart.** The point under the pointer becomes the selected hull's claim, with the
+    /// field's time: a drop is an observation, never a guess at the future and never a send.
+    pub fn place_at(&mut self, x: f64, y: f64) {
+        let Some(id_unit) = self.desk.selected() else {
+            self.notice = Some("select a vessel before placing it".to_string());
+            return;
+        };
+        let (lat, lon) = self.chart.place_at(x, y);
+        self.place(id_unit, lat, lon);
+    }
+
+    /// Put a hull at a coordinate, in the draft, at the time the field holds.
+    ///
+    /// The batch keeps one row per vessel, so placing twice replaces the row rather than adding a second:
+    /// the second press is a correction, which is what a second fix for one hull always is.
+    pub fn place(&mut self, id_unit: u64, lat: f64, lon: f64) {
+        let Some(name) = self.desk.vessel(id_unit).map(|vessel| vessel.name.clone()) else {
+            return;
+        };
+        let draft = self.desk.draft(id_unit);
+        let row = Row {
+            id_unit,
+            name,
+            fix: Fix {
+                recorded_at_ms: self.epoch_ms,
+                offset_ms: WIB_OFFSET_MS,
+                latitude: Some(lat),
+                longitude: Some(lon),
+                speed_kn: draft.speed_kn,
+                course_deg: draft.course_deg,
+                accuracy_m: draft.accuracy_m,
+            },
+        };
+        self.desk.add_row(row);
+        self.notice = Some(format!("placed at {lat:.5}, {lon:.5} — not sent"));
+    }
+
+    /// Arm the keyboard's placement: a crosshair in the middle of the chart, moved by the arrows.
+    pub fn arm(&mut self) {
+        let viewport = self.chart.viewport();
+        self.crosshair = (viewport.w / 2.0, viewport.h / 2.0);
+        self.arming = true;
+        self.focus = Focus::Chart;
+        self.notice = Some("arrows move the crosshair, Enter places, Escape cancels".to_string());
+    }
+
+    pub fn disarm(&mut self) {
+        self.arming = false;
+        self.focus = Focus::Field;
+    }
+
+    /// Move the crosshair, staying on the chart: a placement off the water is not a placement.
+    pub fn nudge(&mut self, dx: f64, dy: f64) {
+        let viewport = self.chart.viewport();
+        self.crosshair.0 = (self.crosshair.0 + dx).clamp(0.0, viewport.w);
+        self.crosshair.1 = (self.crosshair.1 + dy).clamp(0.0, viewport.h);
+    }
+
+    /// Enter while armed: the crosshair becomes the claim.
+    pub fn commit_placement(&mut self) {
+        let (x, y) = self.crosshair;
+        self.place_at(x, y);
+        self.disarm();
     }
 
     /// A digit from the keyboard or a script.
@@ -426,6 +507,8 @@ pub enum Focus {
     #[default]
     Field,
     List,
+    /// An armed placement: the arrows move the crosshair, Enter places, Escape cancels.
+    Chart,
 }
 
 pub fn on_key(state: &mut State, event: &rune::KeyEvent, tx: &mut rune::Tx) -> bool {
@@ -438,11 +521,27 @@ pub fn on_key(state: &mut State, event: &rune::KeyEvent, tx: &mut rune::Tx) -> b
         );
         return true;
     }
+    // **An armed placement owns the arrows**, because moving a crosshair and stepping a segment cannot both
+    // be what Up means. Enter places and Escape cancels: the two things a modal placement must answer.
+    if state.arming {
+        let step = crate::ui::chart::nudge_step(event.mods.shift);
+        match &event.key {
+            rune::Key::Up => state.nudge(0.0, -step),
+            rune::Key::Down => state.nudge(0.0, step),
+            rune::Key::Left => state.nudge(-step, 0.0),
+            rune::Key::Right => state.nudge(step, 0.0),
+            rune::Key::Enter => state.commit_placement(),
+            rune::Key::Escape => state.disarm(),
+            _ => {}
+        }
+        return true;
+    }
     // Tab is the only key that crosses the boundary, and it crosses in one direction: out of the field
     // from its last segment, and back with Shift.
     if matches!(event.key, rune::Key::Tab) {
         let forward = !event.mods.shift;
         match (state.focus, forward) {
+            (Focus::Chart, _) => state.disarm(),
             (Focus::List, true) => state.desk.tab(1),
             // Shift-Tab walks back through the rows and leaves for the field from the first one, so the
             // list is a ring rather than a trap.
@@ -540,7 +639,7 @@ pub fn view(state: &State, _cx: &mut Cx<State>) -> El {
                         .grow(1.0)
                         .h_full()
                         .gap(tokens::GAP)
-                        .child(chart_placeholder())
+                        .child(crate::ui::chart::view(state))
                         .child(desk::tray(state)),
                 )
                 .child(form(state)),
@@ -562,24 +661,6 @@ fn title_bar() -> El {
         )
         .child(spacer())
         .child(caption("OPERATIONS · JAKARTA"))
-}
-
-/// The chart's place, flat and honest: #277's map is the next commit, and this panel says so.
-fn chart_placeholder() -> El {
-    col()
-        .key("chart-placeholder")
-        .w_full()
-        .grow(1.0)
-        .items_center()
-        .justify_center()
-        .radius(tokens::PANEL_RADIUS)
-        .fill(tokens::panel())
-        .border(tokens::HAIRLINE, tokens::card_edge())
-        .child(
-            text("The chart arrives with the next commit")
-                .font(tokens::LABEL)
-                .color(tokens::ink_dim()),
-        )
 }
 
 /// **The calendar is a popover, not a column.** It is attached at the root, after its anchor, because a
@@ -1593,7 +1674,7 @@ mod tests {
     }
 
     #[test]
-    fn the_surface_draws_the_rail_the_tray_and_a_flat_chart_that_says_it_comes_next() {
+    fn the_surface_draws_the_rail_the_chart_the_tray_and_the_inspector() {
         let runtime = frame_once(scene::state_for("batch"));
         for key in [
             "vessel-search",
@@ -1605,7 +1686,10 @@ mod tests {
             "tray-card-2",
             "add-vessel",
             "send-reports",
-            "chart-placeholder",
+            "chart",
+            "zoom-in",
+            "zoom-out",
+            "arm-placement",
             "inspector",
         ] {
             assert!(
@@ -1613,14 +1697,15 @@ mod tests {
                 "the desk's surface has no {key}: the wireframe's screen is incomplete"
             );
         }
-        let chart = runtime
-            .elements()
-            .into_iter()
-            .filter_map(|element| element.text)
-            .any(|words| words.contains("chart arrives with the next commit"));
+        // The chart draws the picture's hulls: one dot per hull that has ever reported, and no dot for a
+        // hull that never has — a marker at 0,0 would be a ship in the Gulf of Guinea.
         assert!(
-            chart,
-            "the map is not in this commit, and the panel must say so rather than draw an empty sea"
+            runtime.find("hull-1").is_some(),
+            "the live hull is on the chart"
+        );
+        assert!(
+            runtime.find("hull-2").is_none(),
+            "a hull that never reported has no place on the chart"
         );
     }
 
