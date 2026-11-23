@@ -17,3 +17,10 @@ rune = { workspace = true }
 # `src/ui/tokens.rs`, and the desk reads that file rather than keeping a second palette (#276,
 # decision 5). The wall's library, not its binary: nothing here can post a fix.
 arcons-cc = { path = "../.." }
+
+[features]
+default = []
+# #277's chart, with the engine behind it: MapLibre's thread, the offline seed and the RGBA handoff.
+# Off by default so the gate runs with no C++ toolchain (AGENTS.md, #152); on locally and in CI's map
+# jobs, which is where this code is compiled.
+map = ["arcons-cc/map"]

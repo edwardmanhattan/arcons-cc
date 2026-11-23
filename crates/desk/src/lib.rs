@@ -7,8 +7,10 @@
 //! capture renders ([`scene`]).
 
 pub mod batch;
+pub mod chart;
 pub mod field;
 pub mod identity;
+pub mod picker;
 pub mod scene;
 pub mod time;
 pub mod ui;
