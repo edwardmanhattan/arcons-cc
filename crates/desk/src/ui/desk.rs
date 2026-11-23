@@ -599,7 +599,10 @@ fn vessel_row(state: &State, vessel: &Vessel, index: usize, len: usize) -> El {
             tokens::clear()
         })
         .border(tokens::HAIRLINE, edge)
-        .on_press(move |state: &mut State| state.select(id_unit))
+        .on_press(move |state: &mut State| {
+            state.focus = crate::ui::Focus::List;
+            state.select(id_unit);
+        })
         .child(
             col()
                 .grow(1.0)
@@ -799,35 +802,38 @@ fn footer(vessels: usize) -> El {
     );
     let send = format!("Send {vessels} {}", plural(vessels, "report", "reports"));
     let enabled = vessels > 0;
-    el().key("tray-footer")
+    // "One request each" is a claim about the wire, and with nothing in the draft there is no each.
+    let mut row = el()
+        .key("tray-footer")
         .w_full()
         .items_center()
         .gap(tokens::GAP)
-        .child(caption(words).key("tray-foot"))
-        .child(caption("one request each"))
-        .child(spacer())
-        .child(
-            el().key("send-reports")
-                .role("button")
-                .label(send.clone())
-                .disabled(!enabled)
-                .px(tokens::PAD)
-                .py(tokens::CHIP_PAD)
-                .radius(tokens::GAP)
-                .fill(if enabled {
-                    tokens::accent()
-                } else {
-                    tokens::name_plate()
-                })
-                .items_center()
-                .justify_center()
-                .on_press(|state: &mut State| state.desk.say_send_arrives())
-                .child(text(send).font(tokens::LABEL).color(if enabled {
-                    tokens::bg()
-                } else {
-                    tokens::ink_dim()
-                })),
-        )
+        .child(caption(words).key("tray-foot"));
+    if vessels > 0 {
+        row = row.child(caption("one request each"));
+    }
+    row.child(spacer()).child(
+        el().key("send-reports")
+            .role("button")
+            .label(send.clone())
+            .disabled(!enabled)
+            .px(tokens::PAD)
+            .py(tokens::CHIP_PAD)
+            .radius(tokens::GAP)
+            .fill(if enabled {
+                tokens::accent()
+            } else {
+                tokens::name_plate()
+            })
+            .items_center()
+            .justify_center()
+            .on_press(|state: &mut State| state.desk.say_send_arrives())
+            .child(text(send).font(tokens::LABEL).color(if enabled {
+                tokens::bg()
+            } else {
+                tokens::ink_dim()
+            })),
+    )
 }
 
 /// `1 vessel`, `2 vessels`: a footer that said "1 vessels" is a footer nobody proof-read.

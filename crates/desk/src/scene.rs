@@ -10,9 +10,9 @@
 //! `time-calendar` is the same panel with the popover open. A single scene with the calendar open would
 //! hide the banner the ticket exists to show, which is how the first capture of this screen was wrong.
 //!
-//! **Two states of the working surface** (#277): `desk-batch` has a draft of two vessels — one of them a
+//! **Two states of the working surface** (#277): `batch` has a draft of two vessels — one of them a
 //! hull that never reported — with the selection on a third hull, so the tray, the badge and the prefill
-//! are all in one picture; `desk-empty` has nothing selected and an empty draft, which is the state the
+//! are all in one picture; `empty` has nothing selected and an empty draft, which is the state the
 //! empty inspector and the disabled send exist for.
 
 use arcons_cc::verify::Bounds;
@@ -29,8 +29,8 @@ pub type Scene = (&'static str, fn(&mut State));
 pub const SCENES: &[Scene] = &[
     ("time-field", time_field),
     ("time-calendar", time_calendar),
-    ("desk-batch", desk_batch),
-    ("desk-empty", desk_empty),
+    ("batch", desk_batch),
+    ("empty", desk_empty),
 ];
 
 /// The sample ADR-0009's wireframe names: 20 November 2026, 14:03:22 WIB, the calendar closed, and the
@@ -216,6 +216,17 @@ fn row_for(vessel: &Vessel, recorded_at_ms: i64) -> Row {
             accuracy_m: last.and_then(|last| last.accuracy_m),
         },
     }
+}
+
+/// **The sample picture with a hull selected**, for `State::sample` and therefore for `--snap` with no
+/// scene: the panel always has a subject, and the field's six segments are never drawn about nobody.
+///
+/// The selection is KRI SULTAN HASANUDDIN, the hull ADR-0009's wireframe panel is about. Scenes that want
+/// a different state say so themselves; this is only the default the window opens with.
+pub fn sample_desk(now_ms: i64) -> Desk {
+    let mut desk = Desk::new(picture(now_ms));
+    desk.select(4);
+    desk
 }
 
 /// The scene function for `name`, or `None`.

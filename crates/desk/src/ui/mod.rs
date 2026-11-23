@@ -76,6 +76,8 @@ pub struct State {
     pub notice: Option<String>,
     /// The picture, the batch, the selection and the list's keyboard (#277).
     pub desk: Desk,
+    /// Which surface owns Tab, Enter, Up/Down and Escape, while both want them.
+    pub focus: Focus,
 }
 
 impl State {
@@ -97,9 +99,10 @@ impl State {
             today: recorded,
             month: Month::of_days(civil::days_from_civil(2026, 11, 20)),
             calendar_open: true,
+            focus: Focus::Field,
             error: None,
             notice: None,
-            desk: Desk::default(),
+            desk: crate::scene::sample_desk(epoch_ms),
         }
     }
 
@@ -410,6 +413,21 @@ pub(super) fn list_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune
 ///
 /// The function a window's key loop calls is the one a test calls: a rule that exists only in an
 /// event handler is a rule nobody can test.
+/// **Which surface owns the keys that two of them want.**
+///
+/// The field wants Tab (next segment), Enter (commit), Up/Down (step) and Escape (revert); the vessel
+/// list wants Tab (next row), Enter (select), `x` (drop) and Escape (clear the search). Both cannot win,
+/// and a rule chosen per key would be four rules. One focus is the smallest thing that is still honest:
+/// **Tab leaves the field for the list** from its last segment, Shift-Tab comes back, and a press on a
+/// row or a segment moves the focus to the surface that was pressed. Digits always reach the field,
+/// because they mean nothing to a list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Focus {
+    #[default]
+    Field,
+    List,
+}
+
 pub fn on_key(state: &mut State, event: &rune::KeyEvent, tx: &mut rune::Tx) -> bool {
     if event.is_command('v') {
         // The read answers on a later frame, off the UI thread; nothing here waits for it.
@@ -420,9 +438,24 @@ pub fn on_key(state: &mut State, event: &rune::KeyEvent, tx: &mut rune::Tx) -> b
         );
         return true;
     }
-    // The list first: it is the surface the operator is pointing at, and it yields the key when it has no
-    // row to move, select or drop.
-    if list_key(state, event, tx) {
+    // Tab is the only key that crosses the boundary, and it crosses in one direction: out of the field
+    // from its last segment, and back with Shift.
+    if matches!(event.key, rune::Key::Tab) {
+        let forward = !event.mods.shift;
+        match (state.focus, forward) {
+            (Focus::List, true) => state.desk.tab(1),
+            // Shift-Tab walks back through the rows and leaves for the field from the first one, so the
+            // list is a ring rather than a trap.
+            (Focus::List, false) if state.desk.cursor() == Some(0) => state.focus = Focus::Field,
+            (Focus::List, false) => state.desk.tab(-1),
+            (Focus::Field, true) => state.focus = Focus::List,
+            // Inside the field, Shift-Tab walks the six segments backwards; the segments' forward walk is
+            // the Right arrow, which never leaves the surface the operator is typing into.
+            (Focus::Field, false) => state.left(),
+        }
+        return true;
+    }
+    if state.focus == Focus::List && list_key(state, event, tx) {
         return true;
     }
     match &event.key {
@@ -457,8 +490,7 @@ pub fn on_key(state: &mut State, event: &rune::KeyEvent, tx: &mut rune::Tx) -> b
             true
         }
         rune::Key::Tab => {
-            // **Tab belongs to the list when there is a list.** A scene with an empty picture keeps Tab for
-            // the six segments, which is the form's own keyboard and the one the time-field scene proves.
+            // Reached only for a scene with no list to move to: the crossing itself is handled above.
             if event.mods.shift {
                 state.left();
             } else {
@@ -637,9 +669,19 @@ fn form(state: &State) -> El {
         .child(hairline())
         .child(caption(last_known_label).key("last-known-label"))
         .child(last_known(selected))
-        .child(hairline())
+        .child(hairline());
+    // **Nothing selected is not an empty form.** A time and a regime under "No vessel selected" would be
+    // a verdict about nobody: the field belongs to a hull, and with no hull the panel says what to do
+    // instead of drawing six segments and a banner that cannot be sent anywhere.
+    if selected.is_none() {
+        return form
+            .child(caption("Select a vessel to report").key("no-selection"))
+            .child(spacer());
+    }
+    form = form
         .child(caption("THIS REPORT · ONE FIX"))
         .child(coordinates(state))
+        .child(measurements(state))
         .child(hairline())
         .child(
             row()
@@ -786,13 +828,67 @@ fn coordinates(state: &State) -> El {
 }
 
 fn coordinate(label: &'static str, key: &'static str, value: Option<f64>) -> El {
+    numeric_field(
+        label,
+        format!("coordinate-{key}"),
+        value,
+        5,
+        "type or place",
+    )
+}
+
+/// The three measured fields, from the same draft the coordinates come from.
+///
+/// They are drawn **dashed and saying `absent`** when the source gave nothing, because the difference
+/// between "not measured" and "measured zero" is the difference between a ship nobody heard from and a
+/// ship stopped dead — and the payload carries the first as a missing field, not as `0`.
+fn measurements(state: &State) -> El {
+    let draft = state
+        .desk
+        .selected()
+        .map(|id_unit| state.desk.draft(id_unit))
+        .unwrap_or_default();
+    row()
+        .w_full()
+        .gap(tokens::GAP)
+        .items_end()
+        .child(numeric_field(
+            "SPEED · KN",
+            "measure-speed_kn".to_string(),
+            draft.speed_kn,
+            1,
+            "absent",
+        ))
+        .child(numeric_field(
+            "COURSE · DEG",
+            "measure-course_deg".to_string(),
+            draft.course_deg,
+            0,
+            "absent",
+        ))
+        .child(numeric_field(
+            "ACCURACY · M",
+            "measure-accuracy_m".to_string(),
+            draft.accuracy_m,
+            0,
+            "absent",
+        ))
+}
+
+fn numeric_field(
+    label: &'static str,
+    key: String,
+    value: Option<f64>,
+    places: usize,
+    placeholder: &'static str,
+) -> El {
     let filled = value.is_some();
     let words = value.map_or_else(
-        || "type or place".to_string(),
-        |value| format!("{value:.5}"),
+        || placeholder.to_string(),
+        |value| format!("{value:.places$}"),
     );
     let mut field = el()
-        .key(format!("coordinate-{key}"))
+        .key(key)
         .role("textbox")
         .read_only(true)
         .label(format!("{label}, {words}"))
@@ -862,9 +958,16 @@ fn source_note(state: &State) -> El {
 /// panel has always used for replacing a row the operator is editing.
 fn update_button(state: &State) -> El {
     let enabled = state.desk.selected().is_some();
+    // **`Add` is not `Update`.** A hull that is not in the draft has no row to replace, and a button that
+    // said "Update" over "NOT IN THE BATCH" would be the panel contradicting its own header.
+    let label = match state.desk.selected() {
+        Some(id_unit) if state.desk.in_batch(id_unit) => "Update in batch",
+        Some(_) => "Add to batch",
+        None => "nothing to send yet",
+    };
     el().key("update-batch")
         .role("button")
-        .label("Update in batch")
+        .label(label)
         .disabled(!enabled)
         .px(tokens::GAP)
         .py(tokens::CHIP_PAD)
@@ -880,15 +983,11 @@ fn update_button(state: &State) -> El {
             state.add_selected();
             tx.blur();
         })
-        .child(
-            text("Update in batch")
-                .font(tokens::LABEL)
-                .color(if enabled {
-                    tokens::bg()
-                } else {
-                    tokens::ink_dim()
-                }),
-        )
+        .child(text(label).font(tokens::LABEL).color(if enabled {
+            tokens::bg()
+        } else {
+            tokens::ink_dim()
+        }))
 }
 
 /// `dd / mm / yyyy` and `hh:mm:ss`, each segment its own press target so a click can put the
@@ -930,6 +1029,7 @@ fn segment(state: &State, field: Field) -> El {
         .items_center()
         .gap(tokens::CARD_GAP)
         .on_press_tx(move |state: &mut State, tx: &mut rune::Tx| {
+            state.focus = Focus::Field;
             state.segments.select(field);
             tx.blur();
         })
@@ -1271,7 +1371,8 @@ mod tests {
     fn the_primary_button_and_the_calendar_arrows_are_buttons_in_words() {
         let runtime = frame_once(scene::state_for("time-calendar"));
         for (key, name) in [
-            ("update-batch", "Update in batch"),
+            // The sample selects a hull that is **not** in the draft, so the button says what it will do.
+            ("update-batch", "Add to batch"),
             ("previous-month", "Previous month"),
             ("next-month", "Next month"),
             ("calendar-today", "Today"),
@@ -1419,8 +1520,11 @@ mod tests {
 
     /// **The keys reach the model through Rune's own route**, not only through the state methods:
     /// `Runtime::key` is the event the window's loop would deliver, so this is the claim a person
-    /// at the desk would make — type two digits, press Escape, then Tab into the month and enter
-    /// a month that does not exist.
+    /// at the desk would make — type two digits, press Escape, then type a day that is not one.
+    ///
+    /// The refusal is driven through the **day** segment on purpose: `Tab` belongs to the vessel list
+    /// while a row is selected (#277), so a test that tabbed into the month would be testing which
+    /// surface owns the key that day, not whether a refusal names its segment.
     #[test]
     fn the_keyboard_reaches_the_field_through_the_windows_own_route() {
         let mut runtime = frame_once(scene::state_for("time-field"));
@@ -1447,22 +1551,21 @@ mod tests {
             "Escape must restore the accepted time: {label}"
         );
 
-        press(&mut runtime, rune::Key::Tab);
-        press(&mut runtime, rune::Key::Text("1".into()));
         press(&mut runtime, rune::Key::Text("3".into()));
+        press(&mut runtime, rune::Key::Text("2".into()));
         press(&mut runtime, rune::Key::Enter);
         let alert = runtime
             .elements()
             .into_iter()
             .find(|element| element.role == "alert")
-            .expect("a month of 13 draws an alert");
+            .expect("a day of 32 draws an alert");
         assert!(
             alert
                 .text
                 .as_deref()
                 .unwrap_or_default()
-                .starts_with("month:"),
-            "the alert must name the month: {:?}",
+                .starts_with("day:"),
+            "the alert must name the segment to change: {:?}",
             alert.text
         );
     }
@@ -1491,7 +1594,7 @@ mod tests {
 
     #[test]
     fn the_surface_draws_the_rail_the_tray_and_a_flat_chart_that_says_it_comes_next() {
-        let runtime = frame_once(scene::state_for("desk-batch"));
+        let runtime = frame_once(scene::state_for("batch"));
         for key in [
             "vessel-search",
             "vessel-list",
@@ -1523,7 +1626,7 @@ mod tests {
 
     #[test]
     fn a_row_is_announced_as_one_label_naming_the_vessel_its_hull_and_its_age() {
-        let runtime = frame_once(scene::state_for("desk-batch"));
+        let runtime = frame_once(scene::state_for("batch"));
         let row = element(&runtime, "vessel-row-1");
         let label = row.label.as_deref().unwrap_or_default();
         assert_eq!(row.role, "option");
@@ -1546,7 +1649,7 @@ mod tests {
 
     #[test]
     fn selecting_a_hull_prefills_the_inspector_and_the_field_from_the_picture() {
-        let state = scene::state_for("desk-batch");
+        let state = scene::state_for("batch");
         assert_eq!(state.desk.selected(), Some(3), "the scene selects Halasan");
         let runtime = frame_once(state);
         assert_eq!(
@@ -1581,7 +1684,7 @@ mod tests {
 
     #[test]
     fn a_hull_that_never_reported_has_the_empty_state_and_the_reason_in_words() {
-        let mut state = scene::state_for("desk-batch");
+        let mut state = scene::state_for("batch");
         state.select(2);
         let runtime = frame_once(state);
         assert_eq!(
@@ -1607,7 +1710,7 @@ mod tests {
 
     #[test]
     fn a_never_reported_hull_is_listed_and_is_not_stale() {
-        let mut state = scene::state_for("desk-batch");
+        let mut state = scene::state_for("batch");
         state.desk.set_filter(desk::Filter::Never);
         let never: Vec<u64> = state
             .desk
@@ -1632,7 +1735,7 @@ mod tests {
 
     #[test]
     fn the_batch_shows_one_card_per_hull_and_a_badge_in_the_list_not_a_second_row() {
-        let runtime = frame_once(scene::state_for("desk-batch"));
+        let runtime = frame_once(scene::state_for("batch"));
         let cards = runtime
             .elements()
             .into_iter()
@@ -1665,7 +1768,7 @@ mod tests {
 
     #[test]
     fn the_send_says_that_nothing_is_sent_until_278() {
-        let mut runtime = frame_once(scene::state_for("desk-batch"));
+        let mut runtime = frame_once(scene::state_for("batch"));
         press(&mut runtime, "send-reports");
         assert!(
             runtime
@@ -1679,10 +1782,12 @@ mod tests {
 
     #[test]
     fn tab_walks_the_list_enter_selects_x_removes_and_escape_clears_the_search() {
-        let mut state = scene::state_for("desk-batch");
+        let mut state = scene::state_for("batch");
         state.select(1);
         let mut runtime = frame_once(state);
 
+        // One Tab leaves the field for the list, the second moves to the next row (#277's focus rule).
+        key(&mut runtime, rune::Key::Tab);
         key(&mut runtime, rune::Key::Tab);
         key(&mut runtime, rune::Key::Enter);
         assert_eq!(
@@ -1716,8 +1821,11 @@ mod tests {
             "and the list's badge went with it"
         );
 
-        let mut state = scene::state_for("desk-batch");
+        let mut state = scene::state_for("batch");
         state.desk.set_query("makassar");
+        // The search is the list's, so the list has the focus: Escape clears a search or reverts a time,
+        // and which one it does is exactly what `Focus` is for.
+        state.focus = Focus::List;
         let mut runtime = frame_once(state);
         assert!(
             runtime.find("vessel-row-1").is_none(),
@@ -1732,7 +1840,7 @@ mod tests {
 
     #[test]
     fn a_selected_row_is_filled_while_its_neighbours_are_not() {
-        let runtime = frame_once(scene::state_for("desk-batch"));
+        let runtime = frame_once(scene::state_for("batch"));
         let selected = element(&runtime, "vessel-row-3");
         let other = element(&runtime, "vessel-row-1");
         assert_eq!(
@@ -1749,7 +1857,7 @@ mod tests {
 
     #[test]
     fn the_empty_desk_has_nothing_selected_and_a_disabled_send() {
-        let runtime = frame_once(scene::state_for("desk-empty"));
+        let runtime = frame_once(scene::state_for("empty"));
         assert_eq!(
             element(&runtime, "report-header").text.as_deref(),
             Some("REPORT · NO VESSEL SELECTED")
