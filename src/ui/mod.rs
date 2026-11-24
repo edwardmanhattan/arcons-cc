@@ -7717,6 +7717,9 @@ mod tests {
             received_at: Utc.with_ymd_and_hms(2026, 11, 6, 12, 0, 0).unwrap(),
             age_seconds: 4.0,
             backfilled: false,
+            manual: None,
+            reported_by: None,
+            reported_for: None,
         };
         let mut picture = Picture::default();
         picture.replace_from_feed(&[
@@ -7939,7 +7942,7 @@ mod tests {
             &mut state,
             crate::live::Update::Fix {
                 received,
-                fix: crate::live::wire::LiveFix {
+                fix: Box::new(crate::live::wire::LiveFix {
                     id_unit: 8,
                     name: "KRI Abdul Halim Perdanakusuma".into(),
                     hull_number: Some("KRI-355".into()),
@@ -7952,7 +7955,10 @@ mod tests {
                     recorded_at: chrono::Utc::now(),
                     received_at: chrono::Utc::now(),
                     backfilled: false,
-                },
+                    manual: false,
+                    reported_by: None,
+                    reported_for: None,
+                }),
             },
         );
         assert!(
@@ -7979,7 +7985,7 @@ mod tests {
             &mut state,
             crate::live::Update::Fix {
                 received: std::time::Instant::now(),
-                fix: crate::live::wire::LiveFix {
+                fix: Box::new(crate::live::wire::LiveFix {
                     id_unit: 8,
                     name: "KRI Abdul Halim Perdanakusuma".into(),
                     hull_number: Some("KRI-355".into()),
@@ -7992,7 +7998,10 @@ mod tests {
                     recorded_at: chrono::Utc::now(),
                     received_at: chrono::Utc::now(),
                     backfilled: false,
-                },
+                    manual: false,
+                    reported_by: None,
+                    reported_for: None,
+                }),
             },
         );
 
@@ -8079,7 +8088,7 @@ mod tests {
             &mut state,
             crate::live::Update::Fix {
                 received: std::time::Instant::now(),
-                fix: crate::live::wire::LiveFix {
+                fix: Box::new(crate::live::wire::LiveFix {
                     id_unit: 8,
                     name: "KRI Abdul Halim Perdanakusuma".into(),
                     hull_number: Some("KRI-355".into()),
@@ -8092,7 +8101,10 @@ mod tests {
                     recorded_at: chrono::Utc::now(),
                     received_at: chrono::Utc::now(),
                     backfilled: false,
-                },
+                    manual: false,
+                    reported_by: None,
+                    reported_for: None,
+                }),
             },
         );
 

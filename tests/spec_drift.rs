@@ -173,6 +173,12 @@ fn the_drift_parser_actually_reads_the_snapshot() {
             "FeedFix.{nullable} must be an OPTIONAL property: absence is not zero, and a required measurement would make every silent hull undecodable"
         );
     }
+    for optional in ["manual", "reported_by", "reported_for"] {
+        assert!(
+            properties.iter().any(|p| p == optional) && !required.iter().any(|r| r == optional),
+            "FeedFix.{optional} must be an OPTIONAL property: the contract adds it for relayed fixes, and a device fix must stay decodable without it"
+        );
+    }
 }
 
 /// **The viewpoint has no required list on purpose**: both coordinates are absent together when the

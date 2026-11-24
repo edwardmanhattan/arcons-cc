@@ -74,6 +74,17 @@ pub struct FeedPosition {
     pub position: Option<FeedFix>,
 }
 
+/// One `FeedFix`'s author, when a person entered the point rather than the vessel's own handset.
+///
+/// The contract's `FeedActor` (`docs/spec/minos-api.yaml` @ `496ae25`): an id and the two names a person
+/// has. `username` is the login, carried for completeness but **never drawn or cached** (`INV-08`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct FeedActor {
+    pub id: i64,
+    pub name: String,
+    pub username: String,
+}
+
 /// One accepted position report.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct FeedFix {
@@ -106,6 +117,20 @@ pub struct FeedFix {
     /// Reconstructed from an offline backlog: real, the newest thing known, and it did not just
     /// happen. It must never set the "here now" glyph (`INV-03`).
     pub backfilled: bool,
+    /// **A person entered this point**, on the vessel commander's behalf. Absent on a device fix.
+    #[serde(default)]
+    pub manual: Option<bool>,
+    /// The operator who asserted the position. Absent for a device fix.
+    ///
+    /// **Not serialised.** The desk's picture cache is built by serialising the wall's `FeedFix` (#284),
+    /// and a username has no business in that file (`INV-08`); the wall reads the field, the cache does
+    /// not carry it.
+    #[serde(default, skip_serializing)]
+    pub reported_by: Option<FeedActor>,
+    /// The commander whose report this claims to be, at the time. Absent for a device fix, and present
+    /// exactly when `reported_by` is.
+    #[serde(default, skip_serializing)]
+    pub reported_for: Option<FeedActor>,
 }
 
 /// A lookup row: `name` is the canonical English value, `id_name` the Indonesian label to show.

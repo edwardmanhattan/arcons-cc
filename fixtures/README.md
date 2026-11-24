@@ -208,6 +208,12 @@ filled in so each trap has one hull (hull 7 never reported, hull 11 is older tha
 threshold, hull 13 is backfilled, hull 17 has no course, hull 9 is a measured `0.0`). Say so rather
 than pretending a dev server produced it.
 
+`scenes/feed-manual.json` is `feed.json` with unit 3's fix carrying the contract's optional provenance
+(#288): `manual: true`, `reported_by` and `reported_for` as `FeedActor`s, with the field names pinned to
+`docs/spec/minos-api.yaml` @ `496ae25`. It is **derived, not recorded** — the dev feed's only fix is a
+device fix — and it exists for the `manual` and `manual-marker` captures and the provenance tests. The actor
+names and ids are the scene's; the shape is the contract's.
+
 `scenes/newsroom-international-1.json`, `scenes/newsroom-international-2.json` and
 `scenes/newsroom-regional-1.json` are the newsroom scenes' pages (#136): **derived from the pinned spec**,
 like the list page in `rest/`, because the dev deployment holds no stories to record. Each is the

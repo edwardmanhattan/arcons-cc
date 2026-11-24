@@ -31,7 +31,7 @@ pub const GLYPH: f32 = tokens::SYMBOL;
 pub const TARGET: f32 = tokens::MARKER_TARGET;
 
 /// One marker's placement: where its centre goes, in the frame's own pixels.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Placed {
     pub id_unit: i64,
     pub x: f64,
@@ -45,6 +45,10 @@ pub struct Placed {
     pub zoom: f64,
     /// Symbol or picture, and the picture's size and rotation when it is one (`units::mark`).
     pub mark: crate::units::mark::Mark,
+    /// **A person entered this fix** (#288): the marker wears a provenance dot.
+    pub manual: bool,
+    /// One sentence for assistive technology: the hull, and when relayed, who asserted it for whom.
+    pub label: String,
 }
 
 /// Project every hull that has a fix, and nothing else.
@@ -85,6 +89,19 @@ fn place_one(
     let glyph = unit.glyph_with(now, stale_after)?;
     let drawn: Pos = unit.drawn(now)?;
     let (x, y) = frame.project(drawn.lat, drawn.lon);
+    let label = if unit.manual {
+        let by = unit
+            .reported_by
+            .as_ref()
+            .map_or("hand", |actor| actor.name.as_str());
+        let for_ = unit
+            .reported_for
+            .as_ref()
+            .map_or("the vessel", |actor| actor.name.as_str());
+        format!("{}, reported by {by} for {for_}", unit.unit.name)
+    } else {
+        unit.unit.name.clone()
+    };
     Some(Placed {
         id_unit: unit.unit.id_unit,
         x,
@@ -95,6 +112,8 @@ fn place_one(
         lat: drawn.lat,
         zoom: frame.camera.zoom,
         mark: crate::units::mark::mark(range, unit, frame, sizes(unit.unit.id_unit))?,
+        manual: unit.manual,
+        label,
     })
 }
 
@@ -179,10 +198,15 @@ fn glyph(marker: &Placed, scale: f64, pictures: &Pictures, pane: crate::ui::View
                     )
                     .size(TARGET.max(length_pt), TARGET.max(beam_pt))
                     .center()
+                    .role("button")
+                    .label(marker.label.clone())
                     .on_press(move |state: &mut crate::ui::State| state.press_marker(pane, id_unit))
                     .child(picture);
                 if let Some(ring) = accuracy {
                     target = target.child(ring);
+                }
+                if marker.manual {
+                    target = target.child(provenance_dot(TARGET.max(length_pt)));
                 }
                 // No heading tick: the picture's own rotation is its heading.
                 return target;
@@ -204,6 +228,8 @@ fn glyph(marker: &Placed, scale: f64, pictures: &Pictures, pane: crate::ui::View
         )
         .size(TARGET, TARGET)
         .center()
+        .role("button")
+        .label(marker.label.clone())
         // A press on a marker selects its hull. One card at a time, always (`INV-10`): selecting
         // replaces the selection, it does not add to it.
         .on_press(move |state: &mut crate::ui::State| state.press_marker(pane, id_unit))
@@ -213,6 +239,9 @@ fn glyph(marker: &Placed, scale: f64, pictures: &Pictures, pane: crate::ui::View
     }
     if let Some(course) = marker.course_deg {
         target = target.child(heading(marker, course, scale));
+    }
+    if marker.manual {
+        target = target.child(provenance_dot(TARGET));
     }
     target
 }
@@ -260,10 +289,27 @@ fn heading(marker: &Placed, course_deg: f64, scale: f64) -> El {
     .fill(tokens::accent())
 }
 
+/// A small dot at the marker's top-right: **a person entered this fix** (#288).
+///
+/// It qualifies the mark rather than replacing it: the live/stale/history glyph still says *when*, and
+/// this says *who*. The words are in [`Placed::label`] and on the hull's card.
+fn provenance_dot(target_pt: f32) -> El {
+    let half = tokens::PROVENANCE_DOT / 2.0;
+    // **Local to the marker's hit target, and outside the frame's top-right lobe**: the same accent inside
+    // the quatrefoil disappears into it. A hollow ring, not a filled dot, so it cannot be mistaken for the
+    // course tick.
+    let center = target_pt / 2.0;
+    let reach = GLYPH / 2.0 + 2.0 + half;
+    el().absolute(center + reach - half, center - reach - half)
+        .size(tokens::PROVENANCE_DOT, tokens::PROVENANCE_DOT)
+        .radius(half)
+        .border(tokens::HAIRLINE, tokens::accent())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::types::{FeedFix, FeedPosition};
+    use crate::data::types::{FeedActor, FeedFix, FeedPosition};
     use crate::map::geometry::Camera;
     use crate::units::Picture;
     use chrono::{TimeZone, Utc};
@@ -288,6 +334,9 @@ mod tests {
             received_at: Utc.with_ymd_and_hms(2026, 11, 6, 12, 0, 0).unwrap(),
             age_seconds: age,
             backfilled,
+            manual: None,
+            reported_by: None,
+            reported_for: None,
         }
     }
 
@@ -436,5 +485,38 @@ mod tests {
             "INV-01: no course, no arrow — and certainly not north"
         );
         assert_eq!(placed[0].accuracy_m, None, "INV-01: no accuracy, no ring");
+    }
+
+    #[test]
+    fn a_relayed_fix_carries_a_worded_label_and_the_manual_flag() {
+        let mut picture = Picture::default();
+        let mut manual = fix(-6.1, 106.9, 5.0, false);
+        manual.manual = Some(true);
+        manual.reported_by = Some(FeedActor {
+            id: 7,
+            name: "Operator Sari".into(),
+            username: "operator.sari".into(),
+        });
+        manual.reported_for = Some(FeedActor {
+            id: 3,
+            name: "Commander Yani".into(),
+            username: "commander.yani".into(),
+        });
+        picture.replace_from_feed(&[entry(8, Some(manual))]);
+
+        let placed = place(
+            &picture,
+            &frame(),
+            &crate::ui::filter::Filter::default(),
+            Instant::now(),
+            crate::units::STALE_AFTER,
+            crate::units::mark::Range::Symbol,
+            &|_| None,
+        );
+        assert!(placed[0].manual, "the marker wears the provenance dot");
+        assert_eq!(
+            placed[0].label, "KRI 8, reported by Operator Sari for Commander Yani",
+            "a screen reader hears who asserted the fix and whose report it claims to be"
+        );
     }
 }

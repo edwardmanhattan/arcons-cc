@@ -666,7 +666,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 lines.push("empty: no marker ink anywhere".to_string());
             }
         }
-        "picture" | "card-open" => {
+        "picture" | "card-open" | "manual-marker" => {
             // The markers live inside the panel: a projection is panel-relative, a capture is not.
             let Some(origin) = image.find_panel(ink(tokens::panel())) else {
                 failures.push(format!(
@@ -678,7 +678,16 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 "{scene}: picture panel at ({:.0}, {:.0})",
                 origin.0, origin.1
             ));
-            match marker_in_panel(image, scene, scene::LIVE_UNIT, origin) {
+            match marker_in_panel(
+                image,
+                scene,
+                if scene == "manual-marker" {
+                    scene::CARD_UNIT
+                } else {
+                    scene::LIVE_UNIT
+                },
+                origin,
+            ) {
                 Ok((at, distance)) => lines.push(format!(
                     "{scene}: live marker within {distance:.1} px of ({:.0}, {:.0})",
                     at.0, at.1
@@ -686,8 +695,25 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 Err(error) => failures.push(error),
             }
             if scene == "card-open" {
-                lines.extend(assert_card(image, origin, &mut failures));
+                lines.extend(assert_card(image, scene, origin, &mut failures));
             }
+        }
+        // **The relayed fix's card** (#288): the card covers the marker it belongs to, so this scene asserts
+        // the card's panel and placement, not a marker elsewhere on the water. The dot's own scene is
+        // `manual-marker`.
+        "manual" => {
+            let Some(origin) = image.find_panel(ink(tokens::panel())) else {
+                failures.push(
+                    "manual: no picture panel on screen — nothing to assert about the card"
+                        .to_string(),
+                );
+                return Err(failures);
+            };
+            lines.push(format!(
+                "manual: picture panel at ({:.0}, {:.0})",
+                origin.0, origin.1
+            ));
+            lines.extend(assert_card(image, scene, origin, &mut failures));
         }
         // **The menu's keyboard model** (#164): the same wall as `panes-menu`, with the ring on the row Enter would
         // act on. The ring is `focus_edge` — the colour the wall uses for "this one has the keys".
@@ -847,7 +873,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             }
             // The card is there in every one of these: the point of the pairs is that only the pointer goes, and a
             // remote's press selects a hull whatever the origin.
-            lines.extend(assert_card(image, origin, &mut failures));
+            lines.extend(assert_card(image, scene, origin, &mut failures));
         }
         "stale-banner" => {
             // **The banner is drawn, and it is the only thing above the picture** (#206): the header is one row, the
@@ -4266,10 +4292,15 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
 }
 
 /// The card's rectangle, where `units::card::place` says it goes — the same arithmetic the view uses.
-fn assert_card(image: &Image, origin: (f64, f64), failures: &mut Vec<String>) -> Vec<String> {
+fn assert_card(
+    image: &Image,
+    scene: &str,
+    origin: (f64, f64),
+    failures: &mut Vec<String>,
+) -> Vec<String> {
     let mut lines = Vec::new();
     let Ok(anchor) = marker_at(scene::CARD_UNIT).map(|(x, y)| (x + origin.0, y + origin.1)) else {
-        failures.push("card-open: the selected hull has no marker".to_string());
+        failures.push(format!("{scene}: the selected hull has no marker"));
         return lines;
     };
     let viewport = (
@@ -4285,23 +4316,23 @@ fn assert_card(image: &Image, origin: (f64, f64), failures: &mut Vec<String>) ->
     let y = placement.y + 40.0;
     if image.count_colour(panel, 8) == 0 {
         failures.push(format!(
-            "card-open: no panel ink anywhere — the card did not draw (expected at {:.0}, {:.0})",
+            "{scene}: no panel ink anywhere — the card did not draw (expected at {:.0}, {:.0})",
             placement.x, placement.y
         ));
     } else if image.nearest_colour(x, y, panel, 6.0).is_none() {
         failures.push(format!(
-            "card-open: the card's body is not at ({x:.0}, {y:.0}) — place() said \
+            "{scene}: the card's body is not at ({x:.0}, {y:.0}) — place() said \
              ({:.0}, {:.0}), flipped={}",
             placement.x, placement.y, placement.flipped
         ));
     } else {
         lines.push(format!(
-            "card-open: card at ({:.0}, {:.0}), flipped={}",
+            "{scene}: card at ({:.0}, {:.0}), flipped={}",
             placement.x, placement.y, placement.flipped
         ));
         if placement.x < 0.0 || placement.x + crate::units::card::WIDTH > viewport.0 {
             failures.push(format!(
-                "card-open: the card leaves the window: x={:.0}, width={}",
+                "{scene}: the card leaves the window: x={:.0}, width={}",
                 placement.x,
                 crate::units::card::WIDTH
             ));
@@ -5269,6 +5300,11 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
         ("card-open", other) => {
             failures.push(format!("card-open: {other} cards, and INV-10 says one per pane"))
         }
+        // **The relayed fix's card** (#288): one card, on the hull the scene selected.
+        ("manual", 1) => lines.push("manual: one card, for the relayed hull".to_string()),
+        ("manual", other) => failures.push(format!(
+            "manual: {other} cards — the relayed fix's card is the one the scene selects"
+        )),
         // **A cursor's press opens one card too** (#167): the hull its point was on, and the capture is the
         // proof that a remote's press is the same press a hand makes.
         ("cursor-hull" | "cursor-idle" | "cursor-two", 1) => {
@@ -5283,12 +5319,12 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
         (_, 0) => {}
         (name, other) => failures.push(format!("{name}: {other} cards with nothing selected")),
     }
-    if scene == "card-open"
+    if (scene == "card-open" || scene == "manual")
         && let Some((_, hull)) = cards.first()
         && *hull != scene::CARD_UNIT
     {
         failures.push(format!(
-            "card-open: the card is for hull {hull}, not {}",
+            "{scene}: the card is for hull {hull}, not {}",
             scene::CARD_UNIT
         ));
     }

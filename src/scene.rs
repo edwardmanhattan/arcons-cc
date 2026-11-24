@@ -53,6 +53,21 @@ pub fn fixture() -> Result<Vec<FeedPosition>, String> {
     Ok(envelope.data)
 }
 
+/// Where the manual fix's scene feed lives (#288): `feed.json` with unit 3's fix relayed by a person.
+pub fn manual_fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/scenes/feed-manual.json")
+}
+
+/// Parse the manual fixture into the same type the REST client produces.
+pub fn manual_fixture() -> Result<Vec<FeedPosition>, String> {
+    let path = manual_fixture_path();
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let envelope: Envelope<Vec<FeedPosition>> = serde_json::from_str(&text)
+        .map_err(|error| format!("{} is not the positions envelope: {error}", path.display()))?;
+    Ok(envelope.data)
+}
+
 /// The picture a marker scene shows, or an empty picture when the fixture cannot be read.
 ///
 /// A scene that cannot read its fixture renders an empty wall rather than panicking: the capture then
@@ -89,6 +104,39 @@ fn card_open(state: &mut State) {
     load(state);
     let focused = state.focused();
     state.select_in(focused, CARD_UNIT);
+}
+
+/// **A fix a person entered** (#288): the `card-open` wall, on a hull whose fix carries `manual`,
+/// `reported_by` and `reported_for`. The marker wears the provenance dot and the card names the two.
+fn manual(state: &mut State) {
+    match manual_fixture() {
+        Ok(entries) => state.load_fixture(&entries),
+        Err(error) => eprintln!("arcons-cc: scene: {error}"),
+    }
+    state.set_camera(CAMERA);
+    let focused = state.focused();
+    state.select_in(focused, CARD_UNIT);
+}
+
+/// **The relayed marker without its card** (#288): the card covers the marker it belongs to, so this scene is
+/// where the provenance dot itself is visible. The card's words are the `manual` scene's.
+fn manual_marker(state: &mut State) {
+    match manual_fixture() {
+        Ok(entries) => state.load_fixture(&entries),
+        Err(error) => eprintln!("arcons-cc: scene: {error}"),
+    }
+    // Close on the relayed hull: the ring is six points, and the card's words are the `manual` scene.
+    if let Some(view) = state
+        .picture
+        .units()
+        .iter()
+        .find(|unit| unit.unit.id_unit == CARD_UNIT)
+        && let Some(drawn) = view.drawn(state.now())
+    {
+        state.set_camera(Camera::new((drawn.lat, drawn.lon), 14.0));
+    } else {
+        state.set_camera(CAMERA);
+    }
 }
 
 /// The `panes-cards` scene (#99): **two panes, and a card in one of them**.
@@ -1687,6 +1735,8 @@ pub const SCENES: &[Scene] = &[
     ("picture", picture),
     ("stale", stale),
     ("card-open", card_open),
+    ("manual", manual),
+    ("manual-marker", manual_marker),
     ("photo", photo),
     ("panes", panes),
     ("panes-chrome", panes_chrome),
@@ -2197,6 +2247,8 @@ mod tests {
                 "picture",
                 "stale",
                 "card-open",
+                "manual",
+                "manual-marker",
                 "photo",
                 "panes",
                 "panes-chrome",

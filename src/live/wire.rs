@@ -22,6 +22,8 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
+use crate::data::types::FeedActor;
+
 /// One `live-feed` publication: a unit's label and its newest fix, flat.
 ///
 /// The three optional measurements are `Option` and the keys are **absent** when unmeasured — never
@@ -53,6 +55,16 @@ pub struct LiveFix {
     /// happen.
     #[serde(default)]
     pub backfilled: bool,
+    /// A person entered the point, on the vessel commander's behalf. The documented §5 example predates
+    /// the field, so its absence on a device fix is `false`, never a guess.
+    #[serde(default)]
+    pub manual: bool,
+    /// The operator who asserted it, when `manual`.
+    #[serde(default)]
+    pub reported_by: Option<FeedActor>,
+    /// The commander whose report it claims to be, when `manual`.
+    #[serde(default)]
+    pub reported_for: Option<FeedActor>,
 }
 
 impl LiveFix {
@@ -171,6 +183,30 @@ mod tests {
         let body = SPEC_EXAMPLE.replace("\"backfilled\": false", "\"backfilled\": true");
         let fix = parse(body.as_bytes()).expect("parses");
         assert!(fix.backfilled);
+    }
+
+    #[test]
+    fn a_relayed_fix_carries_its_author_and_the_commander_it_claims() {
+        // The contract's optional provenance, on the socket path: a fix a person entered names who
+        // asserted it and whose report it claims to be. A device fix has neither.
+        let body = SPEC_EXAMPLE.replace(
+            "\"backfilled\": false",
+            "\"backfilled\": false,\n      \"manual\": true,\n      \"reported_by\": {\"id\": 7, \"name\": \"Operator Sari\", \"username\": \"operator.sari\"},\n      \"reported_for\": {\"id\": 3, \"name\": \"Commander Yani\", \"username\": \"commander.yani\"}",
+        );
+        let fix = parse(body.as_bytes()).expect("a relayed fix parses");
+        assert!(fix.manual);
+        assert_eq!(
+            fix.reported_by.as_ref().map(|actor| actor.name.as_str()),
+            Some("Operator Sari")
+        );
+        assert_eq!(
+            fix.reported_for.as_ref().map(|actor| actor.name.as_str()),
+            Some("Commander Yani")
+        );
+
+        let device = parse(SPEC_EXAMPLE.as_bytes()).expect("the device example parses");
+        assert!(!device.manual);
+        assert!(device.reported_by.is_none() && device.reported_for.is_none());
     }
 
     #[test]

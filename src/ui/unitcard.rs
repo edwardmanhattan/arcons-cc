@@ -170,6 +170,17 @@ pub fn card(card: &Card, placement: Placement, now: Instant, follow: Option<Foll
         );
     }
 
+    // **Who asserted the fix, in words** (#288): a relayed point names the operator and the commander it
+    // claims. A device fix has no line, because there is nobody to name.
+    if let Some(line) = card.provenance_line() {
+        body = body.child(
+            text(line)
+                .key("card-provenance")
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim()),
+        );
+    }
+
     body = body.child(rule());
     let (label, value) = card.commander_line();
     body = body.child(

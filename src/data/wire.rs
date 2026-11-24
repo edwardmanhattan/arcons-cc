@@ -25,7 +25,14 @@ pub const FEED_FIX: &[&str] = &[
     "received_at",
     "age_seconds",
     "backfilled",
+    "manual",
+    "reported_by",
+    "reported_for",
 ];
+
+/// The person a relayed fix names: who asserted it, and which commander's report it claims to be
+/// (`FeedFix.reported_by`/`reported_for`).
+pub const FEED_ACTOR: &[&str] = &["id", "name", "username"];
 
 /// The envelope `GET /live-feed/positions` returns.
 pub const FEED_POSITION_LIST_ENVELOPE: &[&str] = &["status_code", "message", "data"];
@@ -288,6 +295,7 @@ pub const UNIT_ORGANISATION_DETAIL: &[&str] = &["id", "id_service_branch", "name
 pub const MODELLED: &[(&str, &[&str])] = &[
     ("FeedPosition", FEED_POSITION),
     ("FeedFix", FEED_FIX),
+    ("FeedActor", FEED_ACTOR),
     ("FeedPositionListEnvelope", FEED_POSITION_LIST_ENVELOPE),
     ("AuthEnvelope", AUTH_ENVELOPE),
     ("TokenPair", TOKEN_PAIR),

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
-use crate::data::types::{UnitCommander, UnitDetail, UnitSpecification};
+use crate::data::types::{FeedActor, UnitCommander, UnitDetail, UnitSpecification};
 use crate::units::{Glyph, Unit, UnitView};
 
 /// The card's own size in points. Fixed: a card that resizes as fields arrive is a card that jumps
@@ -65,6 +65,12 @@ pub struct Card {
     pub speed_kn: Option<f64>,
     pub course_deg: Option<f64>,
     pub accuracy_m: Option<f64>,
+    /// A person entered this fix, on the vessel commander's behalf. A device fix is `false`.
+    pub manual: bool,
+    /// The operator who asserted it, when `manual`.
+    pub reported_by: Option<FeedActor>,
+    /// The commander whose report it claims to be, when `manual`.
+    pub reported_for: Option<FeedActor>,
     /// `GET /units/{id}` — identity and class.
     pub identity: Fetch<UnitDetail>,
     /// `GET /units/{id}/commander` — newest first; the current entry has no `to_at`.
@@ -85,19 +91,46 @@ impl Card {
             speed_kn: view.speed_kn,
             course_deg: view.course_deg,
             accuracy_m: view.accuracy_m,
+            manual: view.manual,
+            reported_by: view.reported_by.clone(),
+            reported_for: view.reported_for.clone(),
             identity: Fetch::Pending,
             commander: Fetch::Pending,
             specification: Fetch::Pending,
         }
     }
 
-    /// The badges the card wears: stale and/or backfilled, in the marker's own vocabulary.
+    /// The badges the card wears: stale and/or backfilled, in the marker's own vocabulary, plus
+    /// `relayed` when a person entered the fix.
     pub fn badges(&self) -> Vec<&'static str> {
-        match self.glyph {
+        let mut badges = match self.glyph {
             Some(Glyph::Stale) => vec!["stale"],
             Some(Glyph::History) => vec!["backfilled"],
             _ => Vec::new(),
+        };
+        if self.manual {
+            badges.push("relayed");
         }
+        badges
+    }
+
+    /// **Who asserted this fix, and whose report it claims to be** (#288), when a person entered it.
+    ///
+    /// A device fix has no provenance line: the hull's own handset said "this is where I am", and there
+    /// is nobody to name. A manual fix whose actor fields are missing says "reported by hand" rather
+    /// than drawing an empty name.
+    pub fn provenance_line(&self) -> Option<String> {
+        if !self.manual {
+            return None;
+        }
+        let by = self.reported_by.as_ref().map(|actor| actor.name.as_str());
+        let for_ = self.reported_for.as_ref().map(|actor| actor.name.as_str());
+        Some(match (by, for_) {
+            (Some(by), Some(for_)) => format!("reported by {by} for {for_}"),
+            (Some(by), None) => format!("reported by {by}"),
+            (None, Some(for_)) => format!("reported for {for_}"),
+            (None, None) => "reported by hand".to_string(),
+        })
     }
 
     /// How old the fix is now, as text — the only field that changes without the model changing.
@@ -273,6 +306,9 @@ mod tests {
             age_at_receipt: if fresh { 2.0 } else { 3.0 * 3600.0 },
             receipt: Instant::now(),
             backfilled: false,
+            manual: false,
+            reported_by: None,
+            reported_for: None,
             course_deg: None,
             accuracy_m: None,
             speed_kn: speed,
@@ -345,6 +381,41 @@ mod tests {
         assert_eq!(
             Card::new(&both, Instant::now(), STALE_AFTER).badges(),
             vec!["backfilled"]
+        );
+    }
+
+    #[test]
+    fn a_relayed_fix_names_its_author_and_the_commander_it_claims() {
+        let mut manual = view(None, true);
+        manual.manual = true;
+        manual.reported_by = Some(FeedActor {
+            id: 7,
+            name: "Operator Sari".into(),
+            username: "operator.sari".into(),
+        });
+        manual.reported_for = Some(FeedActor {
+            id: 3,
+            name: "Commander Yani".into(),
+            username: "commander.yani".into(),
+        });
+
+        let card = Card::new(&manual, Instant::now(), STALE_AFTER);
+        assert_eq!(card.badges(), vec!["relayed"]);
+        assert_eq!(
+            card.provenance_line().as_deref(),
+            Some("reported by Operator Sari for Commander Yani"),
+            "the card names the operator and the commander, in words"
+        );
+    }
+
+    #[test]
+    fn a_device_fix_has_no_relayed_badge_or_provenance_line() {
+        let card = Card::new(&view(None, true), Instant::now(), STALE_AFTER);
+        assert!(card.badges().is_empty());
+        assert_eq!(
+            card.provenance_line(),
+            None,
+            "a device fix has nobody to name"
         );
     }
 
