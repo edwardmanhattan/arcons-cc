@@ -54,6 +54,41 @@ impl Picture {
     }
 }
 
+/// **The server's clock, estimated from one fix** (#290).
+///
+/// A fix carries `received_at` (the server accepted it) and `age_seconds` (how old it was when the response
+/// was read). Their sum is the server's clock at the read; `read_at_ms` is this desk's clock at the same
+/// moment, so the desk can carry the estimate forward with its own elapsed time. The estimate is picked
+/// from the **newest** fix (the smallest age): every age in one response is measured against one reading of
+/// the server's clock, so any fix would do, but the newest is least sensitive to rounding.
+///
+/// `None` is not "now": it is no estimate at all. A hull that has never reported gives no clock, and the
+/// verdict stays [`crate::time::Regime::Unknown`] rather than substituting this desk's clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServerClock {
+    /// The server's clock at `read_at_ms`, epoch milliseconds.
+    pub at_ms: i64,
+    /// This desk's clock when the picture was read, epoch milliseconds.
+    pub read_at_ms: i64,
+}
+
+impl ServerClock {
+    /// The estimate from the newest fix in the picture, if any hull has reported.
+    pub fn from_positions(positions: &[FeedPosition], read_at_ms: i64) -> Option<Self> {
+        let newest = positions
+            .iter()
+            .filter_map(|position| position.position.as_ref())
+            .min_by(|a, b| a.age_seconds.total_cmp(&b.age_seconds))?;
+        let at_ms = newest.received_at.timestamp_millis() + (newest.age_seconds * 1_000.0) as i64;
+        Some(Self { at_ms, read_at_ms })
+    }
+
+    /// The server's clock now, from this desk's elapsed time since the read.
+    pub fn now_ms(&self, desk_now_ms: i64) -> i64 {
+        self.at_ms + (desk_now_ms - self.read_at_ms)
+    }
+}
+
 /// **Where the picture is in its life.** The list is the picture already in memory; this is the sentence
 /// beside it, which has to say "cached" when the list is not now.
 #[derive(Debug, Clone, PartialEq, Eq)]

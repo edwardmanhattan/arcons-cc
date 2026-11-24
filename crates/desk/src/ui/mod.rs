@@ -67,8 +67,13 @@ pub struct State {
     pub committed: CivilTime,
     pub epoch_ms: i64,
     pub verdict: Verdict,
-    /// The server's clock, fixed by the caller. `None` would be no verdict, never "now".
-    pub server_now_ms: i64,
+    /// The server's clock, estimated from the picture (#290). `None` is no estimate, never "now": the
+    /// verdict is `Unknown` until a fix gives one.
+    pub server_now_ms: Option<i64>,
+    /// The estimate and when the desk read it, so the clock can be carried forward (#290).
+    pub server_clock: Option<crate::picture::ServerClock>,
+    /// Where the verdict's clock came from: the sample scene, a fix's estimate, or nowhere yet.
+    pub clock_source: ClockSource,
     /// The day a bare pasted `14:03` belongs to, fixed by the caller.
     pub today: CivilTime,
     /// The month the calendar is showing, which the arrows can move away from the committed one.
@@ -122,7 +127,9 @@ impl State {
             committed: recorded,
             epoch_ms,
             verdict: time::verdict(epoch_ms, Some(server_now_ms)),
-            server_now_ms,
+            server_now_ms: Some(server_now_ms),
+            server_clock: None,
+            clock_source: ClockSource::Sample,
             today: recorded,
             month: Month::of_days(civil::days_from_civil(2026, 11, 20)),
             calendar_open: true,
@@ -155,6 +162,15 @@ impl State {
 
     /// The same, with the config directory passed in so a test can use its own.
     pub fn open_with(dir: Option<&std::path::Path>) -> Self {
+        Self::open_at(dir, crate::picture::now_ms())
+    }
+
+    /// **The window's first state at a named instant** (#284, #290).
+    ///
+    /// The OS clock is the operator's now: it sets the field's day and time. The **server's** clock is a
+    /// separate question; a fix in the cache (or the read) estimates it, and with no fix it stays `None` —
+    /// the verdict is `Unknown` rather than being borrowed from this desk's clock.
+    pub fn open_at(dir: Option<&std::path::Path>, now_ms: i64) -> Self {
         let mut state = Self::sample();
         state.desk = Desk::new(Picker::new(Vec::new()));
         state.picture_status = crate::picture::Status::None;
@@ -164,7 +180,22 @@ impl State {
             state.picture_status = crate::picture::Status::Cached {
                 read_at_ms: cached.read_at_ms,
             };
+            state.server_clock =
+                crate::picture::ServerClock::from_positions(&cached.positions, cached.read_at_ms);
         }
+        state.server_now_ms = state.server_clock.map(|clock| clock.now_ms(now_ms));
+        state.clock_source = if state.server_now_ms.is_some() {
+            ClockSource::Server
+        } else {
+            ClockSource::Unknown
+        };
+        let civil = zoned::at_offset(now_ms, WIB_OFFSET_MS);
+        state.today = civil;
+        state.committed = civil;
+        state.epoch_ms = now_ms;
+        state.segments = Segments::new(civil);
+        state.month = Month::of_days(civil::days_from_civil(civil.year, civil.month, civil.day));
+        state.verdict = time::verdict(now_ms, state.server_now_ms);
         state
     }
 
@@ -213,9 +244,22 @@ impl State {
     /// **The read's answer, applied.** The picker is replaced; the batch is a draft and keeps its rows, even
     /// when a hull is no longer in the picture. A selection whose hull is gone is cleared.
     pub fn apply_picture(&mut self, picture: crate::picture::Picture) {
+        self.apply_picture_at(picture, crate::picture::now_ms());
+    }
+
+    /// The same, with the desk's clock passed in so a test can name the instant (#290).
+    pub fn apply_picture_at(&mut self, picture: crate::picture::Picture, now_ms: i64) {
         self.desk.set_picture(picture.picker());
         self.picture_status = crate::picture::Status::Ready {
             read_at_ms: picture.read_at_ms,
+        };
+        self.server_clock =
+            crate::picture::ServerClock::from_positions(&picture.positions, picture.read_at_ms);
+        self.server_now_ms = self.server_clock.map(|clock| clock.now_ms(now_ms));
+        self.clock_source = if self.server_now_ms.is_some() {
+            ClockSource::Server
+        } else {
+            ClockSource::Unknown
         };
     }
 
@@ -228,6 +272,52 @@ impl State {
 
     pub fn refreshing(&self) -> bool {
         self.picture_inbox.is_some()
+    }
+
+    /// **Carry the clocks forward** (#290). The operator's today follows the OS clock; the server's estimate
+    /// follows the desk's elapsed time. `Sample` is fixed, because a capture must not tick. Returns whether
+    /// the day or the verdict changed, so the frame loop redraws only when the answer could have changed.
+    pub fn tick_clock(&mut self) -> bool {
+        self.tick_clock_at(crate::picture::now_ms())
+    }
+
+    /// The same at a named instant, for a test.
+    pub fn tick_clock_at(&mut self, now_ms: i64) -> bool {
+        if self.clock_source == ClockSource::Sample {
+            return false;
+        }
+        let mut changed = false;
+        let today = zoned::at_offset(now_ms, WIB_OFFSET_MS);
+        if today != self.today {
+            self.today = today;
+            changed = true;
+        }
+        if let Some(clock) = &self.server_clock {
+            self.server_now_ms = Some(clock.now_ms(now_ms));
+            let verdict = time::verdict(self.epoch_ms, self.server_now_ms);
+            if verdict != self.verdict {
+                self.verdict = verdict;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// The one line under the field that says whether the verdict is asked against the server's clock or
+    /// against nothing yet (#290). `Sample` is a capture's fixed clock, not a claim about a deployment.
+    pub fn clock_line(&self) -> String {
+        match self.clock_source {
+            ClockSource::Sample => "sample clock — a scene's fixed time".to_string(),
+            ClockSource::Server => {
+                let read_at = self.server_clock.map_or(0, |clock| clock.read_at_ms);
+                let civil = zoned::at_offset(read_at, WIB_OFFSET_MS);
+                format!(
+                    "server clock · read at {:02}:{:02}",
+                    civil.hour, civil.minute
+                )
+            }
+            ClockSource::Unknown => "server clock not known yet".to_string(),
+        }
     }
 
     /// The day the calendar highlights: the date the field now reads, when the calendar is
@@ -284,7 +374,7 @@ impl State {
         if self.inbox.is_some() {
             return;
         }
-        let plan = self.desk.batch().plan(Some(self.server_now_ms));
+        let plan = self.desk.batch().plan(self.server_now_ms);
         if plan.sendable.is_empty() {
             self.send_failure = Some(match self.review_line() {
                 Some(held) => format!("nothing to send — {held}"),
@@ -348,7 +438,7 @@ impl State {
     /// held rows named here, and the button counting **requests**. A modal would be a second place to read one
     /// sentence on a screen that already allows sending without looking, so there is no second surface.
     pub fn review_line(&self) -> Option<String> {
-        let plan = self.desk.batch().plan(Some(self.server_now_ms));
+        let plan = self.desk.batch().plan(self.server_now_ms);
         if plan.blocked.is_empty() {
             return None;
         }
@@ -505,7 +595,7 @@ impl State {
         self.error = None;
         self.notice = None;
         self.epoch_ms = time.0;
-        self.verdict = time::verdict(time.0, Some(self.server_now_ms));
+        self.verdict = time::verdict(time.0, self.server_now_ms);
     }
 
     /// Enter in the list: select the row the keyboard is on. Returns the hull it selected, or `None` when
@@ -572,7 +662,7 @@ impl State {
         let id_unit = self.desk.selected()?;
         let name = self.desk.vessel(id_unit)?.name.clone();
         let fix = self.draft_fix(id_unit)?;
-        Some(Row { id_unit, name, fix }.readiness(Some(self.server_now_ms)))
+        Some(Row { id_unit, name, fix }.readiness(self.server_now_ms))
     }
 
     /// The calendar's day: it sets the whole date, because a calendar that changed only the day
@@ -644,7 +734,7 @@ impl State {
         match zoned::resolve(civil, |_| WIB_OFFSET_MS) {
             Resolution::Unique { epoch_ms, .. } => {
                 self.epoch_ms = epoch_ms;
-                self.verdict = time::verdict(epoch_ms, Some(self.server_now_ms));
+                self.verdict = time::verdict(epoch_ms, self.server_now_ms);
             }
             Resolution::Gap => {
                 self.notice = Some("that wall clock never happened in WIB".to_string());
@@ -703,17 +793,20 @@ fn poll(state: &mut State, _elapsed: f64, _tx: &mut rune::Tx) -> bool {
         state.refresh_picture();
         changed = true;
     }
+    // **The clock moves while the operator reads** (#290): the today follows the OS, the server estimate
+    // follows the desk's elapsed time, and a verdict that crossed a line redraws once.
+    let clock = state.tick_clock();
     // **The send's answer arrives while nobody is pressing anything**, which is the same trap the map's first
     // frame was: a static screen is never redrawn unless somebody asks.
     let answered = state.send_answered();
     let refreshed = state.refresh_answered();
     #[cfg(feature = "map")]
     {
-        changed | answered | refreshed | crate::chart::engine::frame_arrived()
+        changed | clock | answered | refreshed | crate::chart::engine::frame_arrived()
     }
     #[cfg(not(feature = "map"))]
     {
-        changed | answered | refreshed
+        changed | clock | answered | refreshed
     }
 }
 
@@ -774,6 +867,18 @@ pub enum Focus {
     List,
     /// An armed placement: the arrows move the crosshair, Enter places, Escape cancels.
     Chart,
+}
+
+/// **Where the clock a verdict is asked against came from** (#290).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ClockSource {
+    /// A scene's fixed sample; a capture must not carry a clock forward.
+    #[default]
+    Sample,
+    /// A fix's `received_at + age_seconds`, carried forward by the desk's elapsed time.
+    Server,
+    /// No hull has reported, or no picture has been read: no server clock, no verdict.
+    Unknown,
 }
 
 pub fn on_key(state: &mut State, event: &rune::KeyEvent, tx: &mut rune::Tx) -> bool {
@@ -1102,12 +1207,18 @@ fn form(state: &State) -> El {
                 .color(tokens::ink_dim()),
         );
     }
-    form.child(readiness_line(state))
-        .child(hairline())
-        .child(caption("SOURCE · KEPT HERE, NEVER SENT"))
-        .child(source_note(state))
-        .child(spacer())
-        .child(update_button(state))
+    form.child(
+        text(state.clock_line())
+            .key("clock-source")
+            .font(tokens::LABEL)
+            .color(tokens::ink_dim()),
+    )
+    .child(readiness_line(state))
+    .child(hairline())
+    .child(caption("SOURCE · KEPT HERE, NEVER SENT"))
+    .child(source_note(state))
+    .child(spacer())
+    .child(update_button(state))
 }
 
 /// `REPORT · 1 OF 2 VESSELS` when the hull has a row, `NOT IN THE BATCH` when it has not, and the empty

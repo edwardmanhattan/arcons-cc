@@ -758,7 +758,7 @@ fn card(state: &State, held: &Row) -> El {
         .desk
         .vessel(id_unit)
         .map_or_else(|| "—".to_string(), |vessel| vessel.hull_number.clone());
-    let regime = verdict(held.fix.recorded_at_ms, Some(state.server_now_ms)).regime;
+    let regime = verdict(held.fix.recorded_at_ms, state.server_now_ms).regime;
     let civil = zoned::at_offset(held.fix.recorded_at_ms, held.fix.offset_ms);
 
     col()
@@ -864,12 +864,7 @@ fn footer(state: &State) -> El {
         });
     // **The button names the requests, not the cards.** A row the loop would skip is not a report, and a button
     // that said "Send 2" beside "1 not sent" would be the count disagreeing with the line next to it.
-    let ready = state
-        .desk
-        .batch()
-        .plan(Some(state.server_now_ms))
-        .sendable
-        .len();
+    let ready = state.desk.batch().plan(state.server_now_ms).sendable.len();
     let send = if state.sending() {
         "Sending…".to_string()
     } else {
