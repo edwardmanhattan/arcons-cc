@@ -118,59 +118,15 @@ impl super::Device {
         // maximum number of CBV/SRV/UAV descriptors in heap for Tier 1
         let capacity_views = limits.max_non_sampler_bindings as u64;
 
-        let draw_mesh = if features
-            .features_wgpu
-            .contains(wgt::FeaturesWGPU::EXPERIMENTAL_MESH_SHADER)
-        {
-            Some(Self::create_command_signature(
-                &raw,
-                None,
-                size_of::<wgt::DispatchIndirectArgs>(),
-                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
-                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH,
-                    ..Default::default()
-                }],
-                0,
-            )?)
-        } else {
-            None
-        };
-
+        let drain = Arc::new(super::DrainTracker::new(&adapter, &raw));
         let shared = super::DeviceShared {
             adapter,
             zero_buffer,
-            cmd_signatures: super::CommandSignatures {
-                draw: Self::create_command_signature(
-                    &raw,
-                    None,
-                    size_of::<wgt::DrawIndirectArgs>(),
-                    &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
-                        Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DRAW,
-                        ..Default::default()
-                    }],
-                    0,
-                )?,
-                draw_indexed: Self::create_command_signature(
-                    &raw,
-                    None,
-                    size_of::<wgt::DrawIndexedIndirectArgs>(),
-                    &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
-                        Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED,
-                        ..Default::default()
-                    }],
-                    0,
-                )?,
-                draw_mesh,
-                dispatch: Self::create_command_signature(
-                    &raw,
-                    None,
-                    size_of::<wgt::DispatchIndirectArgs>(),
-                    &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
-                        Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH,
-                        ..Default::default()
-                    }],
-                    0,
-                )?,
+            cmd_signatures: super::LazyCommandSignatures {
+                mesh: features
+                    .features_wgpu
+                    .contains(wgt::FeaturesWGPU::EXPERIMENTAL_MESH_SHADER),
+                made: std::sync::OnceLock::new(),
             },
             heap_views: descriptor::GeneralHeap::new(
                 &raw,
@@ -179,6 +135,7 @@ impl super::Device {
             )?,
             sampler_heap: super::sampler::SamplerHeap::new(&raw, &private_caps)?,
             private_caps,
+            drain,
         };
 
         let mut rtv_pool =
@@ -232,6 +189,61 @@ impl super::Device {
         })
     }
 
+    /// Rune: the device's own indirect command signatures (`LazyCommandSignatures`), which
+    /// `Device::new` made with the device.
+    pub(super) fn create_command_signatures(
+        raw: &Direct3D12::ID3D12Device,
+        mesh: bool,
+    ) -> Result<super::CommandSignatures, crate::DeviceError> {
+        let draw_mesh = if mesh {
+            Some(Self::create_command_signature(
+                raw,
+                None,
+                size_of::<wgt::DispatchIndirectArgs>(),
+                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
+                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH,
+                    ..Default::default()
+                }],
+                0,
+            )?)
+        } else {
+            None
+        };
+        Ok(super::CommandSignatures {
+            draw: Self::create_command_signature(
+                raw,
+                None,
+                size_of::<wgt::DrawIndirectArgs>(),
+                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
+                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DRAW,
+                    ..Default::default()
+                }],
+                0,
+            )?,
+            draw_indexed: Self::create_command_signature(
+                raw,
+                None,
+                size_of::<wgt::DrawIndexedIndirectArgs>(),
+                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
+                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED,
+                    ..Default::default()
+                }],
+                0,
+            )?,
+            draw_mesh,
+            dispatch: Self::create_command_signature(
+                raw,
+                None,
+                size_of::<wgt::DispatchIndirectArgs>(),
+                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
+                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH,
+                    ..Default::default()
+                }],
+                0,
+            )?,
+        })
+    }
+
     fn create_command_signature(
         raw: &Direct3D12::ID3D12Device,
         root_signature: Option<&Direct3D12::ID3D12RootSignature>,
@@ -270,6 +282,7 @@ impl super::Device {
             // Never stored: read a moment before D3D12 reports the removal, it would stay
             // "everything finished" for good.
             if unsafe { self.raw.GetDeviceRemovedReason() }.is_err() {
+                self.shared.drain.mark_removed();
                 return None;
             }
             return Some(fence.reached.load(core::sync::atomic::Ordering::Relaxed));
@@ -281,19 +294,45 @@ impl super::Device {
     //
     // Once this method completes, the surface is able to be resized or deleted.
     pub(super) unsafe fn wait_for_present_queue_idle(&self) -> Result<(), crate::DeviceError> {
+        let on_removed = || {
+            self.shared.drain.mark_removed();
+            self.shared.drain.wait_after_removal();
+            Err(crate::DeviceError::Lost)
+        };
         let cur_value = unsafe { self.idler.fence.GetCompletedValue() };
         if cur_value == !0 {
-            return Err(crate::DeviceError::Lost);
+            return on_removed();
         }
 
         let event = Event::create(false, false)?;
 
         let value = cur_value + 1;
-        unsafe { self.present_queue.Signal(&self.idler.fence, value) }
-            .into_device_result("Signal")?;
-        let hr = unsafe { self.idler.fence.SetEventOnCompletion(value, event.0) };
-        hr.into_device_result("Set event")?;
-        unsafe { Threading::WaitForSingleObject(event.0, Threading::INFINITE) };
+        if let Err(err) = unsafe { self.present_queue.Signal(&self.idler.fence, value) }
+            .into_device_result("Signal")
+        {
+            if matches!(err, crate::DeviceError::Lost) {
+                return on_removed();
+            }
+            return Err(err);
+        }
+        if let Err(err) = unsafe { self.idler.fence.SetEventOnCompletion(value, event.0) }
+            .into_device_result("Set event")
+        {
+            if matches!(err, crate::DeviceError::Lost) {
+                return on_removed();
+            }
+            return Err(err);
+        }
+        while unsafe { Threading::WaitForSingleObject(event.0, 100) } == Foundation::WAIT_TIMEOUT {
+            if unsafe { self.raw.GetDeviceRemovedReason() }.is_err() {
+                return on_removed();
+            }
+        }
+        if unsafe { self.idler.fence.GetCompletedValue() } == !0
+            && unsafe { self.raw.GetDeviceRemovedReason() }.is_err()
+        {
+            return on_removed();
+        }
         Ok(())
     }
 
@@ -847,6 +886,7 @@ impl crate::Device for super::Device {
             intermediate_copy_bufs: Vec::new(),
             null_rtv_handle: self.null_rtv_handle,
             list: None,
+            list2: None,
             free_lists: Vec::new(),
             pass: super::PassState::new(),
             temp: super::Temp::default(),

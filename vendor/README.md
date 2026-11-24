@@ -6,7 +6,8 @@ wrong, what we changed, and when to drop it**. If the reason stops being true, d
 Nothing in this directory is re-exported as our API: the code is upstream's, the patch is ours.
 
 **The six Rune copies are the rev's list, not ours.** `scripts/vendor-patches.sh` reads `[patch.crates-io]` from the
-manifest at the pinned rev and copies every crate it names — two when `#185` started this, six at `d0eaf332`. A crate
+manifest at the pinned rev and copies every crate it names — two when `#185` started this, six at `d0eaf332`, six at
+`2899b3d3`. A crate
 listed there that this file does not have a `[patch.crates-io]` line for is a run that fails with the lines to add; a
 crate we carry that the rev has stopped patching is a run that fails with the three things to delete. The alternative,
 a `CRATES` array in the script, is what let the `#185` bump carry two of that rev's four patches without anything going
@@ -77,8 +78,8 @@ not draw on Windows yet.
 
 ## `winit` — Rune's copy, because a dependency's patch cannot reach us (#185)
 
-Copied from Rune's own `vendor/winit` at the rev `Cargo.toml` pins (`d0eaf332`): winit 0.30.13 as published, plus
-Rune's `vendor/winit.patch` — sixteen files, 617 lines (seven files, 313 lines at `4af66a06`). It is applied through
+Copied from Rune's own `vendor/winit` at the rev `Cargo.toml` pins (`2899b3d3`): winit 0.30.13 as published, plus
+Rune's `vendor/winit.patch` — twenty files, 1,611 lines (sixteen files, 617 lines at `d0eaf332`). It is applied through
 `[patch.crates-io]` in **our** root `Cargo.toml`, and re-made by `scripts/vendor-patches.sh`, which takes the copy and
 the patch from the pinned rev.
 
@@ -105,7 +106,7 @@ together.
 ## `wgpu-hal` — Rune's copy, for the same reason as `winit` (#185)
 
 Copied from Rune's `vendor/wgpu-hal` at the rev `Cargo.toml` pins: wgpu-hal 30.0.1 as published, plus Rune's
-`vendor/wgpu-hal.patch` — eight files, 440 lines (four files, 163 lines at `4af66a06`). Applied through our own
+`vendor/wgpu-hal.patch` — twelve files, 1,405 lines (eight files, 440 lines at `d0eaf332`). Applied through our own
 `[patch.crates-io]`, re-made by `scripts/vendor-patches.sh`.
 
 **Why.** Rune's DX12 backend calls `Surface::set_present_rects` — `Present1`'s dirty rectangles on a sequential
