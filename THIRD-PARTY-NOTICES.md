@@ -4,9 +4,10 @@
 root `LICENSE` file: adding one would relicense code that is not meant to be relicensed. The
 components below keep their own licences, and their texts ship with them.
 
-Everything here is either a direct dependency in `Cargo.toml` or a crate in `Cargo.lock` under a
-licence that asks to be named. `tests/notices.rs` (#12) fails when a direct dependency is missing
-from this file, or when a copyleft crate appears in the lockfile unnamed.
+Everything here is either a direct dependency in `Cargo.toml`, a crate in `Cargo.lock` under a
+licence that asks to be named, or a tool that the HTML documentation loads. `tests/notices.rs` (#12)
+fails when a direct dependency is missing from this file, or when a copyleft crate appears in the
+lockfile unnamed.
 
 ## Bundled at build time
 
@@ -23,6 +24,14 @@ from this file, or when a copyleft crate appears in the lockfile unnamed.
 | **MapLibre Native** (`maplibre_native` 0.9.3, vendored) | BSD-2-Clause | The map engine, vendored for two checkout-cache fixes — see `vendor/README.md`. <https://github.com/maplibre/maplibre-native>. Behind the `map` feature, which the gate does not enable. |
 | **Inter**, **IBM Plex Mono** | SIL Open Font License 1.1 | Typefaces bundled with Rune. |
 | **milsymbol** (`spatialillusions/milsymbol`) | MIT — © 2017 Mans Beckman | NATO/APP-6 icon geometry, pinned by the sister project at `f5134380…` v3.0.5. **Not linked or vendored yet**: `docs/research/sheets/wall-symbol-icons.svg` is derived from it (#33), and lifting the module needs this row to stay and the licence text to travel with the copy. |
+
+## The HTML documentation (`docs/overview.html`)
+
+Not linked into either app. The page loads its renderer from a CDN.
+
+| component | licence | role |
+| --- | --- | --- |
+| **Pele** 1.x (loaded from jsDelivr) | MIT | Renders the Mermaid project-flow diagram in the HTML documentation. The Mermaid 12.1.0 grammar and specs inside Pele are also MIT. <https://github.com/obsidianmd/pele> |
 
 ## The phone's package (`clients/phone/`, Dart)
 

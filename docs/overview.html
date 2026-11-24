@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arcons CC — project summary and runbook</title>
+<meta name="description" content="The flow of the wall, the desk, the phone, and the relay. How to run each app. ASD-STE100 wording.">
+<style>
+  :root {
+    --bg: #f7f9fb;
+    --surface: #ffffff;
+    --ink: #16202b;
+    --muted: #5b6976;
+    --line: #d9e1e8;
+    --line-strong: #b9c6d2;
+    --accent: #0e7490;
+    --accent-soft: #e6f6fa;
+    --warning-bg: #fff8e6;
+    --warning-line: #d97706;
+    --note-bg: #eef8fb;
+    --note-line: #0e7490;
+    --code-bg: #0d1721;
+    --code-ink: #e6edf3;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --pele-bg: #ffffff;
+    --pele-fg: #16202b;
+    --pele-muted: #5b6976;
+    --pele-line: #334155;
+    --pele-surface: #f1f5f9;
+    --pele-surface-alt: #e2e8f0;
+    --pele-border: #cbd5e1;
+    --pele-accent: #0e7490;
+    --pele-font: var(--sans);
+    --pele-radius: 6px;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+  }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:hover { text-decoration-thickness: 2px; }
+  code, pre { font-family: var(--mono); font-size: 0.9em; }
+  code { background: #edf2f6; border-radius: 4px; padding: 0.1em 0.35em; }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 8px;
+    padding: 1rem 1.1rem;
+    overflow-x: auto;
+    line-height: 1.5;
+  }
+  pre code { background: transparent; padding: 0; color: inherit; font-size: 0.88rem; }
+  .wrap { width: min(1080px, calc(100% - 2rem)); margin: 0 auto; }
+
+  .page-header {
+    background: #0b1220;
+    color: #e6edf3;
+    padding: 3rem 0 2rem;
+    border-bottom: 4px solid var(--accent);
+  }
+  .page-header .eyebrow {
+    margin: 0 0 0.5rem;
+    color: #7dd3e8;
+    font-size: 0.8rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+  .page-header h1 {
+    margin: 0;
+    font-size: clamp(1.9rem, 4vw, 3rem);
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    max-width: 20ch;
+  }
+  .page-header .lede {
+    margin: 1rem 0 0;
+    max-width: 72ch;
+    color: #c9d4df;
+    font-size: 1.08rem;
+  }
+  .page-header .meta { margin: 1.25rem 0 0; color: #9fb0c0; font-size: 0.9rem; }
+  .page-header code { background: #1a2a3b; color: #d7e7f3; }
+  .page-header a { color: #7dd3e8; }
+  .toc {
+    margin: 1.5rem 0 0;
+    padding: 1rem 1.1rem;
+    background: #111d2b;
+    border: 1px solid #25384b;
+    border-radius: 8px;
+  }
+  .toc h2 {
+    margin: 0 0 0.5rem;
+    font-size: 0.8rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #9fb0c0;
+  }
+  .toc ol { margin: 0; padding-left: 1.2rem; columns: 2; column-gap: 2rem; }
+  .toc li { margin: 0.2rem 0; }
+
+  main { padding: 2.5rem 0 4rem; }
+  section { margin: 0 0 3rem; scroll-margin-top: 1rem; }
+  h2 {
+    font-size: 1.6rem;
+    letter-spacing: -0.01em;
+    margin: 0 0 1rem;
+    padding-bottom: 0.6rem;
+    border-bottom: 2px solid var(--line);
+  }
+  h3 { font-size: 1.18rem; margin: 1.8rem 0 0.6rem; color: #253242; }
+  p { margin: 0.7rem 0; max-width: 78ch; }
+  .lede, .summary { font-size: 1.05rem; }
+
+  .table-wrap {
+    overflow-x: auto;
+    margin: 1rem 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 0.93rem; }
+  th, td { text-align: left; vertical-align: top; padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--line); }
+  th { background: #eef3f7; color: #253242; font-weight: 700; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr:nth-child(even) { background: #fbfcfd; }
+
+  .callout {
+    border-left: 4px solid var(--note-line);
+    background: var(--note-bg);
+    padding: 0.8rem 1rem;
+    border-radius: 0 8px 8px 0;
+    margin: 1rem 0;
+    max-width: 78ch;
+  }
+  .callout.warning { border-left-color: var(--warning-line); background: var(--warning-bg); }
+  .callout p { margin: 0.25rem 0; }
+  .callout strong { color: #253242; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin: 1.2rem 0; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.1rem; }
+  .card h3 { margin: 0 0 0.35rem; font-size: 1rem; }
+  .card p { margin: 0; color: var(--muted); font-size: 0.92rem; }
+
+  .diagram-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 1rem;
+    margin: 1.2rem 0 1.6rem;
+  }
+  .diagram-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.6rem;
+  }
+  .diagram-head h3 { margin: 0; font-size: 1.05rem; }
+  .diagram-head span { color: var(--muted); font-size: 0.85rem; }
+  .diagram { overflow-x: auto; padding: 0.4rem; min-height: 240px; }
+  .diagram svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+  .diagram-error {
+    color: #9a3412;
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    border-radius: 8px;
+    padding: 0.8rem;
+  }
+  .diagram-note { color: var(--muted); font-size: 0.88rem; margin: 0.4rem 0 0; }
+  .source { margin-top: 0.8rem; border-top: 1px dashed var(--line); padding-top: 0.7rem; }
+  .source summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+  .source pre { margin-top: 0.7rem; }
+
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    background: #e6f6fa;
+    color: #0e7490;
+    border: 1px solid #b7e4ef;
+  }
+  .status.open { background: #fff8e6; color: #92400e; border-color: #f5d58b; }
+  .status.red { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+
+  .footer {
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.86rem;
+    padding: 1.3rem 0 2.5rem;
+  }
+  .footer p { max-width: 80ch; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 0.8rem 0; }
+  .kv dt { font-weight: 700; color: #253242; }
+  .kv dd { margin: 0; }
+
+  @media (max-width: 720px) {
+    .page-header { padding: 2rem 0 1.5rem; }
+    .toc ol { columns: 1; }
+    main { padding: 1.5rem 0 3rem; }
+    h2 { font-size: 1.35rem; }
+  }
+  @media print {
+    .page-header { background: #fff; color: #000; border-bottom: 2px solid #000; }
+    .page-header .eyebrow, .page-header .lede, .page-header .meta { color: #333; }
+    .toc, .diagram-card { break-inside: avoid; }
+    a { color: #000; }
+    pre { border: 1px solid #ccc; }
+  }
+</style>
+</head>
+<body>
+
+<header class="page-header">
+  <div class="wrap">
+    <p class="eyebrow">Arcons Command Center · project documentation</p>
+    <h1>The project: one picture, four apps, one gate</h1>
+    <p class="lede">
+      This page gives a summary of the project. It shows the current flow. It shows how to run each app.
+      It uses short sentences and the project's words.
+    </p>
+    <p class="meta">
+      Repository state: <code>main</code> at <code>559e1e1</code> (#288). Last update: 2026-11-24.
+      The diagram is rendered with <a href="https://github.com/obsidianmd/pele">Pele</a>.
+    </p>
+    <nav class="toc" aria-label="Contents">
+      <h2>Contents</h2>
+      <ol>
+        <li><a href="#summary">Summary</a></li>
+        <li><a href="#words">The words</a></li>
+        <li><a href="#flow">The flow</a></li>
+        <li><a href="#run">Run each app</a></li>
+        <li><a href="#gate">The gate</a></li>
+        <li><a href="#state">Current state</a></li>
+      </ol>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+<section id="summary">
+  <h2>Summary</h2>
+  <p class="summary">
+    The project draws the live maritime picture on a wall. The wall shows the units and their fixes.
+    Minos is the backend. Minos is not in this repository. The apps use a deployment's URL.
+  </p>
+
+  <div class="cards">
+    <div class="card">
+      <h3>The wall</h3>
+      <p>Repository root. Reads Minos. Draws the picture. Does not write Minos.</p>
+    </div>
+    <div class="card">
+      <h3>The desk</h3>
+      <p><code>crates/desk</code>. Reads Minos. Writes one fix for one unit.</p>
+    </div>
+    <div class="card">
+      <h3>The phone</h3>
+      <p><code>clients/phone</code>. Controls the wall. Does not read Minos.</p>
+    </div>
+    <div class="card">
+      <h3>The relay</h3>
+      <p><code>tools/dev-relay</code>. Carries the phone's lines to the wall in development.</p>
+    </div>
+    <div class="card">
+      <h3>The gate</h3>
+      <p><code>scripts/verify.sh</code>. Proves the wall and the desk.</p>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>app</th><th>where</th><th>what it does</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>The wall</strong></td><td>repository root, <code>cargo run</code></td><td>Reads Minos. Draws the picture. Does not write Minos.</td></tr>
+        <tr><td><strong>The desk</strong></td><td><code>crates/desk</code>, <code>cargo run -p desk</code></td><td>Reads Minos. Writes one fix for one unit.</td></tr>
+        <tr><td><strong>The phone</strong></td><td><code>clients/phone</code></td><td>Controls the wall. Does not read Minos.</td></tr>
+        <tr><td><strong>The relay</strong></td><td><code>tools/dev-relay</code></td><td>Carries the phone's lines to the wall in development.</td></tr>
+        <tr><td><strong>The gate</strong></td><td><code>scripts/verify.sh</code></td><td>Proves the wall and the desk.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><strong>Minos</strong> is the backend. Minos is not in this repository. The apps use a deployment's URL.</p>
+</section>
+
+<section id="words">
+  <h2>The words</h2>
+  <p>Use these words in this project.</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>word</th><th>meaning</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Unit</strong></td><td>One hull. The API calls it a unit.</td></tr>
+        <tr><td><strong>Fix</strong></td><td>One position report: latitude, longitude, time, and the measured values.</td></tr>
+        <tr><td><strong>Feed</strong></td><td>Every live unit. A unit without a fix is in the feed.</td></tr>
+        <tr><td><strong>Picture</strong></td><td>The feed and the wall's judgements. The wall draws the picture.</td></tr>
+        <tr><td><strong>Manual fix</strong></td><td>A fix that a person entered for a unit. Minos records the operator and the commander.</td></tr>
+        <tr><td><strong>Intent</strong></td><td>One control request from the phone to the wall.</td></tr>
+        <tr><td><strong>Projection</strong></td><td>The wall's arrangement that the phone reads.</td></tr>
+        <tr><td><strong>Scene</strong></td><td>One named state that a capture renders.</td></tr>
+        <tr><td><strong>Golden</strong></td><td>The reference PNG for a scene.</td></tr>
+        <tr><td><strong>The gate</strong></td><td>The command <code>scripts/verify.sh</code>.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="flow">
+  <h2>The flow</h2>
+
+  <div class="diagram-card">
+    <div class="diagram-head">
+      <h3>One picture, four apps, one gate</h3>
+      <span>Rendered with Pele</span>
+    </div>
+    <div id="flow-diagram" class="diagram" role="img" aria-label="Project flow: Minos, the wall, the desk, the phone, the relay, and the gate."></div>
+    <noscript><p class="diagram-error">JavaScript is off. The diagram does not render. The source is in the “Diagram source” section.</p></noscript>
+    <p class="diagram-note">
+      The diagram is rendered from the source below. If Pele does not load, the source is still readable.
+    </p>
+    <details class="source">
+      <summary>Diagram source</summary>
+      <pre><code id="flow-source-text">flowchart TB
+  subgraph Minos[&quot;Minos — the backend (external)&quot;]
+    REST[&quot;REST API&lt;br/&gt;/auth, /live-feed, /units&quot;]
+    SOCK[&quot;Centrifugo socket&lt;br/&gt;live-feed&quot;]
+  end
+
+  subgraph Wall[&quot;The wall — arcons-cc&quot;]
+    WUI[&quot;UI thread + map&lt;br/&gt;Rune + MapLibre&quot;]
+    WDATA[&quot;Data thread&lt;br/&gt;REST read&quot;]
+    WLIVE[&quot;Live thread&lt;br/&gt;socket&quot;]
+    WCTL[&quot;Control plane&lt;br/&gt;unix socket + relay&quot;]
+  end
+
+  subgraph Desk[&quot;The desk — crates/desk&quot;]
+    DREAD[&quot;Read worker&lt;br/&gt;picture + cache&quot;]
+    DUI[&quot;UI thread&lt;br/&gt;Rune&quot;]
+    DSEND[&quot;Send worker&lt;br/&gt;one fix per unit&quot;]
+  end
+
+  subgraph Phone[&quot;The phone — clients/phone&quot;]
+    PUI[&quot;Flutter app&lt;br/&gt;projection + intents&quot;]
+    PRELAY[&quot;Relay carrier&lt;br/&gt;tcp:// or tls://&quot;]
+  end
+
+  RELAY[&quot;Relay&lt;br/&gt;development: tools/dev-relay&quot;]
+  GATE[&quot;The gate&lt;br/&gt;scripts/verify.sh&quot;]
+  CLI[&quot;arcons-cc ctl&lt;br/&gt;local client&quot;]
+
+  REST --&gt;|&quot;GET /live-feed/positions&quot;| WDATA
+  SOCK --&gt;|&quot;WSS live-feed&quot;| WLIVE
+  WDATA --&gt; WUI
+  WLIVE --&gt; WUI
+  REST --&gt;|&quot;GET /live-feed/positions&quot;| DREAD
+  DREAD --&gt;|&quot;paint first&quot;| DUI
+  DUI --&gt;|&quot;one fix per unit&quot;| DSEND
+  DSEND --&gt;|&quot;POST /live-feed/fixes/relayed&quot;| REST
+  REST -.-&gt;|&quot;publishes the fix&quot;| SOCK
+  CLI --&gt;|&quot;intents&quot;| WCTL
+  WCTL --&gt;|&quot;intents&quot;| WUI
+  WUI --&gt;|&quot;projection&quot;| WCTL
+  PUI &lt;--&gt;|&quot;intents / projection&quot;| PRELAY
+  PRELAY &lt;--&gt;|&quot;JSON lines&quot;| RELAY
+  RELAY &lt;--&gt;|&quot;JSON lines&quot;| WCTL
+  GATE -.-&gt;|&quot;proves&quot;| WUI
+  GATE -.-&gt;|&quot;proves&quot;| DUI
+  GATE -.-&gt;|&quot;proves (CI)&quot;| PUI</code></pre>
+    </details>
+  </div>
+
+
+  <h3>The wall</h3>
+  <ol>
+    <li>The wall starts. The config and the credential are read.</li>
+    <li>The data thread reads <code>GET /live-feed/positions</code>.</li>
+    <li>The live thread connects to Centrifugo. It subscribes to <code>live-feed</code>.</li>
+    <li>The map thread draws a frame. The UI thread draws the picture, the panes, the cards, and the menus.</li>
+    <li>A live fix arrives. The live thread sends it to the UI. The UI draws the fix.</li>
+    <li>A reconnect starts a new read. There is no history on <code>live-feed</code>.</li>
+    <li>The control plane receives intents. The local client, or the phone through the relay, sends them.</li>
+  </ol>
+  <p><strong>The wall is read-only for Minos.</strong> The wall writes only its own arrangement and settings on disk.</p>
+
+  <h3>The desk</h3>
+  <ol>
+    <li>The desk starts. The deployment and the credential are read.</li>
+    <li>The read worker reads <code>GET /live-feed/positions</code>.</li>
+    <li>The read worker writes <code>desk-picture.json</code>. The UI paints the cache first.</li>
+    <li>The person at the desk selects a unit and enters a fix.</li>
+    <li>The send worker sends one <code>POST /live-feed/fixes/relayed</code> for one unit.</li>
+    <li>Minos answers for that unit: <code>201</code> with <code>latest</code>, or <code>400</code>, <code>401</code>, <code>403</code>, <code>404</code>, <code>422</code>.</li>
+    <li>Minos records the fix. Minos publishes the fix. The wall receives it.</li>
+    <li>The wall shows the manual fix: the hollow provenance ring and the card line "reported by X for Y".</li>
+  </ol>
+
+  <div class="callout warning">
+    <p><strong>WARNING:</strong> The desk sends a real fix. Use a test deployment or a named test unit.</p>
+    <p>A <code>403</code> can mean "this unit has no commander" or "this account lacks <code>report_as</code>". These are refusals, not bugs.</p>
+  </div>
+
+  <h3>The phone</h3>
+  <ol>
+    <li>The phone pairs with the wall. The wall shows six digits. The phone sends <code>pair.claim</code>.</li>
+    <li>The phone reads the wall's projection. It asks for a watch after the read.</li>
+    <li>The phone sends intents: focus, drop, resize, follow, and the other verbs in <code>docs/control.md</code>.</li>
+    <li>The wall applies the intent. The wall publishes the new projection.</li>
+    <li>The phone reads the projection. It does not receive the picture.</li>
+  </ol>
+  <p><strong>The phone does not read Minos.</strong> It controls the wall.</p>
+
+  <h3>The relay</h3>
+  <p>The wall dials out to the relay. The phone dials the relay. The relay carries JSON lines. In development, <code>tools/dev-relay</code> is the relay.</p>
+  <div class="callout warning">
+    <p><strong>WARNING:</strong> The development relay has no authentication, no TLS, and no persistence. Do not use it on a deployment.</p>
+  </div>
+</section>
+
+<section id="run">
+  <h2>Run each app</h2>
+
+  <h3>1. Prepare the configuration</h3>
+  <p>The wall and the desk use the same files. The program reads the environment first, then the file.</p>
+  <p>Make the directory:</p>
+  <pre><code>mkdir -p "$XDG_CONFIG_HOME/arcons-cc"</code></pre>
+  <p>Write <code>config.toml</code>:</p>
+  <pre><code>minos_url      = "https://HOST/api/v1"
+centrifugo_url = "wss://HOST/connection/websocket"
+credentials    = "credentials.toml"
+map_center     = [-6.10, 106.88]
+map_zoom       = 11.0
+stale_after_s  = 300</code></pre>
+  <p>Write <code>credentials.toml</code>:</p>
+  <pre><code>refresh_token = "…"</code></pre>
+  <p>Use <code>refresh_token</code>, or <code>identifier</code> and <code>password</code>.</p>
+  <p>Set the mode:</p>
+  <pre><code>chmod 600 "$XDG_CONFIG_HOME/arcons-cc/credentials.toml"</code></pre>
+  <div class="callout warning">
+    <p><strong>WARNING:</strong> The credential file must have mode <code>0600</code>. The wall and the desk refuse a file with a group or other permission bit.</p>
+  </div>
+  <p>You can use environment variables instead:</p>
+  <pre><code>MINOS_BASE_URL=https://HOST/api/v1
+MINOS_SOCKET_URL=wss://HOST/connection/websocket
+MINOS_REFRESH_TOKEN=…</code></pre>
+  <p>The desk can use <code>MINOS_IDENTIFIER</code> and <code>MINOS_PASSWORD</code>.</p>
+  <p><strong>The permissions:</strong></p>
+  <ul>
+    <li>The wall account needs <code>read</code> on <code>/system/live-feed</code> and <code>/system/units</code>.</li>
+    <li>The desk account needs <code>read</code> on <code>/system/live-feed</code> and <code>report_as</code> on <code>/system/live-feed</code>.</li>
+  </ul>
+  <p>Check the wall:</p>
+  <pre><code>cargo run -- --self-check</code></pre>
+  <p>Exit codes: <code>0</code> ok, <code>1</code> config, <code>2</code> credential, <code>3</code> login, <code>4</code> REST, <code>5</code> socket, <code>6</code> seed.</p>
+
+  <h3>2. Run the wall</h3>
+  <p>Use the map feature to see the map:</p>
+  <pre><code>cargo run --features map</code></pre>
+  <p>Use no map for the gate build:</p>
+  <pre><code>cargo run</code></pre>
+  <p>Useful flags:</p>
+  <pre><code>cargo run --features map -- --fullscreen
+cargo run --features map -- --window-size 1920x1080
+cargo run -- --version
+cargo run -- --self-check
+cargo run -- --scene &lt;scene&gt; --snap out/&lt;scene&gt;.png
+cargo run -- --record
+cargo run -- ctl pane focus 2</code></pre>
+  <div class="callout">
+    <p><strong>Note:</strong> The first map build is slow. The build machine uses a prebuilt MapLibre core. Read <code>docs/build-environment.md</code> before you change a profile, <code>jobs</code>, or the target directory.</p>
+  </div>
+  <div class="callout">
+    <p><strong>Note:</strong> The control socket is local and Unix only. Set <code>ARCONS_CONTROL=0</code> to turn the control plane off.</p>
+    <p><strong>Note:</strong> The wall can use a relay. Set <code>ARCONS_RELAY_URL=tcp://HOST:PORT</code>.</p>
+  </div>
+
+  <h3>3. Run the desk</h3>
+  <p>Use the map feature for the chart:</p>
+  <pre><code>cargo run -p desk --features map</code></pre>
+  <p>Use no map:</p>
+  <pre><code>cargo run -p desk</code></pre>
+  <p>Useful commands:</p>
+  <pre><code>cargo run -p desk -- --self-check
+cargo run -p desk -- --new-device-id
+cargo run -p desk -- --scenes
+cargo run -p desk -- --scene &lt;scene&gt; --snap out/desk-&lt;scene&gt;.png</code></pre>
+  <div class="callout">
+    <p><strong>Note:</strong> The desk's <code>--self-check</code> prints the config directory and the device id. The desk checks the deployment and the credential at the first read or send.</p>
+  </div>
+  <p>The desk writes these files:</p>
+  <ul>
+    <li><code>$XDG_CONFIG_HOME/arcons-cc/desk-device-id</code></li>
+    <li><code>$XDG_CONFIG_HOME/arcons-cc/desk-picture.json</code></li>
+  </ul>
+
+  <h3>4. Run the phone</h3>
+  <p>Test the package. This needs no UI toolkit:</p>
+  <pre><code>cd clients/phone
+dart pub get
+dart analyze --fatal-infos
+dart test</code></pre>
+  <p>Test the app:</p>
+  <pre><code>cd clients/phone/app
+flutter pub get
+flutter analyze
+flutter test</code></pre>
+  <p>Run the app against a relay:</p>
+  <pre><code>cd clients/phone/app
+flutter run --dart-define=ARCONS_RELAY=tcp://HOST:PORT</code></pre>
+  <div class="callout">
+    <p><strong>Note:</strong> The camera and the platform key store compile in CI. A human with a phone must test them. See <code>clients/phone/README.md</code>.</p>
+  </div>
+
+  <h3>5. Run the development relay and the phone</h3>
+  <p>Start the relay:</p>
+  <pre><code>dart run tools/dev-relay/bin/main.dart --host 0.0.0.0 --port 7000 --verbose</code></pre>
+  <p>Start the wall with the relay:</p>
+  <pre><code>ARCONS_RELAY_URL=tcp://127.0.0.1:7000 cargo run --features map</code></pre>
+  <p>Start the phone with the relay:</p>
+  <pre><code>cd clients/phone/app
+flutter run --dart-define=ARCONS_RELAY=tcp://&lt;LAN-IP&gt;:7000</code></pre>
+  <p>Show the pairing code on the wall:</p>
+  <pre><code>cargo run -- ctl pair begin</code></pre>
+  <p>Type the six digits on the phone. To revoke the phone:</p>
+  <pre><code>cargo run -- ctl pair forget &lt;name&gt;</code></pre>
+</section>
+
+<section id="gate">
+  <h2>The gate</h2>
+  <p>Run the gate:</p>
+  <pre><code>scripts/verify.sh</code></pre>
+  <p>Use the fast inner loop:</p>
+  <pre><code>scripts/verify.sh --fast</code></pre>
+  <p>Build the map feature too:</p>
+  <pre><code>VERIFY_WITH_MAP=1 scripts/verify.sh</code></pre>
+  <p>The gate runs these checks:</p>
+  <ul>
+    <li><code>cargo fmt --check</code></li>
+    <li><code>cargo clippy -D warnings</code></li>
+    <li><code>cargo test</code></li>
+    <li>the map feature, if requested</li>
+    <li>the spec snapshot</li>
+    <li>the wall captures and assertions</li>
+    <li>the desk captures</li>
+    <li>the frame CPU and memory budgets</li>
+  </ul>
+  <p>Useful capture commands:</p>
+  <pre><code>scripts/capture.sh &lt;scene&gt;
+scripts/capture.sh --update-goldens
+scripts/assert.sh out/&lt;scene&gt;.png
+scripts/capture-desk.sh &lt;scene&gt;
+scripts/capture-desk.sh --update-goldens</code></pre>
+  <div class="callout warning">
+    <p><strong>WARNING:</strong> A golden change needs a human review. Use <code>--update-goldens</code> only after you read the picture diff.</p>
+  </div>
+  <p>Replay the control recording:</p>
+  <pre><code>scripts/conformance.sh fixtures/control/session.jsonl</code></pre>
+  <p>Record the control fixtures:</p>
+  <pre><code>cargo run -- --record</code></pre>
+  <p>Record the desk report exchanges:</p>
+  <pre><code>scripts/record-desk-report.sh</code></pre>
+  <div class="callout warning">
+    <p><strong>WARNING:</strong> The <code>--write</code> option of <code>scripts/record-desk-report.sh</code> writes a real fix. A human must approve it.</p>
+  </div>
+  <p>The phone has separate CI jobs:</p>
+  <ul>
+    <li><code>phone</code></li>
+    <li><code>phone-android</code></li>
+    <li><code>phone-ios</code></li>
+  </ul>
+</section>
+
+<section id="state">
+  <h2>Current state</h2>
+  <p><code>main</code> is <code>559e1e1</code> (#288).</p>
+  <p>The desk epic #275 is closed. These issues are open:</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>issue</th><th>state</th><th>what it is</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>#155</strong></td><td><span class="status open">open</span></td><td>The newsroom's derived fixtures become recordings.</td></tr>
+        <tr><td><strong>#217</strong></td><td><span class="status open">open</span></td><td>The phone app epic.</td></tr>
+        <tr><td><strong>#228</strong></td><td><span class="status red">known red</span></td><td><code>map (windows-latest)</code> fails.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <p><strong>Note:</strong> The <code>map (windows-latest)</code> job fails. This is issue #228. The vendored engine refuses the Windows target. The other map jobs pass. This is not a new failure.</p>
+  </div>
+  <div class="callout">
+    <p><strong>Note:</strong> The desk's accepted <code>201</code> in <code>fixtures/desk/report/created.json</code> is pinned to the contract. It is not a wire recording. To record a <code>201</code>, run <code>scripts/record-desk-report.sh --write &lt;id_unit&gt; &lt;latitude&gt; &lt;longitude&gt;</code>. That command writes a real fix. A human must decide.</p>
+  </div>
+  <div class="callout">
+    <p><strong>Note:</strong> The Rune pin is <code>2899b3d3</code>. The Minos contract snapshot is <code>496ae25</code>. The newest Postman export matches that commit.</p>
+  </div>
+  <div class="callout">
+    <p><strong>Note:</strong> The desk clock uses the OS time. The server clock comes from the newest fix. If no unit has reported, the desk shows "server clock not known yet" and blocks the send.</p>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <p>
+      This page is generated from the project's current state. The gate is <code>scripts/verify.sh</code>.
+      The diagram is rendered with <a href="https://github.com/obsidianmd/pele">Pele</a> (MIT), loaded from jsDelivr.
+    </p>
+    <p>
+      This page uses ASD-STE100 wording. The sentences are short. The verbs are active. The instructions are
+      in order.
+    </p>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/pele@1/dist/pele.global.js" defer></script>
+<script>
+  (function () {
+    function boot() {
+      var target = document.getElementById('flow-diagram');
+      var source = document.getElementById('flow-source-text');
+      if (!target || !source) return;
+      var diagram = source.textContent.trim();
+      if (!window.pele || typeof window.pele.mount !== 'function') {
+        target.innerHTML = '<p class="diagram-error">Pele did not load. The diagram source is below.</p>';
+        return;
+      }
+      try {
+        window.pele.mount(target, diagram);
+      } catch (error) {
+        console.error('Pele could not render the diagram.', error);
+        target.innerHTML = '<p class="diagram-error">Pele could not render the diagram. The source is below.</p>';
+      }
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', boot);
+    } else {
+      boot();
+    }
+  }());
+</script>
+
+</body>
+</html>
