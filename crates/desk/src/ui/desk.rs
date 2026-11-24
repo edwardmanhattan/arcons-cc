@@ -155,6 +155,19 @@ impl Desk {
         self.picker.get(id_unit)
     }
 
+    /// **Replace the picture, keep the draft.** A successful read swaps the list under the operator; the batch
+    /// is a draft, not a view of the picture, so its rows survive even when a hull is no longer listed. A
+    /// selection whose hull is gone is cleared; a selection still in the picture stays selected.
+    pub fn set_picture(&mut self, picker: Picker) {
+        self.picker = picker;
+        if let Some(id_unit) = self.selected
+            && self.picker.get(id_unit).is_none()
+        {
+            self.selected = None;
+        }
+        self.reposition();
+    }
+
     pub fn search(&self) -> &rune::TextEdit {
         &self.search
     }
@@ -512,14 +525,10 @@ fn list(state: &State) -> El {
         .on_key(super::list_key);
     if visible.is_empty() {
         list = list.child(
-            text(if state.desk.picker().is_empty() {
-                "The standing picture is empty."
-            } else {
-                "No vessel matches."
-            })
-            .key("vessel-list-empty")
-            .font(tokens::LABEL)
-            .color(tokens::ink_dim()),
+            text(empty_list_sentence(state))
+                .key("vessel-list-empty")
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim()),
         );
     }
     for (index, vessel) in visible.into_iter().enumerate() {
@@ -638,6 +647,18 @@ fn mark(key: String, words: &str, said: &str, ink: rune::Color) -> El {
         .child(text(words.to_string()).font(tokens::LABEL).color(ink))
 }
 
+/// What an empty list means. "No picture read yet" is a first run or a failed first read; "reading…" is a
+/// read that is out; "no vessel matches" is a query that found nothing in a picture that is there.
+fn empty_list_sentence(state: &State) -> &'static str {
+    match &state.picture_status {
+        crate::picture::Status::None => "No picture read yet.",
+        crate::picture::Status::Reading { cached: None } => "Reading the standing picture…",
+        crate::picture::Status::Failed { cached: None, .. } => "No picture read yet.",
+        _ if state.desk.picker().is_empty() => "The standing picture is empty.",
+        _ => "No vessel matches.",
+    }
+}
+
 /// What the list is made of, under the list: how much of the picture is showing, and the one sentence this
 /// ticket can give the operator about a hull with no position.
 fn rail_footer(state: &State) -> El {
@@ -647,12 +668,47 @@ fn rail_footer(state: &State) -> El {
         .key("rail-foot")
         .w_full()
         .gap(tokens::CARD_GAP)
+        .child(
+            row()
+                .w_full()
+                .items_center()
+                .gap(tokens::GAP)
+                .child(caption(state.picture_status.line(WIB_OFFSET_MS)).key("picture-state"))
+                .child(spacer())
+                .child(refresh_button(state)),
+        )
         .child(caption(format!(
             "{shown} of {} shown · ages from Minos",
             counts.all
         )))
         .child(caption("Select a vessel, then confirm the fix."))
         .child(caption("never reported · nothing to prefill"))
+}
+
+/// The read the operator can ask for. A read already out disables the control; the words say what it does,
+/// because a glyph nobody can name is a button nobody presses.
+fn refresh_button(state: &State) -> El {
+    let enabled = !state.refreshing();
+    el().key("picture-refresh")
+        .role("button")
+        .label("Refresh the standing picture")
+        .disabled(!enabled)
+        .px(tokens::CHIP_PAD)
+        .py(tokens::CHIP_PAD)
+        .radius(tokens::GAP)
+        .fill(tokens::name_plate())
+        .border(tokens::HAIRLINE, tokens::card_edge())
+        .items_center()
+        .justify_center()
+        .on_press_tx(|state: &mut State, tx: &mut rune::Tx| {
+            state.refresh_picture();
+            tx.blur();
+        })
+        .child(text("Refresh").font(tokens::LABEL).color(if enabled {
+            tokens::ink()
+        } else {
+            tokens::ink_dim()
+        }))
 }
 
 /// The batch tray: the draft, and the one request each row will become.

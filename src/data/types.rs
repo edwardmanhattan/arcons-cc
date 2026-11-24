@@ -62,7 +62,7 @@ pub struct Register {
 ///
 /// A hull with `position: None` belongs in the picture and not on the map (`INV-02`). On the dev
 /// feed that is 126 of 127 hulls: the common case, not the edge case.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct FeedPosition {
     pub id_unit: i64,
     pub name: String,
@@ -75,7 +75,7 @@ pub struct FeedPosition {
 }
 
 /// One accepted position report.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct FeedFix {
     pub latitude: f64,
     pub longitude: f64,

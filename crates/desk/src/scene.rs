@@ -31,6 +31,7 @@ pub const SCENES: &[Scene] = &[
     ("time-calendar", time_calendar),
     ("batch", desk_batch),
     ("empty", desk_empty),
+    ("no-picture", no_picture),
 ];
 
 /// The sample ADR-0009's wireframe names: 20 November 2026, 14:03:22 WIB, the calendar closed, and the
@@ -82,6 +83,16 @@ fn desk_empty(state: &mut State) {
     state.calendar_open = false;
     let base_ms = state.epoch_ms;
     state.desk = Desk::new(picture(base_ms));
+}
+
+/// **The cold start with no cache** (#284): the first run. The list is empty, the label says no picture has
+/// been read, and the inspector has no subject; the refresh control is what asks for one. A corrupt cache
+/// lands here too, with one line in the log rather than an empty state dressed up as a picture.
+fn no_picture(state: &mut State) {
+    *state = State::sample();
+    state.calendar_open = false;
+    state.desk = Desk::new(Picker::new(Vec::new()));
+    state.picture_status = crate::picture::Status::None;
 }
 
 /// The standing picture, in the age order the ADR asks the list for: the live hull, the backfills oldest

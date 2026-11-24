@@ -28,7 +28,7 @@ use crate::field::calendar::Month;
 use crate::field::segment::{Field, Segments};
 use crate::field::zoned::{self, Resolution};
 use crate::field::{CivilTime, FieldError, civil, paste};
-use crate::picker::Vessel;
+use crate::picker::{Picker, Vessel};
 use crate::time::{self, Regime, Verdict};
 
 pub mod chart;
@@ -97,6 +97,14 @@ pub struct State {
     pub sent: Option<Vec<crate::send::Trip>>,
     /// Why nothing left, when nothing did.
     pub send_failure: Option<String>,
+    /// **The standing picture's state** (#284): where it came from and whether a read is out.
+    pub picture_status: crate::picture::Status,
+    /// The picture's answer comes through here, and `poll` asks for it. `Some` means a read is out.
+    pub picture_inbox:
+        Option<std::sync::mpsc::Receiver<Result<crate::picture::Picture, crate::send::Failure>>>,
+    /// **The first frame paints the cache; the poll after it starts the read.** A capture is built by
+    /// [`State::sample`], which leaves this false, so a capture never starts a network thread.
+    boot_refresh: bool,
 }
 
 impl State {
@@ -126,10 +134,100 @@ impl State {
             inbox: None,
             sent: None,
             send_failure: None,
+            picture_status: crate::picture::Status::Cached {
+                read_at_ms: epoch_ms,
+            },
+            picture_inbox: None,
+            boot_refresh: false,
             error: None,
             notice: None,
             desk: crate::scene::sample_desk(epoch_ms),
         }
+    }
+
+    /// **The window's first state** (#284): the last picture this desk read, before the network is tried.
+    ///
+    /// A capture must not read this machine's cache or start a thread; [`State::sample`] is the capture's
+    /// constructor, and [`run`] chooses between the two by whether the flags are a capture's.
+    pub fn open() -> Self {
+        Self::open_with(crate::identity::config_dir().as_deref())
+    }
+
+    /// The same, with the config directory passed in so a test can use its own.
+    pub fn open_with(dir: Option<&std::path::Path>) -> Self {
+        let mut state = Self::sample();
+        state.desk = Desk::new(Picker::new(Vec::new()));
+        state.picture_status = crate::picture::Status::None;
+        state.boot_refresh = true;
+        if let Some(cached) = dir.and_then(crate::picture::load_from) {
+            state.desk = Desk::new(Picker::from_positions(&cached.positions));
+            state.picture_status = crate::picture::Status::Cached {
+                read_at_ms: cached.read_at_ms,
+            };
+        }
+        state
+    }
+
+    /// **Read the standing picture, on a worker** (#284). The UI thread never makes the request; the answer
+    /// arrives through [`State::refresh_answered`] on the frame loop, the way the send's does.
+    pub fn refresh_picture(&mut self) {
+        if self.picture_inbox.is_some() {
+            return;
+        }
+        let cached = self.picture_status.read_at();
+        self.picture_status = crate::picture::Status::Reading { cached };
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.picture_inbox = Some(rx);
+        std::thread::spawn(move || {
+            let result = crate::picture::read();
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Has the read answered? Asked every frame by [`poll`], which asks for a redraw when it has.
+    pub fn refresh_answered(&mut self) -> bool {
+        use std::sync::mpsc::TryRecvError;
+        let Some(inbox) = &self.picture_inbox else {
+            return false;
+        };
+        match inbox.try_recv() {
+            Ok(Ok(picture)) => {
+                self.apply_picture(picture);
+                self.picture_inbox = None;
+                true
+            }
+            Ok(Err(failure)) => {
+                self.refresh_failed(failure.message);
+                self.picture_inbox = None;
+                true
+            }
+            Err(TryRecvError::Empty) => false,
+            Err(TryRecvError::Disconnected) => {
+                self.refresh_failed("the refresh ended without an answer".to_string());
+                self.picture_inbox = None;
+                true
+            }
+        }
+    }
+
+    /// **The read's answer, applied.** The picker is replaced; the batch is a draft and keeps its rows, even
+    /// when a hull is no longer in the picture. A selection whose hull is gone is cleared.
+    pub fn apply_picture(&mut self, picture: crate::picture::Picture) {
+        self.desk.set_picture(picture.picker());
+        self.picture_status = crate::picture::Status::Ready {
+            read_at_ms: picture.read_at_ms,
+        };
+    }
+
+    /// **A failed read keeps the picture the operator is reading.** The cached read time stays in the label,
+    /// and the list is not emptied by a lost connection.
+    pub fn refresh_failed(&mut self, message: String) {
+        let cached = self.picture_status.read_at();
+        self.picture_status = crate::picture::Status::Failed { message, cached };
+    }
+
+    pub fn refreshing(&self) -> bool {
+        self.picture_inbox.is_some()
     }
 
     /// The day the calendar highlights: the date the field now reads, when the calendar is
@@ -562,12 +660,19 @@ impl State {
 /// are handed through untouched, because a capture that swallowed them would succeed at producing
 /// nothing — the wall's `run` has the same shape (#9).
 pub fn run(passthrough: Vec<String>) -> std::process::ExitCode {
+    // **A capture is not a session.** `--snap` and `--scene` mean a fixed scene, and a scene must not read
+    // this machine's cache or start a network thread; the window is the only caller that opens on the last
+    // picture this desk read (#284).
+    let capture = passthrough
+        .iter()
+        .any(|arg| arg == "--snap" || arg == "--scene");
+    let constructor: fn() -> State = if capture { State::sample } else { State::open };
     let spec = rune::AppSpec::<State> {
         min_size: Some(tokens::MIN_WINDOW),
         on_key: Some(on_key),
         scenes: crate::scene::SCENES,
         poll: Some(poll),
-        ..rune::AppSpec::new(TITLE, tokens::DESK_WINDOW, State::sample, view)
+        ..rune::AppSpec::new(TITLE, tokens::DESK_WINDOW, constructor, view)
     };
     let result = rune::try_run_windows_with_args(
         rune::RunOptions::default(),
@@ -590,16 +695,25 @@ pub fn run(passthrough: Vec<String>) -> std::process::ExitCode {
 /// draws it has to be requested. Without this the chart says `the chart is opening` for the life of the
 /// window, with a finished picture sitting in the handle it is not drawing.
 fn poll(state: &mut State, _elapsed: f64, _tx: &mut rune::Tx) -> bool {
+    // **The first frame paints the cache; the poll after it starts the read** (#284). A capture is built by
+    // `State::sample`, which leaves `boot_refresh` false, so a capture never starts one.
+    let mut changed = false;
+    if state.boot_refresh {
+        state.boot_refresh = false;
+        state.refresh_picture();
+        changed = true;
+    }
     // **The send's answer arrives while nobody is pressing anything**, which is the same trap the map's first
     // frame was: a static screen is never redrawn unless somebody asks.
     let answered = state.send_answered();
+    let refreshed = state.refresh_answered();
     #[cfg(feature = "map")]
     {
-        answered | crate::chart::engine::frame_arrived()
+        changed | answered | refreshed | crate::chart::engine::frame_arrived()
     }
     #[cfg(not(feature = "map"))]
     {
-        answered
+        changed | answered | refreshed
     }
 }
 
