@@ -13,6 +13,8 @@
 
 use std::time::Duration;
 
+use arcons_cc::data::types::{Envelope, FeedPosition};
+
 use crate::deployment::Deployment;
 use crate::report::{Answer, Body, PATH};
 use crate::send::{Failure, Transport};
@@ -106,6 +108,42 @@ impl Client {
     /// The base this client talks to, without a credential in it.
     pub fn base(&self) -> &str {
         &self.base
+    }
+
+    /// **The standing picture**, one GET with the bearer token (#284).
+    ///
+    /// A `401` refreshes once and re-sends the GET, the same rule the write path uses. Any other status is a
+    /// failure the screen can show; the cached picture stays. The answer is parsed as the wall's own
+    /// `Envelope<Vec<FeedPosition>>`, so the desk and the wall cannot disagree about the picture's shape.
+    pub fn positions(&mut self) -> Result<Vec<FeedPosition>, Failure> {
+        let mut answer = self.get("/live-feed/positions")?;
+        if answer.status == 401 {
+            self.refresh()?;
+            answer = self.get("/live-feed/positions")?;
+        }
+        if answer.status != 200 {
+            return Err(Failure::new(format!(
+                "the standing picture was refused ({})",
+                answer.status
+            )));
+        }
+        let envelope: Envelope<Vec<FeedPosition>> = serde_json::from_str(&answer.body)
+            .map_err(|_| Failure::new("the standing picture was not the answer we read"))?;
+        Ok(envelope.data)
+    }
+
+    fn get(&self, path: &str) -> Result<Answer, Failure> {
+        let response = self
+            .agent
+            .get(format!("{}{}", self.base, path))
+            .bearer_auth(&self.access)
+            .send()
+            .map_err(|error| Failure::new(short(&error)))?;
+        let status = response.status().as_u16();
+        let body = response
+            .text()
+            .map_err(|error| Failure::new(short(&error)))?;
+        Ok(Answer::new(status, body))
     }
 
     fn attempt(&self, body: &Body) -> Result<Answer, Failure> {
@@ -424,5 +462,52 @@ mod tests {
             "a failure never carries a token or a host: {}",
             failure.message
         );
+    }
+
+    /// The recorded standing picture: 127 hulls, one with a fix.
+    const POSITIONS: &str = include_str!("../../../fixtures/rest/positions.json");
+
+    #[test]
+    fn the_standing_picture_is_a_get_with_the_bearer_and_no_body() {
+        let stub = stub(vec![(200, POSITIONS.to_string())]);
+        let mut client = Client::sign_in(&stub.base, "operator", "secret").expect("signed in");
+        let positions = client.positions().expect("the picture");
+        assert_eq!(
+            positions.len(),
+            127,
+            "every hull, including the silent ones"
+        );
+
+        let seen = stub.seen.lock().unwrap();
+        assert_eq!(seen.paths[1], "/api/v1/live-feed/positions");
+        assert_eq!(seen.bearers[1], "Bearer access-0");
+        assert!(
+            seen.bodies[1].is_empty(),
+            "a GET carries no body: {:?}",
+            seen.bodies[1]
+        );
+    }
+
+    #[test]
+    fn an_expired_token_on_the_picture_is_refreshed_once() {
+        let stub = stub(vec![
+            (
+                401,
+                r#"{"status_code":401,"message":"Unauthorized","data":null}"#.to_string(),
+            ),
+            (200, POSITIONS.to_string()),
+        ]);
+        let mut client = Client::sign_in(&stub.base, "operator", "secret").expect("signed in");
+        let positions = client.positions().expect("the picture after the refresh");
+        assert_eq!(positions.len(), 127);
+        assert_eq!(stub.refreshes.load(Ordering::SeqCst), 1, "refreshed once");
+
+        let seen = stub.seen.lock().unwrap();
+        let gets = seen
+            .paths
+            .iter()
+            .filter(|path| path.ends_with("/live-feed/positions"))
+            .count();
+        assert_eq!(gets, 2, "the GET is re-sent after the refresh");
     }
 }

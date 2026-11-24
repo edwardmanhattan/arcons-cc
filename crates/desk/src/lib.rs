@@ -13,6 +13,7 @@ pub mod field;
 pub mod http;
 pub mod identity;
 pub mod picker;
+pub mod picture;
 pub mod report;
 pub mod scene;
 pub mod send;
