@@ -15,8 +15,9 @@
 //!
 //! Two details that are not decoration:
 //!
-//! - **No server clock, no verdict.** Until the skew is known from a response's `Date` header, the verdict
-//!   is [`Regime::Unknown`] — the device's own clock is not evidence about the server's.
+//! - **No server clock, no verdict.** Until the server's clock is known — from a fix's
+//!   `received_at + age_seconds` (or a response's `Date` header) — the verdict is [`Regime::Unknown`]; the
+//!   device's own clock is not evidence about the server's.
 //! - **A verdict near a boundary can flip** between the moment the line is drawn and the moment the request
 //!   leaves. [`Verdict::near_boundary`] is true there, so the line says so instead of asserting.
 
