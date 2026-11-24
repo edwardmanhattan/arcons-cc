@@ -148,9 +148,14 @@ fn the_required_field_answer_names_a_field_minos_refused() {
 #[test]
 fn a_vessel_with_no_commander_is_a_403_and_the_row_survives_it() {
     let verdict = fixture("no-commander").verdict();
-    let Verdict::NoCommander { message } = &verdict else {
-        panic!("a 403 is a per-vessel verdict, got {verdict:?}");
+    let Verdict::Forbidden {
+        field: Some(field),
+        message,
+    } = &verdict
+    else {
+        panic!("a 403 with a field is the vessel's verdict, got {verdict:?}");
     };
+    assert_eq!(field, "id_unit", "the answer names the vessel it refused");
     assert!(
         message.contains("no commander appointed"),
         "the row says what Minos said, got {message}"
@@ -163,6 +168,35 @@ fn a_vessel_with_no_commander_is_a_403_and_the_row_survives_it() {
         verdict.sentence(),
         format!("the row is kept: {message}"),
         "the row says what Minos said, once, and that the fix was not lost"
+    );
+}
+
+#[test]
+fn a_403_without_a_field_is_the_permission_gate_not_an_unappointed_vessel() {
+    // The second 403 the route documents (Minos 496ae25, `RequirePermission`): the account lacks `report_as` on
+    // `/system/live-feed`, so the middleware answers `{"message":"Forbidden","data":null}`. No commander
+    // assignment fixes this, and the row must not be told that one will.
+    let verdict = Answer::new(
+        403,
+        r#"{"status_code":403,"message":"Forbidden","data":null}"#,
+    )
+    .verdict();
+    let Verdict::Forbidden {
+        field: None,
+        message,
+    } = &verdict
+    else {
+        panic!("a 403 with no field is the permission gate, got {verdict:?}");
+    };
+    assert_eq!(message, "Forbidden");
+    assert!(
+        verdict.sentence().contains("report_as"),
+        "the operator is told which permission to ask for, got {}",
+        verdict.sentence()
+    );
+    assert!(
+        verdict.retryable(),
+        "the fix is not lost; a granted permission makes the row sendable"
     );
 }
 
@@ -212,8 +246,9 @@ fn a_body_minos_could_not_read_is_a_422_and_is_our_bug() {
 #[test]
 fn a_recorded_201_that_did_not_move_the_picture_says_so() {
     // **Not a wire exchange**, and the fixture says so: recording an accepted answer stores a fix for a real
-    // vessel. The shape is `dto.FeedRelayedResult` in Minos 496ae25 — `{id_unit, recorded_at, received_at,
-    // latest}` — and this is the `latest: false` half, the one an operator must not read as "the picture moved".
+    // vessel. The shape is `dto.FeedRelayedResult` in Minos 496ae25 and the route's `201` in that commit's
+    // published OpenAPI (the 2026-11-24 Postman export) — `{id_unit, recorded_at, received_at, latest}` — and
+    // this is the `latest: false` half, the one an operator must not read as "the picture moved".
     let verdict = fixture("created").verdict();
     assert_eq!(
         verdict,

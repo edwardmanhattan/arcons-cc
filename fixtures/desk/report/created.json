@@ -1,6 +1,6 @@
 {
   "recorded": null,
-  "derived_from": "minos@496ae25 — internal/dto/live_feed.go FeedRelayedResult, and internal/services/live_feed_service.go IngestRelayed (201 + response.CreateSuccess). NOT a wire exchange: recording one stores a fix for a real vessel.",
+  "derived_from": "minos@496ae25 — internal/dto/live_feed.go FeedRelayedResult, internal/services/live_feed_service.go IngestRelayed (201 + response.CreateSuccess), and the same 201 in that commit's published OpenAPI (the 2026-11-24 Postman export, /live-feed/fixes/relayed). NOT a wire exchange: recording one stores a fix for a real vessel.",
   "request": {
     "method": "POST",
     "path": "/live-feed/fixes/relayed",

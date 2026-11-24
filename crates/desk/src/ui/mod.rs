@@ -244,6 +244,11 @@ impl State {
     /// position, a clock that has not answered, a value the fence refuses. Those rows are named here rather than
     /// dropped from the loop in silence, which is the same rule as a `403` keeping its row: a fix that was typed is
     /// not lost without a sentence. `None` when every row is ready, so the ordinary line stands.
+    ///
+    /// **This line is the review sheet** (decided 2026-11-24, #278). The ticket asked for a sheet before the loop;
+    /// the tray already carries the three facts such a sheet would repeat — each card's vessel and its regime, the
+    /// held rows named here, and the button counting **requests**. A modal would be a second place to read one
+    /// sentence on a screen that already allows sending without looking, so there is no second surface.
     pub fn review_line(&self) -> Option<String> {
         let plan = self.desk.batch().plan(Some(self.server_now_ms));
         if plan.blocked.is_empty() {

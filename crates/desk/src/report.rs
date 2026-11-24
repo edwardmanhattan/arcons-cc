@@ -10,8 +10,9 @@
 //! recorded from the wire (`fixtures/desk/report/`) instead of by a request nobody can re-run.
 //!
 //! Nothing here invents a wire shape. The fields, their order and their bounds are `dto.FeedRelayRequest` and
-//! `dto.FeedRelayedResult` in Minos `496ae25`; the refusals are the bytes the development deployment answered on
-//! 2026-11-23.
+//! `dto.FeedRelayedResult` in Minos `496ae25`, and the route and its `201` are in that commit's published OpenAPI
+//! (the 2026-11-24 Postman export is the same 272 operations); the refusals are the bytes the development
+//! deployment answered on 2026-11-23. The accepted `201` is still the one fixture that is not a wire exchange.
 
 use serde::Serialize;
 
@@ -155,11 +156,13 @@ impl Answer {
                 }),
             400 => refused(400, envelope.as_ref(), message),
             401 => Verdict::Unauthenticated { message },
-            403 => Verdict::NoCommander {
-                message: first_error(envelope.as_ref())
-                    .unwrap_or((String::new(), message))
-                    .1,
-            },
+            403 => {
+                let (field, message) = match first_error(envelope.as_ref()) {
+                    Some((field, message)) => (Some(field), message),
+                    None => (None, message),
+                };
+                Verdict::Forbidden { field, message }
+            }
             404 => Verdict::NoSuchVessel,
             422 => Verdict::Unreadable {
                 message: first_error(envelope.as_ref())
@@ -229,9 +232,14 @@ pub enum Verdict {
     },
     /// `401`: the credential expired. Refresh once, re-check the regime, re-send the same body.
     Unauthenticated { message: String },
-    /// `403`: the vessel has no commander appointed, so there is no report to attribute. The row stays whole;
-    /// it becomes sendable again when a commander is assigned.
-    NoCommander { message: String },
+    /// `403`: the route refused the report, for one of two reasons. The vessel has no commander to attribute it
+    /// to — the answer carries `data.errors.id_unit` — or the caller does not hold `report_as` on
+    /// `/system/live-feed` and the answer carries no field. The row stays whole either way: a commander can be
+    /// assigned, and a permission can be granted, and neither loses a fix that was typed.
+    Forbidden {
+        field: Option<String>,
+        message: String,
+    },
     /// `404`: no such hull. The row goes.
     NoSuchVessel,
     /// `422`: the route could not read the body. That is this client's bug, never the operator's fix.
@@ -255,7 +263,25 @@ impl Verdict {
             }
             // The server's own sentence already says why, and says what to do about it. Prefixing it with a
             // summary of itself made the row say the same thing twice.
-            Self::NoCommander { message } => format!("the row is kept: {message}"),
+            Self::Forbidden {
+                field: Some(_),
+                message,
+            } => format!("the row is kept: {message}"),
+            // A `403` with no field is the permission gate, not the vessel: the middleware answers
+            // `{"message":"Forbidden","data":null}` when the account lacks `report_as`. The row is still kept, but
+            // no commander assignment will change this one.
+            Self::Forbidden {
+                field: None,
+                message,
+            } if message.eq_ignore_ascii_case("Forbidden") => {
+                "the row is kept, but this account may not report for vessels — it needs `report_as` on \
+                 /system/live-feed"
+                    .to_string()
+            }
+            Self::Forbidden {
+                field: None,
+                message,
+            } => format!("the row is kept: {message}"),
             Self::NoSuchVessel => "no such vessel: Minos does not have this hull".to_string(),
             Self::Unreadable { message } => {
                 format!("this client sent a body Minos could not read: {message}")
@@ -274,7 +300,7 @@ impl Verdict {
     pub fn retryable(&self) -> bool {
         matches!(
             self,
-            Self::Refused { .. } | Self::Unauthenticated { .. } | Self::NoCommander { .. }
+            Self::Refused { .. } | Self::Unauthenticated { .. } | Self::Forbidden { .. }
         )
     }
 }

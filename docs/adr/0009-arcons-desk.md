@@ -35,8 +35,10 @@ Four facts from the Minos contract shape it, and none of them is the payload's s
 3. **The answer is per vessel, and `latest` is the honest half.** The relayed route answers `201` with
    `{id_unit, recorded_at, received_at, latest}`: a report older than what the vessel's own handset already sent is
    in the log and **does not move the picture**, and an operator who saw "created" would believe they had corrected
-   it. A refusal is a `400` (or a `422` for a body the route cannot read) that names the field; `403` is "this
-   vessel has no commander appointed", `404` is "no such vessel", and the two remedies differ.
+   it. A refusal is a `400` (or a `422` for a body the route cannot read) that names the field; `403` has two
+   causes — the vessel has no commander to attribute the report to, or the account does not hold `report_as` on
+   `/system/live-feed` — and `404` is "no such vessel". The remedies differ, and the answer says which one it is: a
+   field named `id_unit` for the vessel, no field for the permission.
 4. **Nothing says which vessels a desk may report.** `/live-feed/me` returns the vessels the caller *commands*, and
    a shore account commands none. There is no reportable-set read, so `403` is discovered by sending, not by
    filtering a list.
@@ -256,9 +258,11 @@ becomes its value and stops being local-only.
    stopgap.
 2. **A future `recorded_at` beyond +60 s.** The contract says it is treated as live and re-stamped; decision 3's last
    row depends on that being the rule rather than an accident of the implementation.
-3. **The intended path for a shore account's `403`.** The desk treats it as a late, per-vessel verdict because no
-   reportable-set read exists. If a widened `/live-feed/me` or a `read`-style policy is planned, that changes what
-   the picker can promise; until then the desk does not guess.
+3. **The intended path for a shore account's per-vessel `403`.** The desk treats a `403` on `id_unit` as a late,
+   per-vessel verdict because no reportable-set read exists; a `403` with no field is the account's missing
+   `report_as`, a deployment-credential problem rather than the vessel's, and the row must not promise that
+   appointing a commander will fix it. If a widened `/live-feed/me` or a `read`-style policy is planned, that
+   changes what the picker can promise; until then the desk does not guess.
 
 ## Amendment — 2026-11-23 — the desk writes the **relayed** route
 
@@ -280,8 +284,10 @@ What changed here, and what did not:
   the answer the operator needs, because a late report belongs in the log and must not move the map.
 - **Age is a `400` naming `recorded_at`**, not a count. A wrong-typed field is a `422` naming `_request` — a client
   bug, not an operator mistake.
-- **`403` means "no commander appointed"**, not "not yours": a hull with no commander has no report to attribute,
-  and the row stays intact until one is assigned. A `404` is a hull that does not exist.
+- **`403` has two causes, and the answer names which**: a hull with no commander has no report to attribute and
+  answers with a field error on `id_unit`; an account without `report_as` on `/system/live-feed` is refused by the
+  permission middleware with no field at all. The row stays intact in both cases — a commander can be assigned, or
+  the permission granted — and a `404` is a hull that does not exist.
 - **Unchanged**: one vessel per request and one fix per vessel (decision 2); the drop fills that vessel's row and
   never sends (decision 4); the regime is still decided by one function before the send (decision 3); the credential
   and the tokens are untouched (decision 5); the source note is still local, and still the only place that says how
@@ -289,6 +295,8 @@ What changed here, and what did not:
 
 The evidence is `fixtures/desk/report/`: five exchanges recorded from the development deployment on 2026-11-23 by
 `scripts/record-desk-report.sh` — a missing field, no commander, an age refusal, a missing hull, and a body the route
-cannot read. The accepted `201` is **not** among them, because recording it stores a fix for a real vessel; its shape
-is `dto.FeedRelayedResult` rather than a guess, and the fixture becomes a wire exchange the first time a human lets
-one through.
+cannot read. The permission `403` is not among them (it needs an account without `report_as`); its shape is the
+middleware's `{"message":"Forbidden","data":null}` in Minos `496ae25`. The accepted `201` is **not** among them
+either, because recording it stores a fix for a real vessel; its shape is `dto.FeedRelayedResult` and the route's
+published `201`, rather than a guess, and the fixture becomes a wire exchange the first time a human lets one
+through.
