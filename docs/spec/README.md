@@ -5,8 +5,8 @@ silent breakage. Nothing in this directory is ours to edit.
 
 | file | source | from |
 | --- | --- | --- |
-| `minos-api.yaml` | `minos/docs/openapi/minos-api.yaml` | `minos` @ `5758f37` (2026-11-11) — added the newsroom (`/banglinstra`), 288 lines, no other change against `0e165781b3e0` |
-| `realtime-protocol.md` | `minos/docs/realtime-protocol.md` | `minos` @ `01f8fbe2ca88` (2026-11-04) — byte-identical at `0e165781b3e0` and at `5758f37`, so it was not re-copied |
+| `minos-api.yaml` | `minos/docs/openapi/minos-api.yaml` | `minos` @ `496ae25` (2026-11-20) — added the relayed fixes route (`/live-feed/fixes/relayed`), `/live-feed/me`, `/games/{id}/tracks`, the user photo routes, the `FeedActor`/relay/track schemas, and the optional `FeedFix.manual`/`reported_by`/`reported_for`; 548 lines added, none removed against `5758f37` |
+| `realtime-protocol.md` | `minos/docs/realtime-protocol.md` | `minos` @ `01f8fbe2ca88` (2026-11-04) — byte-identical at `0e165781b3e0`, `5758f37` and `496ae25`, so it was not re-copied |
 
 ## Re-vendoring
 
