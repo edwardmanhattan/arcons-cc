@@ -193,7 +193,7 @@ writes the token or the deployment's host into a file.
 | `age.json` | **Recorded**: hull 8 (the one hull with a commander), 40 days old, answered `400` on `recorded_at` — the age rule is a field refusal on this route, not a rejected count |
 | `no-such-vessel.json` | **Recorded**: `id_unit: 999999`, answered `404` with `data: null` |
 | `unreadable.json` | **Recorded**: `"latitude": "-6.1"`, answered `422` on `_request` |
-| `created.json` | **Derived from Minos `496ae25`**, not recorded: `dto.FeedRelayedResult`, `IngestRelayed`'s `201`, and the same `201` in the commit's published OpenAPI (the 2026-11-24 Postman export). Writing one would store a fix for a real vessel, so a human records it or it stays derived — and the file says which it is. It carries `latest: false`, the answer that says a late report did not move the picture |
+| `created.json` | **Pinned to `docs/spec/minos-api.yaml` @ `minos 496ae25`**, not recorded: `/live-feed/fixes/relayed`'s `FeedRelayedEnvelope → FeedRelayedResult`. Recording one would store a fix for a real vessel, and hull 8's last fix is 56 days old, so an accepted timestamp would move the picture; the file says which it is. It carries `latest: false`, the answer that says a late report did not move the picture |
 
 **Replace `created.json` with a recording the first time a human lets one through** — the script has the lever for
 it, `scripts/record-desk-report.sh --write <id_unit> <lat> <lon>`, which sends one live fix for a hull you name and

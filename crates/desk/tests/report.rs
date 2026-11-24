@@ -244,11 +244,12 @@ fn a_body_minos_could_not_read_is_a_422_and_is_our_bug() {
 }
 
 #[test]
-fn a_recorded_201_that_did_not_move_the_picture_says_so() {
-    // **Not a wire exchange**, and the fixture says so: recording an accepted answer stores a fix for a real
-    // vessel. The shape is `dto.FeedRelayedResult` in Minos 496ae25 and the route's `201` in that commit's
-    // published OpenAPI (the 2026-11-24 Postman export) — `{id_unit, recorded_at, received_at, latest}` — and
-    // this is the `latest: false` half, the one an operator must not read as "the picture moved".
+fn a_201_that_did_not_move_the_picture_says_so() {
+    // **Pinned to the contract**, not recorded: recording an accepted answer stores a fix for a real vessel, and
+    // hull 8's last fix is 56 days old, so any timestamp the 30-day rule accepts would become the latest and move
+    // the picture. The shape is `FeedRelayedResult` in `docs/spec/minos-api.yaml` @ 496ae25 (the same `201` the
+    // 2026-11-24 Postman export carries) — `{id_unit, recorded_at, received_at, latest}` — and this is the
+    // `latest: false` half, the one an operator must not read as "the picture moved".
     let verdict = fixture("created").verdict();
     assert_eq!(
         verdict,

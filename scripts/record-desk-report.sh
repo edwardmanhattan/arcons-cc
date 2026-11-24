@@ -19,8 +19,8 @@
 # in `ps`), and the token from `/auth/login` is never printed, never written to a fixture and never logged. What
 # the files hold is the request body and the answer body, which is what the desk's tests read.
 #
-# The route is newer than the pinned contract (`docs/spec/minos-api.yaml` has `/live-feed/fixes` only), so these
-# files are the wire's record of its shape until the spec is re-vendored from a Minos commit that carries it.
+# The route is in the pinned contract (`docs/spec/minos-api.yaml`, Minos `496ae25`). These files are the wire's
+# record of the refusals; `created.json` is pinned to the spec, because recording it writes a fix for a real vessel.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

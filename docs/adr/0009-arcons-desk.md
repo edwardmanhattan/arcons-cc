@@ -297,6 +297,7 @@ The evidence is `fixtures/desk/report/`: five exchanges recorded from the develo
 `scripts/record-desk-report.sh` — a missing field, no commander, an age refusal, a missing hull, and a body the route
 cannot read. The permission `403` is not among them (it needs an account without `report_as`); its shape is the
 middleware's `{"message":"Forbidden","data":null}` in Minos `496ae25`. The accepted `201` is **not** among them
-either, because recording it stores a fix for a real vessel; its shape is `dto.FeedRelayedResult` and the route's
-published `201`, rather than a guess, and the fixture becomes a wire exchange the first time a human lets one
-through.
+either, because recording it stores a fix for a real vessel — and hull 8's last fix is 56 days old, so a timestamp the
+30-day rule accepts would become the latest and move the picture. Its shape is pinned to `docs/spec/minos-api.yaml`
+at `496ae25` (`FeedRelayedEnvelope → FeedRelayedResult`), not guessed, and the fixture becomes a wire exchange the
+first time a human lets one through.

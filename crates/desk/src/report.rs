@@ -10,9 +10,10 @@
 //! recorded from the wire (`fixtures/desk/report/`) instead of by a request nobody can re-run.
 //!
 //! Nothing here invents a wire shape. The fields, their order and their bounds are `dto.FeedRelayRequest` and
-//! `dto.FeedRelayedResult` in Minos `496ae25`, and the route and its `201` are in that commit's published OpenAPI
-//! (the 2026-11-24 Postman export is the same 272 operations); the refusals are the bytes the development
-//! deployment answered on 2026-11-23. The accepted `201` is still the one fixture that is not a wire exchange.
+//! `dto.FeedRelayedResult` in Minos `496ae25`, and the route and its `201` are in the pinned contract
+//! (`docs/spec/minos-api.yaml` at that commit; the 2026-11-24 Postman export is the same 272 operations). The
+//! refusals are the bytes the development deployment answered on 2026-11-23. The accepted `201` is pinned to the
+//! spec, not a wire exchange.
 
 use serde::Serialize;
 

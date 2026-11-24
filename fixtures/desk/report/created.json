@@ -1,6 +1,6 @@
 {
   "recorded": null,
-  "derived_from": "minos@496ae25 — internal/dto/live_feed.go FeedRelayedResult, internal/services/live_feed_service.go IngestRelayed (201 + response.CreateSuccess), and the same 201 in that commit's published OpenAPI (the 2026-11-24 Postman export, /live-feed/fixes/relayed). NOT a wire exchange: recording one stores a fix for a real vessel.",
+  "derived_from": "Pinned to docs/spec/minos-api.yaml @ minos 496ae25 — /live-feed/fixes/relayed (FeedRelayedEnvelope → FeedRelayedResult), and the same fields in internal/dto/live_feed.go and IngestRelayed. NOT a wire exchange: recording one stores a fix for a real vessel, and hull 8's last fix is 56 days old, so an accepted timestamp would move the picture.",
   "request": {
     "method": "POST",
     "path": "/live-feed/fixes/relayed",
