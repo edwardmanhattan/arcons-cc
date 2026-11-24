@@ -292,7 +292,7 @@ fn controls(state: &State) -> El {
         .child(spacer());
     if state.arming {
         row = row.child(chart_button(
-            "Cancel",
+            "Cancel placement",
             "cancel-placement",
             |state: &mut State| state.disarm(),
         ));

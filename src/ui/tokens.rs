@@ -40,11 +40,13 @@ pub const DESK_PANEL: f32 = 360.0;
 /// named in this file, even when the window that uses it is the desk's.
 pub const DESK_LIST: f32 = 320.0;
 
-/// One vessel in the rail (#277): two lines, the name over the hull, with room for the age and its marks.
-pub const DESK_ROW_H: f32 = 48.0;
+/// One vessel in the rail (#294): the name on its own line, then the hull, the age and its marks on the
+/// second. The name gets the full width; the age and the marks get fixed slots, so a badge appearing does
+/// not move the age. Tall enough for two lines with air around them.
+pub const DESK_ROW_H: f32 = 56.0;
 
 /// One card in the batch tray (#277): the ship, its hull, its regime and its remove control.
-pub const DESK_CARD_W: f32 = 216.0;
+pub const DESK_CARD_W: f32 = 208.0;
 
 /// One hull on the desk's chart (#277): small enough to be a position, large enough to be hit.
 pub const DESK_MARK: f32 = 7.0;
@@ -59,6 +61,64 @@ pub const DESK_CARD_H: f32 = 64.0;
 /// The rail's minimum scrolling height. Zero on purpose, like the filter panel's: a scroll viewport inside
 /// a flex column needs a named zero or it grows to its content and never scrolls.
 pub const DESK_SCROLL_MIN_H: f32 = 0.0;
+
+/// The batch cards row's minimum scrolling width. The same zero rule on the other axis: a horizontal
+/// viewport inside a flex row must be allowed to be narrower than its cards, or it grows to them and
+/// paints outside the tray (#294).
+pub const DESK_SCROLL_MIN_W: f32 = 0.0;
+
+// ---------------------------------------------------------------------------
+// The desk's air (#294).
+//
+// The wall's `PAD` and `GAP` are 16 and 8, and every relationship on the desk used one of them. These
+// name the relationships the desk actually has: the window edge, the stations, a section, a group, a
+// label. They live here because this file is the only place that may name a size.
+// ---------------------------------------------------------------------------
+
+/// The window edge to the three stations. The stations are the rail, the chart and the report; the
+/// batch tray hangs under the chart.
+pub const DESK_WINDOW_PAD: f32 = 20.0;
+
+/// One station to the next, and the title bar to the stations. Twice the wall's gap, because a station
+/// and a section are not the same relationship.
+pub const DESK_ZONE_GAP: f32 = 20.0;
+
+/// One report section to the next. The largest interval inside a sheet; a seam sits in the middle of it.
+pub const DESK_SECTION_GAP: f32 = 24.0;
+
+/// A sheet's own inside edge: the report and the batch tray. The content of a sheet never touches its
+/// border.
+pub const DESK_PANEL_PAD: f32 = 16.0;
+
+/// The calendar popover's width: the report's content width, so it opens inside the sheet and still
+/// aligns with the segments it is anchored to. A 360 pt popover in a 328 pt content box is clamped left
+/// and hangs over the chart (#294).
+pub const DESK_CALENDAR_W: f32 = DESK_PANEL - DESK_PANEL_PAD * 2.0;
+
+/// Related controls inside one section: the coordinates row and the measurements row, the cards row and
+/// the tray's footer.
+pub const DESK_GROUP_GAP: f32 = 12.0;
+
+/// A label to the field or value it names. The tightest interval between two different things.
+pub const DESK_LABEL_GAP: f32 = 6.0;
+
+/// A one-line control's inside edge. Named so the fields and cards cannot each choose their own.
+pub const DESK_CONTROL_PAD: f32 = 10.0;
+
+/// A search or numeric field, and the note: tall enough for a 12 pt value to sit in air.
+pub const DESK_FIELD_H: f32 = 36.0;
+
+/// A quiet action's height: Refresh, Now. These are controls, not the screen's primary action.
+pub const DESK_QUIET_H: f32 = 30.0;
+
+/// Both commit controls and Send: the same height, so the report's action and the tray's action share a
+/// baseline at the bottom of the window.
+pub const DESK_ACTION_H: f32 = 40.0;
+
+/// The vessel row's trailing slots. The age is always the same width and right-aligned; the mark slot is
+/// wide enough for `bf` and a batch count together, so neither can move the other.
+pub const DESK_AGE_W: f32 = 40.0;
+pub const DESK_MARK_W: f32 = 44.0;
 
 /// Below this the picture stops being readable at wall distance, so the window refuses to shrink.
 pub const MIN_WINDOW: (f32, f32) = (640.0, 360.0);
@@ -279,6 +339,15 @@ pub const TREE_SECONDARY_MIN: f32 = 0.6;
 pub const WORDMARK: TextStyle = TextStyle::new(13.0, 600.0);
 /// The one heading the placeholder panel has.
 pub const TITLE: TextStyle = TextStyle::new(15.0, 600.0);
+/// The desk's report name (#294): a step above the list's names, so the vessel being acted on leads.
+pub const DESK_HEADING: TextStyle = TextStyle::new(18.0, 600.0);
+/// The desk's one value that is a verdict about time: the age in the last known block.
+pub const DESK_VALUE: TextStyle = TextStyle::new(14.0, 500.0);
+/// The label on the desk's two commit controls, which are taller than the text controls.
+pub const DESK_ACTION: TextStyle = TextStyle::new(13.0, 600.0);
+/// The regime banner's sentence: one step above the labels, one below the report's name. It wraps when
+/// the sentence is long (`clock not checked — …`), rather than clipping inside the sheet.
+pub const DESK_BANNER: TextStyle = TextStyle::new(13.0, 600.0);
 /// Everything that is not a heading or a wordmark.
 pub const LABEL: TextStyle = TextStyle::new(12.0, 400.0);
 

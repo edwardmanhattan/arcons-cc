@@ -416,9 +416,17 @@ pub(super) fn rail(state: &State) -> El {
         .w(tokens::DESK_LIST)
         .h_full()
         .min_h(tokens::DESK_SCROLL_MIN_H)
-        .gap(tokens::GAP)
-        .child(search_field(state))
-        .child(chips(state))
+        .gap(0.0)
+        .child(
+            // The head is one block: the search and the chips are closer to each other than either is
+            // to the list they filter (#294).
+            col()
+                .w_full()
+                .gap(tokens::DESK_GROUP_GAP)
+                .pb(tokens::DESK_PANEL_PAD)
+                .child(search_field(state))
+                .child(chips(state)),
+        )
         .child(list(state))
         .child(rail_footer(state))
 }
@@ -433,8 +441,8 @@ fn search_field(state: &State) -> El {
         .label("Search hull or number")
         .single_line()
         .w_full()
-        .h(tokens::NAME_H + tokens::GAP)
-        .px(tokens::GAP)
+        .h(tokens::DESK_FIELD_H)
+        .px(tokens::DESK_CONTROL_PAD)
         .fill(tokens::bg())
         .radius(tokens::GAP)
         .border(tokens::HAIRLINE, tokens::card_edge())
@@ -517,7 +525,7 @@ fn list(state: &State) -> El {
         .scroll(rune::ScrollSpec {
             stick_bottom: false,
         })
-        .gap(tokens::HAIRLINE)
+        .gap(0.0)
         // **The list owns Tab when it has focus.** Rune offers a focused element's keys to its ancestors
         // first, so a row's Tab reaches here; the same function is the window's fallback when nothing is
         // focused, which is what makes the keyboard rule one rule.
@@ -570,10 +578,7 @@ fn vessel_row(state: &State, vessel: &Vessel, index: usize, len: usize) -> El {
         tokens::hairline()
     };
 
-    let mut marks = row()
-        .items_center()
-        .gap(tokens::CHIP_GAP)
-        .child(text(age).font(tokens::LABEL).color(tokens::ink_dim()));
+    let mut marks = row().items_center().gap(tokens::CHIP_GAP);
     if backfilled {
         marks = marks.child(mark(
             format!("bf-{id_unit}"),
@@ -591,7 +596,27 @@ fn vessel_row(state: &State, vessel: &Vessel, index: usize, len: usize) -> El {
         ));
     }
 
-    row()
+    // The two trailing slots are always reserved, so the age is right-aligned at the same x on every
+    // row and a `bf` or a count cannot push it left (#294).
+    let age_slot = el()
+        .key(format!("age-slot-{id_unit}"))
+        .w(tokens::DESK_AGE_W)
+        .items_center()
+        .justify_end()
+        .child(
+            text(age)
+                .key(format!("age-{id_unit}"))
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim()),
+        );
+    let mark_slot = el()
+        .key(format!("mark-slot-{id_unit}"))
+        .w(tokens::DESK_MARK_W)
+        .items_center()
+        .gap(tokens::CHIP_GAP)
+        .child(marks);
+
+    let mut row = row()
         .key(format!("vessel-row-{id_unit}"))
         .role("option")
         .checked(selected)
@@ -599,7 +624,7 @@ fn vessel_row(state: &State, vessel: &Vessel, index: usize, len: usize) -> El {
         .label(label)
         .w_full()
         .h(tokens::DESK_ROW_H)
-        .px(tokens::CHIP_PAD)
+        .px(tokens::GAP)
         .items_center()
         .gap(tokens::GAP)
         .fill(if selected {
@@ -607,13 +632,16 @@ fn vessel_row(state: &State, vessel: &Vessel, index: usize, len: usize) -> El {
         } else {
             tokens::clear()
         })
-        .border(tokens::HAIRLINE, edge)
+        // One hairline between rows, not a box around each. The selected or focused row is the only
+        // one that draws four sides.
+        .border_sides([0.0, 0.0, tokens::HAIRLINE, 0.0], tokens::hairline())
         .on_press(move |state: &mut State| {
             state.focus = crate::ui::Focus::List;
             state.select(id_unit);
         })
         .child(
             col()
+                .w_full()
                 .grow(1.0)
                 .gap(tokens::CARD_GAP)
                 .child(
@@ -622,14 +650,26 @@ fn vessel_row(state: &State, vessel: &Vessel, index: usize, len: usize) -> El {
                         .color(tokens::ink()),
                 )
                 .child(
-                    // The hull number is the operator's strongest handle on a ship. The class is not in the
-                    // picture the desk reads, so the row does not pretend to have one.
-                    text(format!("Hull {}", vessel.hull_number))
-                        .font(tokens::LABEL)
-                        .color(tokens::ink_dim()),
+                    row()
+                        .w_full()
+                        .items_center()
+                        .gap(tokens::CHIP_GAP)
+                        .child(
+                            // The hull number is the operator's strongest handle on a ship. The class is
+                            // not in the picture the desk reads, so the row does not pretend to have one.
+                            text(format!("Hull {}", vessel.hull_number))
+                                .font(tokens::LABEL)
+                                .color(tokens::ink_dim()),
+                        )
+                        .child(spacer())
+                        .child(age_slot)
+                        .child(mark_slot),
                 ),
-        )
-        .child(marks)
+        );
+    if selected || cursor {
+        row = row.border_sides([tokens::HAIRLINE; 4], edge);
+    }
+    row
 }
 
 /// A small word in a pill: `bf`, or the batch's count. The mark is drawn and also said, so a reader who
@@ -667,7 +707,9 @@ fn rail_footer(state: &State) -> El {
     col()
         .key("rail-foot")
         .w_full()
-        .gap(tokens::CARD_GAP)
+        .pt(tokens::DESK_GROUP_GAP)
+        .gap(tokens::DESK_LABEL_GAP)
+        .border_sides([tokens::HAIRLINE, 0.0, 0.0, 0.0], tokens::hairline())
         .child(
             row()
                 .w_full()
@@ -681,7 +723,6 @@ fn rail_footer(state: &State) -> El {
             "{shown} of {} shown · ages from Minos",
             counts.all
         )))
-        .child(caption("Select a vessel, then confirm the fix."))
         .child(caption("never reported · nothing to prefill"))
 }
 
@@ -693,8 +734,8 @@ fn refresh_button(state: &State) -> El {
         .role("button")
         .label("Refresh the standing picture")
         .disabled(!enabled)
-        .px(tokens::CHIP_PAD)
-        .py(tokens::CHIP_PAD)
+        .h(tokens::DESK_QUIET_H)
+        .px(tokens::DESK_CONTROL_PAD)
         .radius(tokens::GAP)
         .fill(tokens::name_plate())
         .border(tokens::HAIRLINE, tokens::card_edge())
@@ -712,21 +753,32 @@ fn refresh_button(state: &State) -> El {
 }
 
 /// The batch tray: the draft, and the one request each row will become.
+///
+/// It is a **sheet**, like the report: the two surfaces where the operator is deciding are the two that
+/// have an inside edge. The cards are controls on the sheet, and the row scrolls sideways rather than
+/// painting under the report when a pass has more than three vessels (#294).
 pub(super) fn tray(state: &State) -> El {
+    let rows = state.desk.batch().rows();
+    let empty = rows.is_empty();
     let mut cards = row()
         .key("tray-cards")
         .w_full()
+        .min_w(tokens::DESK_SCROLL_MIN_W)
+        .max_w(tokens::DESK_CARD_W * 3.0 + tokens::GAP * 2.0)
+        .h(tokens::DESK_CARD_H)
         .items_start()
-        .gap(tokens::GAP);
-    for row in state.desk.batch().rows() {
+        .gap(tokens::GAP)
+        .scroll_x();
+    for row in rows {
         cards = cards.child(card(state, row));
     }
-    if state
-        .desk
-        .selected()
-        .is_some_and(|id_unit| !state.desk.in_batch(id_unit))
-    {
-        cards = cards.child(add_vessel());
+    if empty {
+        cards = row()
+            .key("tray-cards")
+            .w_full()
+            .h(tokens::DESK_CARD_H)
+            .items_center()
+            .child(caption("Nothing in the batch yet").key("tray-empty"));
     }
 
     let mut header = row()
@@ -735,20 +787,30 @@ pub(super) fn tray(state: &State) -> El {
         .gap(tokens::GAP)
         .child(caption("THE BATCH"));
     if let Some(notice) = state.desk.notice() {
-        header = header.child(spacer()).child(caption(notice.to_string()));
+        header = header.child(caption(notice.to_string()));
+    }
+    header = header.child(spacer());
+    if state
+        .desk
+        .selected()
+        .is_some_and(|id_unit| !state.desk.in_batch(id_unit))
+    {
+        header = header.child(add_vessel());
     }
 
     col()
         .key("batch-tray")
         .w_full()
-        .gap(tokens::GAP)
-        .padding(tokens::PAD)
+        .gap(0.0)
+        .padding(tokens::DESK_PANEL_PAD)
         .radius(tokens::PANEL_RADIUS)
         .fill(tokens::panel())
         .border(tokens::HAIRLINE, tokens::card_edge())
         .child(header)
-        .child(cards)
-        .child(footer(state))
+        // The gap is outside the cards viewport: padding on the scroll viewport itself would shorten
+        // the visible card and clip its second line.
+        .child(col().w_full().pt(tokens::DESK_GROUP_GAP).child(cards))
+        .child(footer(state).pt(tokens::DESK_PANEL_PAD))
 }
 
 /// One vessel in the draft: the ship, the hull, the regime the row's time earns, and a way to drop it.
@@ -772,8 +834,8 @@ fn card(state: &State, held: &Row) -> El {
         ))
         .w(tokens::DESK_CARD_W)
         .h(tokens::DESK_CARD_H)
-        .padding(tokens::CHIP_PAD)
-        .gap(tokens::CARD_GAP)
+        .padding(tokens::DESK_CONTROL_PAD)
+        .gap(tokens::DESK_LABEL_GAP)
         .radius(tokens::GAP)
         .fill(tokens::bg())
         .border(tokens::HAIRLINE, tokens::card_edge())
@@ -820,23 +882,27 @@ fn remove_button(id_unit: u64, name: String) -> El {
         .child(text("×").font(tokens::TITLE).color(tokens::ink_dim()))
 }
 
-/// `+ Add vessel`, in the tray, only when the selected hull is not already in it. The same action as the
-/// inspector's button, because there is one draft and one way into it.
+/// `+ Add selected`, in the tray header, only when the selected hull is not already in it.
+///
+/// It adds the selected hull (`add_selected`); it does not open a picker. A card-sized dashed tile made
+/// it look like an empty slot and a second primary thing (#294).
 fn add_vessel() -> El {
     el().key("add-vessel")
         .role("button")
         .label("Add the selected vessel to the batch")
-        .w(tokens::DESK_CARD_W)
-        .h(tokens::DESK_CARD_H)
+        .h(tokens::DESK_ACTION_H)
+        .px(tokens::DESK_CONTROL_PAD)
         .items_center()
         .justify_center()
         .radius(tokens::GAP)
         .fill(tokens::clear())
         .border(tokens::HAIRLINE, tokens::focus_edge())
-        .border_dash(tokens::CHIP_PAD, tokens::CARD_GAP)
-        .on_press(|state: &mut State| state.add_selected())
+        .on_press_tx(|state: &mut State, tx: &mut rune::Tx| {
+            state.add_selected();
+            tx.blur();
+        })
         .child(
-            text("+ Add vessel")
+            text("+ Add selected")
                 .font(tokens::LABEL)
                 .color(tokens::ink()),
         )
@@ -886,8 +952,8 @@ fn footer(state: &State) -> El {
             .role("button")
             .label(send.clone())
             .disabled(!enabled)
+            .h(tokens::DESK_ACTION_H)
             .px(tokens::PAD)
-            .py(tokens::CHIP_PAD)
             .radius(tokens::GAP)
             .fill(if enabled {
                 tokens::accent()
@@ -897,7 +963,7 @@ fn footer(state: &State) -> El {
             .items_center()
             .justify_center()
             .on_press(|state: &mut State| state.send())
-            .child(text(send).font(tokens::LABEL).color(if enabled {
+            .child(text(send).font(tokens::DESK_ACTION).color(if enabled {
                 tokens::bg()
             } else {
                 tokens::ink_dim()
