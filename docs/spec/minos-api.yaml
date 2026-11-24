@@ -523,6 +523,83 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /users/me/photo:
+    put:
+      tags: [users]
+      summary: Set or replace the authenticated account's photo
+      description: |
+        Authorized by authentication alone, like `GET`/`PATCH /users/me` — the account is always
+        the caller, read from the token, so the request has no id to point at somebody else.
+
+        `multipart/form-data` with one **`file`** part. PNG or JPEG, at most 5 MiB, with decoded
+        dimensions bounded to guard against a decompression bomb. The declared `Content-Type` is
+        not trusted: the type is decided by decoding the bytes.
+
+        **Content-addressed by a fresh key per upload.** Replacing a photo produces a new object
+        key, so the previous bytes are never reachable at the new URL and a cache cannot serve a
+        stale picture. The replaced object is removed after the row is committed, best effort.
+
+        The response is the account, with the new presigned `photo_url`.
+      operationId: uploadOwnPhoto
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: |
+                    The photo. A missing part is `400` naming `file`; this route's subject is the
+                    picture, so there is no "leave it alone" reading.
+      responses:
+        '200':
+          description: Stored, and the account with its new photo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [users]
+      summary: Remove the authenticated account's photo
+      description: |
+        Authorized by authentication alone, like the `PUT` above.
+
+        **It is idempotent, and the response does not say which case it was.** An account with no
+        photo returns `200`, not `404` — a client retrying, or clearing from a stale screen, asked
+        for the photo to be gone and it is gone.
+
+        **The row is cleared before the object is touched.** A failure between the two leaves
+        unreferenced bytes in the bucket, which cost storage and nothing else; the opposite order
+        would leave an account naming an object that is not there, and every read would presign
+        that name into a URL that 404s.
+
+        Nothing is returned. Re-read the account to see its new state — `photo_url` will be
+        **absent**.
+      operationId: clearOwnPhoto
+      responses:
+        '200':
+          description: The photo is gone, whether or not there was one.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   # =========================================================================
   # users — administration
   # =========================================================================
@@ -745,6 +822,97 @@ paths:
           $ref: '#/components/responses/NotFound'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /users/{id}/photo:
+    parameters:
+      - $ref: '#/components/parameters/UserID'
+    put:
+      tags: [users]
+      summary: Set or replace another account's photo
+      description: |
+        Requires the `update` action on `/system/users` — the same capability that governs
+        `PATCH /users/{id}`, because a photo is a field of the account and a separate grant for it
+        alone would let the two drift into "may correct this person's record but not their picture".
+
+        **Not a duplicate of `PUT /users/me/photo`.** That route can only ever act on the caller, so
+        an operator could not put a photograph on an account created from a roster. Here the subject
+        comes from the path and the actor from the token, and they are recorded separately: the row
+        written is `{id}` and `updated_by` is the operator who asked for it. The operator may pass
+        their own id, which simply makes the two the same account.
+
+        `multipart/form-data` with one **`file`** part. PNG or JPEG, at most 5 MiB, with decoded
+        dimensions bounded against a decompression bomb. The declared `Content-Type` is not
+        trusted — the type is decided by decoding the bytes.
+
+        **Content-addressed by a fresh key per upload**, so replacing a photo never leaves the old
+        bytes reachable at the new URL. The replaced object is removed after the row commits, best
+        effort.
+
+        The response is the **target** account, not the caller's, with its new presigned
+        `photo_url`.
+      operationId: uploadUserPhoto
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: |
+                    The photo. A missing part is `400` naming `file`; this route's subject is the
+                    picture, so there is no "leave it alone" reading.
+      responses:
+        '200':
+          description: Stored, and the target account with its new photo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [users]
+      summary: Remove another account's photo
+      description: |
+        Requires the `update` action on `/system/users`, for the same reason the `PUT` above does.
+
+        **It is idempotent, and the response does not say which case it was.** An account with no
+        photo returns `200`, not `404` — a client retrying, or clearing from a stale screen, asked
+        for the photo to be gone and it is gone.
+
+        **The row is cleared before the object is touched.** A failure between the two leaves
+        unreferenced bytes in the bucket, which cost storage and nothing else; the opposite order
+        would leave an account naming an object that is not there, and every read would presign
+        that name into a URL that 404s.
+
+        Nothing is returned. Re-read the account to see its new state — `photo_url` will be
+        **absent**.
+      operationId: clearUserPhoto
+      responses:
+        '200':
+          description: The photo is gone, whether or not there was one.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -3810,6 +3978,76 @@ paths:
             commander is a device reporting for the wrong ship.
 
             Both are 403 rather than 404 — see the operation description.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /live-feed/fixes/relayed:
+    post:
+      tags: [live-feed]
+      summary: Report a vessel's position on its commander's behalf
+      description: |
+        The operator's route: somebody ashore takes a vessel's position by voice and enters it, because
+        not every hull carries a VSAT. Twice a day, typically.
+
+        **IT IS NOT `POST /live-feed/fixes`.** That route requires the caller to be the vessel's current
+        commander — the one account on the ship that cannot reach this system from sea. This route is
+        gated on the permission `report_as` on `/system/live-feed` instead, because the caller is
+        deliberately not the commander.
+
+        ## What is recorded
+
+        **Both accounts, and neither substitutes for the other.** `reported_by` is who asserted the
+        position — accountable for the transcription — and `reported_for` is whose report it claims to
+        be, the commander at the time. The picture shows both; see `manual` on `FeedFix`.
+
+        **THE VESSEL MUST HAVE A COMMANDER.** A report nobody can be said to have made is not a report,
+        so a vessel with a vacant command is refused with **403** rather than recorded with a null
+        author. That is a different state from a vessel that simply has not reported, which
+        `GET /live-feed/positions` still lists.
+
+        ## `recorded_at` is when the vessel reported, not when it was typed
+
+        The point belongs on the timeline where the ship was. The ordinary case is hours old, so the fix
+        will usually be a **backfill** AND `manual` — two different facts about the same point, and a
+        renderer that showed only one would misdescribe it. The retention rule is unchanged: more than
+        30 days old is refused, as a field error rather than a batch count.
+
+        ## `latest`
+
+        A voice report typed in late can be older than what the vessel's own handset already sent. The
+        fix is still recorded — it is where the ship said it was at that time — but it does **not**
+        become the vessel's current position and the map does not move. `latest: false` says so, and the
+        live broadcast is skipped: pushing an older point to every watcher would be the opposite of what
+        the operator meant.
+      operationId: reportPositionRelayed
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeedRelayRequest'
+      responses:
+        '201':
+          description: |
+            The point was recorded. `latest` says whether it became the vessel's current position.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeedRelayedEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: |
+            Two cases, told apart by the message: the caller does not hold `report_as`, or the vessel has
+            no commander to attribute the report to.
           content:
             application/json:
               schema:
@@ -10109,6 +10347,127 @@ paths:
           description: |
             The window, the source or the cursor is malformed. The refusal names the field at fault —
             `from_assumed`, `to_assumed`, `source` or `cursor`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: The caller holds no place in this game, or lacks `read` on `/games/timeline`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /games/{id}/tracks:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The game's id.
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+    get:
+      tags: [games]
+      summary: The exercise's recorded geometry — every leg of every hull, as one file
+      description: |
+        **THE RECORDED LEG CHAIN, NOT A SIMULATION.** Every entry is one row of `game_fixes`: a hull's
+        position when an order was given, the order itself, the origin a placement became, a drag, or a
+        departure. Nothing here advances a hull along its leg. That distinction is the one
+        `docs/closure.md` §3 drew when it put the replay's movement in the clients: this endpoint
+        returns what the server RECORDED, and a position between two legs remains the client's
+        calculation, using the formula in `README.md` §2. Recomputing it here would be a second
+        implementation of that formula, which is exactly what the boundary exists to prevent.
+
+        **ONE REQUEST, NO PAGES.** The timeline pages because it merges four tables into a stream a
+        client scrubs; this is one table, roughly one row per order, so the whole exercise fits in one
+        download. That is the point of the endpoint: a client that wants to draw every track draws it
+        once it has the file, rather than walking a cursor first.
+
+        **PER HULL, BECAUSE A TRACK IS PER HULL.** `units[].legs[]` is one hull's chain in the order it
+        moved — `(epoch, assumed_time)` — and the coordinates are the vertices. `id_unit` is the same
+        register id the roster and the timeline's order payload use, so a client that already holds
+        `GET /games/{id}/units` can name each track without a second call; the name is deliberately NOT
+        duplicated here, so a later register edit cannot fork the exercise's history.
+
+        **EACH LEG CARRIES BOTH POSITION AND INSTRUCTION**, and the two are different facts:
+        `latitude`/`longitude` is where the hull WAS at `assumed_time`, while `heading_deg`/`speed_kn`
+        is what it was told to do FROM then until the next leg. `kind` says which row it is — `leg`,
+        `jump` (a position somebody set) or `launch` (a departure) — and a client that ignored it would
+        draw a drag as a hull steaming due north at nought knots.
+
+        **ERASED ATTEMPTS ARE ABSENT.** A rewind marks the abandoned attempt's rows deleted, and a
+        replay of them is the one thing the erasure exists to prevent. The surviving chain is the
+        exercise that happened; `epoch` on each leg says which attempt the row belongs to, so a debrief
+        can see that a rewind occurred.
+
+        **THE RESPONSE IS NOT THE STANDARD ENVELOPE**, and that is the same exception
+        `GET /assets/unit-images` makes for its archive: this is a FILE. A client saves it or reads it
+        as a document, and neither can do anything with a `data` wrapper around it.
+
+        **COMPRESSION IS NEGOTIATED.** Send `Accept-Encoding: gzip` and the document comes back
+        compressed; the response carries `Vary: Accept-Encoding`, so a cache keys on it. An
+        uncompressed body is always a valid answer.
+      operationId: getGameTracks
+      parameters:
+        - name: from_assumed
+          in: query
+          required: false
+          description: |
+            Earliest scenario instant to include, inclusive, as RFC 3339. Omitted means the exercise's
+            beginning.
+
+            **THE `+` IN A POSITIVE OFFSET MUST BE PERCENT-ENCODED** (`%2B`) or sent as `Z` / a
+            negative offset, because a query string decodes a bare `+` to a space and the instant then
+            fails to parse.
+          schema:
+            type: string
+            format: date-time
+        - name: to_assumed
+          in: query
+          required: false
+          description: Latest scenario instant to include, inclusive. Omitted means the exercise's end.
+          schema:
+            type: string
+            format: date-time
+        - name: unit
+          in: query
+          required: false
+          description: |
+            Narrows the export to one hull. Omitted means every hull.
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        '200':
+          description: |
+            The exercise's recorded chain, oldest first within each hull. Not wrapped in the envelope —
+            see the operation description.
+          headers:
+            Content-Disposition:
+              description: Offers the filename `game-<id>-tracks.json`.
+              schema: {type: string}
+            Content-Encoding:
+              description: |
+                `gzip` when the request's `Accept-Encoding` allows it. Absent on an uncompressed
+                response.
+              schema: {type: string}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameTrackExport'
+        '400':
+          description: |
+            The window is malformed. The refusal names the field at fault — `from_assumed` or
+            `to_assumed`.
           content:
             application/json:
               schema:
@@ -17059,6 +17418,73 @@ components:
 
     # A fix as the server holds it. Two fields are DERIVED rather than stored, because a stored copy
     # of a computable value is a second source of truth that can disagree with what it describes.
+    FeedActor:
+      type: object
+      description: An account named in the position picture.
+      required: [id, name, username]
+      properties:
+        id: {type: integer, format: int64}
+        name: {type: string}
+        username: {type: string}
+
+    FeedRelayRequest:
+      type: object
+      description: |
+        One position, entered by an operator on a vessel commander's behalf.
+
+        ONE FIX RATHER THAN A BATCH, unlike the beacon: a voice report is a single point at a single
+        time. The coordinates are nullable in the schema and required by validation for the reason every
+        coordinate in this document is — zero is a real place, so absence has to be representable.
+      required: [id_unit, recorded_at, latitude, longitude]
+      properties:
+        id_unit:
+          type: integer
+          format: int64
+          minimum: 1
+        recorded_at:
+          type: string
+          format: date-time
+          description: |
+            **When the vessel reported it**, not when it was typed in. The ordinary case is hours old,
+            which is what makes the point a backfill as well as a manual entry.
+        latitude: {type: number, format: double, minimum: -90, maximum: 90}
+        longitude: {type: number, format: double, minimum: -180, maximum: 180}
+        speed_kn: {type: number, format: double, minimum: 0}
+        course_deg:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 360
+          exclusiveMaximum: true
+        accuracy_m: {type: number, format: double, minimum: 0}
+
+    FeedRelayedEnvelope:
+      type: object
+      required: [status_code, message, data]
+      properties:
+        status_code: {type: integer, format: int32}
+        message: {type: string}
+        data:
+          $ref: '#/components/schemas/FeedRelayedResult'
+
+    FeedRelayedResult:
+      type: object
+      required: [id_unit, recorded_at, received_at, latest]
+      properties:
+        id_unit: {type: integer, format: int64}
+        recorded_at:
+          type: string
+          format: date-time
+          description: |
+            The time recorded, after the server's conventional adjustment — a future value is re-stamped
+            from the server's clock, exactly as a beacon's is.
+        received_at: {type: string, format: date-time}
+        latest:
+          type: boolean
+          description: |
+            **FALSE MEANS THE MAP DID NOT MOVE.** The point is in the log, but something newer is already
+            the vessel's position — which a report typed in late legitimately is. An operator who saw only
+            "created" would believe they had corrected the picture.
     FeedFix:
       type: object
       required: [latitude, longitude, recorded_at, received_at, age_seconds, backfilled]
@@ -17116,6 +17542,28 @@ components:
             Derived from the gap between `recorded_at` and `received_at`: true when the point was
             reconstructed from an offline backlog rather than received live. A live fix is never
             backfilled, because the server stamps it.
+
+        manual:
+          type: boolean
+          description: |
+            **A PERSON ENTERED THIS POINT**, on the vessel commander's behalf, rather than the vessel's own
+            handset sending it.
+
+            An explicit flag rather than "`reported_by` is present", so a renderer can branch on it without
+            unwrapping a nested object — and so a client that only wants a different marker does not depend
+            on whether the names happened to resolve.
+        reported_by:
+          description: |
+            The operator who asserted this position. Absent for a device fix.
+          allOf:
+            - $ref: '#/components/schemas/FeedActor'
+        reported_for:
+          description: |
+            The commander whose report this claims to be. Absent for a device fix, and present exactly when
+            `reported_by` is — the pair answers two different questions and neither substitutes for the
+            other.
+          allOf:
+            - $ref: '#/components/schemas/FeedActor'
 
     FeedPosition:
       type: object
@@ -20948,6 +21396,106 @@ components:
             $ref: '#/components/schemas/TimelineEvent'
         metadata:
           $ref: '#/components/schemas/TimelineCursorMetadata'
+
+    GameTrackExport:
+      type: object
+      required: [id_game, units]
+      properties:
+        id_game: {type: integer, format: int64}
+        assumed_start:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            The scenario instant the exercise's clock began, when it has one. It LABELS the document
+            rather than bounding it — a windowed export can start later.
+        from_assumed:
+          type: string
+          format: date-time
+          description: The window asked for, echoed so a saved file says what it covers. Absent means the whole exercise.
+        to_assumed:
+          type: string
+          format: date-time
+          description: The window asked for, echoed. Absent means the whole exercise.
+        units:
+          type: array
+          description: Every hull that has at least one leg in the window, ordered by id.
+          items:
+            $ref: '#/components/schemas/GameTrackUnit'
+    GameTrackUnit:
+      type: object
+      required: [id_unit, legs]
+      properties:
+        id_unit:
+          type: integer
+          format: int64
+          description: |
+            The register's unit id — the same value the roster and the timeline's order payload use.
+            The name is not duplicated here: a later register edit must not fork the exercise's history.
+        legs:
+          type: array
+          items:
+            $ref: '#/components/schemas/GameTrackLeg'
+    GameTrackLeg:
+      type: object
+      required: [id, assumed_time, latitude, longitude, heading_deg, speed_kn, speed_ms,
+                 was_clamped, kind, epoch, ordered_by]
+      properties:
+        id: {type: integer, format: int64}
+        assumed_time:
+          type: string
+          format: date-time
+          description: The scenario instant this leg begins.
+        latitude: {type: number, format: double}
+        longitude: {type: number, format: double}
+        heading_deg:
+          type: number
+          format: double
+          description: |
+            The heading this leg SET — the instruction, not a measurement. Zero on a `jump`, because a
+            position somebody set has no voyage in it.
+        speed_kn:
+          type: number
+          format: double
+          description: The speed this leg set, in knots, after the server's clamp.
+        speed_ms:
+          type: number
+          format: double
+          description: |
+            `speed_kn` in metres per second — the same fact, so a client working in SI does not have to
+            know the conversion.
+        requested_speed_kn:
+          type: number
+          description: |
+            Present ONLY when the order had to be reduced to the hull's maximum. Its presence IS the
+            clamp.
+        was_clamped:
+          type: boolean
+          description: The same fact as `requested_speed_kn` being present, stated as a flag.
+        kind:
+          type: string
+          enum: [leg, jump, launch]
+          description: |
+            * `leg` — an order.
+            * `jump` — a position somebody SET: a drag, or a departure in a `static` exercise.
+            * `launch` — a DEPARTURE under way, carrying the host's heading and speed.
+        epoch:
+          type: integer
+          description: |
+            Which attempt at the exercise this row belongs to. 0 is the run-through; a positive value
+            means the surviving attempt follows a rewind.
+        id_host:
+          type: integer
+          format: int64
+          description: |
+            The hull this piece LEFT, present only on a departure. In a `static` exercise a departure
+            is a `jump`, so this field is what tells it apart from a drag.
+        ordered_by:
+          type: integer
+          format: int64
+          description: |
+            The author of the row: the commander for an order, the Game Master for a drag or a
+            placement, and whoever let a unit go for a departure.
 
     MessageKind:
       type: string
