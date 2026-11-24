@@ -641,3 +641,68 @@ reason in #228 and that red is expected, not this bump's.
 **What would take the pin further.** `parley_engine` publishing `line-dictionaries` would let the wall carry one fewer
 copy; until then, a bump is `scripts/vendor-patches.sh` — which now copies whatever the rev patches — one reading of the
 picture diff, and a review of the goldens that moved.
+
+### Taken: `d0eaf33` → `2899b3d3` — 306 commits, and five scenes move by sixteen pixels (#280)
+
+`dev` stood at `2899b3d3a41b6c9d00e52884cddfdd66ab71374b` (`#1691`, 2026-11-23) when #280 was written: **306 commits**
+past the pin `d0eaf332` (2026-11-19). Both `rune` and `rune-kit` move to it and nothing in `src/` does — the build is
+clean with the app's source untouched, so no API the wall uses was renamed or changed behaviour. The new ways upstream
+added in the range (`WindowHandle::scale`, `Tx::window_visible`, `Tx::scroll_key_center_at`, `El::on_pill_secondary`,
+the menu and Luau additions) are not adopted here: a bump takes the renderer, not every feature beside it.
+
+**The vendored set is still the rev's six, and the copies were re-made.** `scripts/vendor-patches.sh` reads the same
+`winit`, `wgpu-hal`, `sctk-adwaita`, `parley_engine`, `accesskit_windows` and `accesskit_macos` from `2899b3d3`, so
+nothing was added or dropped. The first two grew with upstream's own patches — `winit` 617 → 1,611 patch lines and
+`wgpu-hal` 440 → 1,405 — while the other four are byte-identical; `vendor/README.md` carries the new counts. The
+lockfile's one name change is `tiny-skia-path` → `rune-tiny-skia-path` (0.11.4 either way), which now has its own
+BSD-3-Clause row in `THIRD-PARTY-NOTICES.md`.
+
+**What could have moved the wall's pixels.** The range is mostly launch and platform work — macOS first-frame
+ordering, Windows input and presentation, market and Luau features — and none of that reaches a headless capture. The
+commits that do touch drawing are named for the next reader:
+
+- `#1672` — a face's glyphs at one size share a **hinting instance** — and `#1621` — synthetic bold, overlapping ink
+  spans and link underlines flatten or cache per line. These are the two text-raster changes of the range, and the
+  wall's five moved scenes are glyph edges.
+- `#1289` and `#1299` — fragment shapes and the remaining fragment shaders evaluate at **exact pixel centres**, the
+  class that moves a stroked edge sitting on a fraction. The desk's moved pixels are its chart's graticule, which is
+  this class.
+- `#1622` — the CPU rasterizer's segment, image and shadow bounds **stop panicking on sub-texel, degenerate and
+  non-finite spans**. Every added branch returns empty or zero for an input the wall does not draw, so it is named as
+  a guard rather than as this bump's picture; the captures agree.
+- `#1573` — blurred and inset shadows take each corner's own radius; `#1532` — a one-line field clips its overflowing
+  placeholder; `#1326` — a sticky fade's bottom snaps to the pixel grid; `#1462` — `aspect_fit` stretches when
+  `max_w`/`max_h` exceeds it. Each is a pixel on a shape or a box, and each is named so a later reading can match a
+  scene to it.
+- `#1591`, `#1599`, `#1609` and the launch series are **frame timing**, not pixels: what is drawn at rest does not
+  change, and every scene's two runs are identical (`INV-11`).
+
+**What the review found: no layout moved and no golden needed replacing.** All **51** wall scenes were rendered and
+compared; **46 are byte-identical**. Five differ, every pixel by **exactly one step**:
+
+| scene | pixels | where |
+| --- | --- | --- |
+| `installations` | 15 | the card's text ink |
+| `newsroom`, `newsroom-page-2`, `newsroom-story`, `newsroom-story-back` | 16 each | the first glyph column of the rows, at x=16, y=111–644 |
+
+The largest channel delta anywhere is **1/255**, and no pixel differs by more than one step. The best alignment
+against each golden is **no shift at all** — all twenty-five translations in a ±2 px neighbourhood were tried and
+every one matched worse — so nothing reflowed and no line rewrapped. The desk's four scenes differ by **38–40 pixels
+each, all one step, zero changed**, on the chart's 1 px degree graticule (twenty columns and twenty rows, again best
+at no shift). `scripts/assert.sh out/installations.png` answers every structural and colour question on the new
+capture.
+
+**No golden was regenerated.** Every difference is inside the scene's stated bounds: the wall's lines read
+`15 px differ (0 changed, 15 rounding)` and `16 px differ (0 changed, 16 rounding)`, the desk's read
+`40 px differ (0 changed, 40 rounding)`. A `--update-goldens` run would rewrite 55 files to move a channel by one
+step, which is the noise the bounds exist to absorb; the reviewed pictures are still the reviewed pictures.
+
+**What could not be run here, and what now can.** `VERIFY_WITH_MAP=1` is part of this ticket's gate on this machine:
+the prebuilt core means the map feature compiles in seconds (`docs/build-environment.md`), so the hole #152 described
+is closed locally and not only in CI. The vendored `winit`/`wgpu-hal`/`accesskit` copies compile on macOS and Windows
+only, in CI's `check` and `map` jobs; `map (windows-latest)` remains red for the parked reason in #228, and that red
+predates this bump.
+
+**What would take the pin further.** The next bump is `scripts/vendor-patches.sh`, one reading of the picture diff,
+and this section again; `parley_engine`'s `line-dictionaries` is still the one feature that keeps a copy, and Windows
+still draws through MapLibre's unsupported target. Neither is ours to fix.
