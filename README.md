@@ -96,7 +96,8 @@ First build is the slow one: Rune comes from git and pulls a few hundred crates.
 Where the other documents sit: [`AGENTS.md`](AGENTS.md) is how to work here (one ticket per branch,
 what "done" means, the rules that are not preferences); [`CONTEXT.md`](CONTEXT.md) is the domain
 vocabulary; [`docs/adr/0001-rune-and-maplibre.md`](docs/adr/0001-rune-and-maplibre.md) records why
-Rune and why MapLibre, and what each defers.
+Rune and why MapLibre, and what each defers. The project summary and the run instructions are in
+[`docs/overview.html`](docs/overview.html); it renders its Mermaid diagram with Pele.
 
 ## There is no LICENSE, on purpose
 
