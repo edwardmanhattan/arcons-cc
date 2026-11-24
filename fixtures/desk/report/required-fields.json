@@ -1,0 +1,24 @@
+{
+  "recorded": "2026-11-23",
+  "against": "the development deployment",
+  "request": {
+    "method": "POST",
+    "path": "/live-feed/fixes/relayed",
+    "body": {}
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "status_code": 400,
+      "message": "Bad request",
+      "data": {
+        "errors": {
+          "id_unit": "This field is required.",
+          "latitude": "This field is required.",
+          "longitude": "This field is required.",
+          "recorded_at": "This field is required."
+        }
+      }
+    }
+  }
+}

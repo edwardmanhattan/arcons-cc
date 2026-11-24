@@ -24,14 +24,21 @@ role: in `CONTEXT.md` "operator" remains the human at the wall, and the code say
 
 Four facts from the Minos contract shape it, and none of them is the payload's shape:
 
-1. **One vessel per request.** `id_unit` is top-level, up to 60 fixes, all of one vessel. Sending five vessels is
-   five requests. The desk never reaches the 60: it records **one** fix per vessel (decision 2).
+1. **One vessel per request.** On the beacon route `id_unit` is top-level with up to 60 fixes of one vessel; on
+   the **relayed** route the desk writes (`POST /live-feed/fixes/relayed`, amendment below), one vessel carries
+   **one** fix. Sending five vessels is five requests either way, and the desk's one fix per vessel (decision 2)
+   makes the 60 irrelevant.
 2. **`recorded_at` decides the report's kind.** Within ±60 s of the server's clock the fix is *live* and
    re-stamped with server time; 60 s to 30 days old it is *backfill* and its own time is kept; older than 30 days
-   it is refused, permanently, and counted; more than 60 s in the future it is re-stamped live and logged as a
-   warning.
-3. **A 200 is an answer.** `{accepted, rejected}` — a request in which the fix was refused is still a 200. `403`
-   is "you are not this vessel's commander", `404` is "no such vessel", and the two remedies differ.
+   it is refused, permanently — the beacon route counts it in `rejected`, the relayed route answers `400` naming
+   `recorded_at`; more than 60 s in the future it is re-stamped live and logged as a warning.
+3. **The answer is per vessel, and `latest` is the honest half.** The relayed route answers `201` with
+   `{id_unit, recorded_at, received_at, latest}`: a report older than what the vessel's own handset already sent is
+   in the log and **does not move the picture**, and an operator who saw "created" would believe they had corrected
+   it. A refusal is a `400` (or a `422` for a body the route cannot read) that names the field; `403` has two
+   causes — the vessel has no commander to attribute the report to, or the account does not hold `report_as` on
+   `/system/live-feed` — and `404` is "no such vessel". The remedies differ, and the answer says which one it is: a
+   field named `id_unit` for the vessel, no field for the permission.
 4. **Nothing says which vessels a desk may report.** `/live-feed/me` returns the vessels the caller *commands*, and
    a shore account commands none. There is no reportable-set read, so `403` is discovered by sending, not by
    filtering a list.
@@ -83,11 +90,16 @@ row independently removable. So:
 life of that installation. It is not derived from the hostname, the MAC address or the login name: a value computed
 from the machine would name it to Minos, and the rule that no host or username leaves this process (`INV-08`) is not
 kept by a field that merely looks like an identifier. Sixteen bytes from the OS, the version and variant bits set,
-written once at mode 0600, and the same id on every request from that workstation.
+written once at mode 0600, and the same id in `--self-check` and in the desk's own log.
 
-The field means "the handset" in the contract; a desk reporting which workstation said so is the honest reading.
+**It does not ride the relayed route** (amendment, 2026-11-23). That body has no device field: the server records
+*who asserted the fix* — the signed-in operator — and *for whom* — the vessel's current commander. That is the right
+provenance for a position somebody typed, and it is why the path exists separately: a beacon fix says "this is where I
+am", a relayed one says "this is where that ship told me it is". The installation's id names the workstation in the
+desk's own records; the account names the operator on Minos's.
+
 Deleting the file or reinstalling mints a new id, which is the right behaviour — it is an installation identity, not a
-licence, and two desks with the same id would make the audit trail lie.
+licence, and two desks with the same id would make the desk's own records lie.
 
 The batch is a **draft, not a queue**. It survives a restart so a mis-click does not lose ten minutes of typing; it
 is never sent with the time it had when it was drafted (see decision 3).
@@ -172,8 +184,8 @@ a DOM Rune does not have.
 
 ## Decision 6 — a source note is kept locally, per batch
 
-The payload has no provenance field. `recorded_at` says when, `device_id` says which workstation, and nothing says
-*how the desk knew*. That is the gap this application exists to close, so the desk keeps the answer itself: one free
+The payload has no provenance field. `recorded_at` says when, the account says which operator asserted it, and
+nothing says *how the desk knew*. That is the gap this application exists to close, so the desk keeps the answer itself: one free
 text note per batch ("Plot 4 · phone call 14:03"), carried from the previous batch, overridable per row, stored in
 the desk's own config directory, and never sent.
 
@@ -246,6 +258,46 @@ becomes its value and stops being local-only.
    stopgap.
 2. **A future `recorded_at` beyond +60 s.** The contract says it is treated as live and re-stamped; decision 3's last
    row depends on that being the rule rather than an accident of the implementation.
-3. **The intended path for a shore account's `403`.** The desk treats it as a late, per-vessel verdict because no
-   reportable-set read exists. If a widened `/live-feed/me` or a `read`-style policy is planned, that changes what
-   the picker can promise; until then the desk does not guess.
+3. **The intended path for a shore account's per-vessel `403`.** The desk treats a `403` on `id_unit` as a late,
+   per-vessel verdict because no reportable-set read exists; a `403` with no field is the account's missing
+   `report_as`, a deployment-credential problem rather than the vessel's, and the row must not promise that
+   appointing a commander will fix it. If a widened `/live-feed/me` or a `read`-style policy is planned, that
+   changes what the picker can promise; until then the desk does not guess.
+
+## Amendment — 2026-11-23 — the desk writes the **relayed** route
+
+The desk started from `POST /live-feed/fixes`, the beacon's route, and that was the wrong door. The beacon requires
+the caller to **be the vessel's current commander** — exactly the account that cannot reach this system from sea — and
+the desk's use case is connectivity, not a handset: hulls without a VSAT report by voice, and somebody ashore types
+the coordinates in. Minos added a path for precisely that, and it is the one the desk writes:
+
+```
+POST /live-feed/fixes/relayed          (Minos 496ae25, internal/routers/live_feed.go)
+```
+
+What changed here, and what did not:
+
+- **The body is flat and has no `device_id`**: `id_unit`, `latitude`, `longitude`, `recorded_at`, and the three
+  measurements when they were measured. The four required fields and the bounds (±90, ±180, `0 ≤ course < 360`, the
+  rest ≥ 0) are `dto.FeedRelayRequest`'s.
+- **Success is `201`**, not `200 {accepted, rejected}`: `{id_unit, recorded_at, received_at, latest}`. `latest` is
+  the answer the operator needs, because a late report belongs in the log and must not move the map.
+- **Age is a `400` naming `recorded_at`**, not a count. A wrong-typed field is a `422` naming `_request` — a client
+  bug, not an operator mistake.
+- **`403` has two causes, and the answer names which**: a hull with no commander has no report to attribute and
+  answers with a field error on `id_unit`; an account without `report_as` on `/system/live-feed` is refused by the
+  permission middleware with no field at all. The row stays intact in both cases — a commander can be assigned, or
+  the permission granted — and a `404` is a hull that does not exist.
+- **Unchanged**: one vessel per request and one fix per vessel (decision 2); the drop fills that vessel's row and
+  never sends (decision 4); the regime is still decided by one function before the send (decision 3); the credential
+  and the tokens are untouched (decision 5); the source note is still local, and still the only place that says how
+  the desk knew (decision 6).
+
+The evidence is `fixtures/desk/report/`: five exchanges recorded from the development deployment on 2026-11-23 by
+`scripts/record-desk-report.sh` — a missing field, no commander, an age refusal, a missing hull, and a body the route
+cannot read. The permission `403` is not among them (it needs an account without `report_as`); its shape is the
+middleware's `{"message":"Forbidden","data":null}` in Minos `496ae25`. The accepted `201` is **not** among them
+either, because recording it stores a fix for a real vessel — and hull 8's last fix is 56 days old, so a timestamp the
+30-day rule accepts would become the latest and move the picture. Its shape is pinned to `docs/spec/minos-api.yaml`
+at `496ae25` (`FeedRelayedEnvelope → FeedRelayedResult`), not guessed, and the fixture becomes a wire exchange the
+first time a human lets one through.

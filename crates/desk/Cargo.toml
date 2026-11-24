@@ -10,6 +10,14 @@ description = "Arcons Desk — the shore client that writes the Minos live feed"
 # The installation's identity: 16 bytes from the OS, formatted as a v4 UUID. Already in the graph for the
 # wall's pairing keys, so the desk adds no dependency of its own (#194).
 getrandom = "0.3"
+# The wire's shape (#278). Both are already in the graph for the wall, at the same versions, so the desk adds
+# nothing new to `THIRD-PARTY-NOTICES.md` — and the body's field order and its absent fields are what the tests
+# assert against recorded answers, not a hand-written JSON string.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The desk's own write path (#278): blocking, on a worker, with the system's own TLS roots — a desk inside a
+# deployment may trust a private CA that only the system store knows. Already in the graph for the wall.
+reqwest = { version = "0.13", features = ["blocking", "json", "rustls", "webpki-roots"], default-features = false }
 # The renderer. Pinned by rev in `[workspace.dependencies]`, like the wall's, so the two applications
 # cannot draw with two Runes (#276, ADR-0009 decision 1).
 rune = { workspace = true }

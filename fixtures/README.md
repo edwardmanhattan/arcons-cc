@@ -178,6 +178,27 @@ not, and this table says which:
 here so the decoder and the request line can be tested today; a recording of real rows is strictly
 better, and the moment one exists these two should be deleted rather than kept alongside it.
 
+## `desk/report/` — the desk's write path, 2026-11-23 (#278)
+
+The desk posts one vessel's fix to `POST /live-feed/fixes/relayed`, a route newer than the pinned contract. These
+files are what the development deployment answered, written by `scripts/record-desk-report.sh` — **and every one of
+them wrote nothing**: a missing field, a hull with no commander appointed, a time older than 30 days, a hull that
+does not exist, and a body the route could not read. The script takes the credential from the environment and never
+writes the token or the deployment's host into a file.
+
+| file | what it is |
+| --- | --- |
+| `required-fields.json` | **Recorded**: `{}`, answered `400` naming `id_unit`, `latitude`, `longitude` and `recorded_at` — the body is flat, and those four are required |
+| `no-commander.json` | **Recorded**: hull 1, answered `403` on `id_unit` — *"This vessel has no commander appointed, so there is no report to attribute."* |
+| `age.json` | **Recorded**: hull 8 (the one hull with a commander), 40 days old, answered `400` on `recorded_at` — the age rule is a field refusal on this route, not a rejected count |
+| `no-such-vessel.json` | **Recorded**: `id_unit: 999999`, answered `404` with `data: null` |
+| `unreadable.json` | **Recorded**: `"latitude": "-6.1"`, answered `422` on `_request` |
+| `created.json` | **Pinned to `docs/spec/minos-api.yaml` @ `minos 496ae25`**, not recorded: `/live-feed/fixes/relayed`'s `FeedRelayedEnvelope → FeedRelayedResult`. Recording one would store a fix for a real vessel, and hull 8's last fix is 56 days old, so an accepted timestamp would move the picture; the file says which it is. It carries `latest: false`, the answer that says a late report did not move the picture |
+
+**Replace `created.json` with a recording the first time a human lets one through** — the script has the lever for
+it, `scripts/record-desk-report.sh --write <id_unit> <lat> <lon>`, which sends one live fix for a hull you name and
+writes what came back — and keep the `latest: false` case: it is the one an operator is most likely to misread.
+
 ## `scenes/` and `golden/` — recorded 2026-11-07
 
 `scenes/feed.json` is the picture the named scenes load: 40 hulls in the `GET /live-feed/positions`

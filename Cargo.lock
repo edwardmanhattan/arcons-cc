@@ -1217,7 +1217,10 @@ version = "0.1.0"
 dependencies = [
  "arcons-cc",
  "getrandom 0.3.4",
+ "reqwest 0.13.1",
  "rune",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
