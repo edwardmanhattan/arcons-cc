@@ -68,6 +68,9 @@ fn picture_with(units: usize) -> Picture {
                     received_at: Utc.with_ymd_and_hms(2026, 11, 6, 12, 0, 0).unwrap(),
                     age_seconds: 5.0,
                     backfilled: false,
+                    manual: None,
+                    reported_by: None,
+                    reported_for: None,
                 }),
             }
         })

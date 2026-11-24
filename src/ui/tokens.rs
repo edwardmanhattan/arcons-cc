@@ -100,6 +100,10 @@ pub const CARD_GAP: f32 = 4.0;
 /// The little tick that shows a measured heading.
 pub const HEADING_TICK: f32 = 3.0;
 
+/// **The dot a relayed fix wears at the marker's top-right** (#288), in points. It qualifies the mark rather
+/// than replacing it: the hull still has a live/stale/history glyph, and a person still entered the point.
+pub const PROVENANCE_DOT: f32 = 6.0;
+
 /// The smallest a pane may be dragged to, in points. Below this a pane is a sliver with a hull in it,
 /// and a tiling engine that lets one pane eat another is one the operator cannot get back out of.
 pub const MIN_PANE_PT: f32 = 160.0;

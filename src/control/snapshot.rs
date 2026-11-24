@@ -27,9 +27,9 @@ use serde::{Deserialize, Serialize};
 use crate::config::layout::SavedNode;
 use crate::control::projection::CameraView;
 use crate::data::types::{
-    Installation, InstallationType, NewsStory, NewsStoryDetail, Pagination, TacticalObjectFacets,
-    TacticalObjectManifestEntry, TacticalObjectPlacement, TniCommandPost, UnitCommander,
-    UnitDetail, UnitOrganisation, UnitOrganisationDetail, UnitSpecification,
+    FeedActor, Installation, InstallationType, NewsStory, NewsStoryDetail, Pagination,
+    TacticalObjectFacets, TacticalObjectManifestEntry, TacticalObjectPlacement, TniCommandPost,
+    UnitCommander, UnitDetail, UnitOrganisation, UnitOrganisationDetail, UnitSpecification,
 };
 use crate::ui::ViewId;
 
@@ -136,6 +136,16 @@ pub struct Hull {
     pub age_seconds: f64,
     /// `true` for a fix reconstructed from an offline backlog: history, whatever its age (`INV-03`).
     pub backfilled: bool,
+    /// **A person entered this fix**, on the vessel commander's behalf (#288). A device fix is `false`; the field
+    /// is defaulted so a scene recorded before the provenance existed still parses.
+    #[serde(default)]
+    pub manual: bool,
+    /// The operator who asserted it, when `manual`.
+    #[serde(default)]
+    pub reported_by: Option<FeedActor>,
+    /// The commander whose report it claims to be, when `manual`.
+    #[serde(default)]
+    pub reported_for: Option<FeedActor>,
     pub course_deg: Option<f64>,
     pub accuracy_m: Option<f64>,
     pub speed_kn: Option<f64>,
@@ -402,6 +412,9 @@ mod tests {
                     previous: None,
                     age_seconds: 12.5,
                     backfilled: false,
+                    manual: false,
+                    reported_by: None,
+                    reported_for: None,
                     course_deg: Some(90.0),
                     accuracy_m: Some(8.0),
                     speed_kn: Some(4.0),

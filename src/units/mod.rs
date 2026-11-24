@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
-use crate::data::types::{FeedFix, FeedPosition};
+use crate::data::types::{FeedActor, FeedFix, FeedPosition};
 use crate::live::wire::LiveFix;
 
 /// How old a fix may be before the wall stops calling it fresh.
@@ -99,6 +99,13 @@ pub struct UnitView {
     pub receipt: Instant,
     /// `backfilled: true` — reconstructed from an offline backlog.
     pub backfilled: bool,
+    /// **A person entered this point**, on the vessel commander's behalf: `manual` in the contract.
+    /// Absent on a device fix, so `false` here is the only honest default.
+    pub manual: bool,
+    /// The operator who asserted it, when `manual`. `None` for a device fix.
+    pub reported_by: Option<FeedActor>,
+    /// The commander whose report it claims to be, when `manual`. `None` for a device fix.
+    pub reported_for: Option<FeedActor>,
     /// The heading, when it was measured. `None` draws no arrow: a hull with no course does not point
     /// north.
     pub course_deg: Option<f64>,
@@ -121,6 +128,9 @@ impl UnitView {
             age_at_receipt: 0.0,
             receipt: Instant::now(),
             backfilled: false,
+            manual: false,
+            reported_by: None,
+            reported_for: None,
             course_deg: None,
             accuracy_m: None,
             speed_kn: None,
@@ -271,6 +281,9 @@ impl Picture {
                     // it as the freshest thing on the wall.
                     age_seconds: unit.age_seconds(now).unwrap_or(-1.0),
                     backfilled: unit.backfilled,
+                    manual: unit.manual,
+                    reported_by: unit.reported_by.clone(),
+                    reported_for: unit.reported_for.clone(),
                     course_deg: unit.course_deg,
                     accuracy_m: unit.accuracy_m,
                     speed_kn: unit.speed_kn,
@@ -316,6 +329,11 @@ impl Picture {
                     age_at_receipt: hull.age_seconds.max(0.0),
                     receipt: now,
                     backfilled: hull.backfilled,
+                    // The scene carries the fix's provenance (#288), so a viewer draws the same "relayed" mark
+                    // and card as the authority that read it.
+                    manual: hull.manual,
+                    reported_by: hull.reported_by.clone(),
+                    reported_for: hull.reported_for.clone(),
                     course_deg: hull.course_deg,
                     accuracy_m: hull.accuracy_m,
                     speed_kn: hull.speed_kn,
@@ -358,6 +376,9 @@ impl Picture {
             existing.accuracy_m = fix.accuracy_m;
             existing.speed_kn = fix.speed_kn;
             existing.received_at = fix.received_at;
+            existing.manual = fix.manual;
+            existing.reported_by = fix.reported_by.clone();
+            existing.reported_for = fix.reported_for.clone();
             existing.unit.name = fix.name.clone();
             if fix.hull_number.is_some() {
                 existing.unit.hull_number = fix.hull_number.clone();
@@ -376,6 +397,9 @@ impl Picture {
         view.accuracy_m = fix.accuracy_m;
         view.speed_kn = fix.speed_kn;
         view.received_at = fix.received_at;
+        view.manual = fix.manual;
+        view.reported_by = fix.reported_by.clone();
+        view.reported_for = fix.reported_for.clone();
         self.units.push(view);
     }
 }
@@ -393,6 +417,9 @@ fn view_from_http(unit: Unit, fix: &FeedFix, now: Instant) -> UnitView {
         age_at_receipt: fix.age_seconds,
         receipt: now,
         backfilled: fix.backfilled,
+        manual: fix.manual.unwrap_or(false),
+        reported_by: fix.reported_by.clone(),
+        reported_for: fix.reported_for.clone(),
         course_deg: fix.course_deg,
         accuracy_m: fix.accuracy_m,
         speed_kn: fix.speed_kn,
@@ -446,6 +473,9 @@ mod tests {
             received_at: Utc.with_ymd_and_hms(2026, 11, 6, 12, 0, 0).unwrap(),
             age_seconds: age,
             backfilled,
+            manual: None,
+            reported_by: None,
+            reported_for: None,
         }
     }
 
@@ -617,6 +647,9 @@ mod tests {
                         accuracy_m: Some(8.0),
                         age_seconds: 12.5,
                         backfilled: false,
+                        manual: None,
+                        reported_by: None,
+                        reported_for: None,
                         recorded_at: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
                         received_at: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
                     }),

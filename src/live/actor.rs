@@ -53,7 +53,9 @@ pub enum Update {
     /// two clocks and a guess. `Instant` is one clock on both sides, and it is what "within 1 s of arrival"
     /// in v0.1's definition of done has to be measured with (#1).
     Fix {
-        fix: LiveFix,
+        /// Boxed: the fix carries the contract's optional provenance, and an enum with a 296-byte variant
+        /// beside `Connected` is a channel that copies a small fleet per message (`large_enum_variant`).
+        fix: Box<LiveFix>,
         received: std::time::Instant,
     },
     /// A disconnect: whatever is on screen is from before the gap and must stop being presented as
@@ -386,7 +388,7 @@ async fn session(
                         .unwrap_or(false);
                     if trusted {
                         let _ = updates.send(Update::Fix {
-                            fix,
+                            fix: Box::new(fix),
                             received: std::time::Instant::now(),
                         });
                         wake();
