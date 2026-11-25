@@ -167,6 +167,13 @@ pub struct InstanceShared {
     memory_budget_thresholds: wgt::MemoryBudgetThresholds,
     debug_utils: Option<DebugUtils>,
     get_physical_device_properties: Option<khr::get_physical_device_properties2::Instance>,
+    /// Rune: ICD libraries opened with `RTLD_NODELETE` for `VK_LUNARG_direct_driver_loading`.
+    /// `InstanceShared::drop` destroys `raw` (`vkDestroyInstance`) before any field drops;
+    /// declaring `_direct_drivers` before `entry` then releases our handle while `libvulkan.so`
+    /// is still open, and `RTLD_NODELETE` prevents `dlclose` from unmapping driver code or
+    /// running `.fini_array` destructors while the loader or another thread could still use it.
+    #[cfg(target_os = "linux")]
+    _direct_drivers: Vec<libloading::Library>,
     entry: ash::Entry,
     has_nv_optimus: bool,
     android_sdk_version: u32,
@@ -192,6 +199,8 @@ impl fmt::Debug for InstanceShared {
             memory_budget_thresholds,
             debug_utils: _,
             get_physical_device_properties: _,
+            #[cfg(target_os = "linux")]
+            _direct_drivers: _,
             entry: _,
             has_nv_optimus,
             android_sdk_version,

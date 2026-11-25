@@ -32,7 +32,7 @@ index 621eea4..fd5a64e 100644
          })
      }
 diff --git a/src/dx12/command.rs b/src/dx12/command.rs
-index 9e90e26..762d922 100644
+index 9e90e26..f293992 100644
 --- a/src/dx12/command.rs
 +++ b/src/dx12/command.rs
 @@ -389,22 +389,22 @@ impl crate::CommandEncoder for super::CommandEncoder {
@@ -117,6 +117,69 @@ index 9e90e26..762d922 100644
          }
          if let Err(e) = unsafe { self.allocator.Reset() } {
              log::error!("ID3D12CommandAllocator::Reset() failed with {e}");
+@@ -1399,7 +1415,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+             .special_constants
+             .as_ref()
+             .and_then(|sc| sc.indirect_cmd_signatures.as_ref())
+-            .unwrap_or_else(|| &self.shared.cmd_signatures)
++            .unwrap_or_else(|| self.shared.cmd_signatures.get(&self.device))
+             .draw;
+         unsafe {
+             self.list.as_ref().unwrap().ExecuteIndirect(
+@@ -1438,7 +1454,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+             .special_constants
+             .as_ref()
+             .and_then(|sc| sc.indirect_cmd_signatures.as_ref())
+-            .unwrap_or_else(|| &self.shared.cmd_signatures)
++            .unwrap_or_else(|| self.shared.cmd_signatures.get(&self.device))
+             .draw_indexed;
+         unsafe {
+             self.list.as_ref().unwrap().ExecuteIndirect(
+@@ -1460,7 +1476,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+         self.prepare_dispatch([0; 3]);
+         let cmd_list6: Direct3D12::ID3D12GraphicsCommandList6 =
+             self.list.as_ref().unwrap().cast().unwrap();
+-        let Some(cmd_signature) = &self.shared.cmd_signatures.draw_mesh else {
++        let Some(cmd_signature) = &self.shared.cmd_signatures.get(&self.device).draw_mesh else {
+             panic!("Feature `MESH_SHADING` not enabled");
+         };
+         unsafe {
+@@ -1478,7 +1494,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+         unsafe { self.prepare_draw(0, 0) };
+         unsafe {
+             self.list.as_ref().unwrap().ExecuteIndirect(
+-                &self.shared.cmd_signatures.draw,
++                &self.shared.cmd_signatures.get(&self.device).draw,
+                 max_count,
+                 &buffer.resource,
+                 offset,
+@@ -1498,7 +1514,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+         unsafe { self.prepare_draw(0, 0) };
+         unsafe {
+             self.list.as_ref().unwrap().ExecuteIndirect(
+-                &self.shared.cmd_signatures.draw_indexed,
++                &self.shared.cmd_signatures.get(&self.device).draw_indexed,
+                 max_count,
+                 &buffer.resource,
+                 offset,
+@@ -1518,7 +1534,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+         self.prepare_dispatch([0; 3]);
+         let cmd_list6: Direct3D12::ID3D12GraphicsCommandList6 =
+             self.list.as_ref().unwrap().cast().unwrap();
+-        let Some(ref command_signature) = self.shared.cmd_signatures.draw_mesh else {
++        let Some(ref command_signature) = self.shared.cmd_signatures.get(&self.device).draw_mesh else {
+             panic!("Feature `MESH_SHADING` not enabled");
+         };
+         unsafe {
+@@ -1598,7 +1614,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
+             .special_constants
+             .as_ref()
+             .and_then(|sc| sc.indirect_cmd_signatures.as_ref())
+-            .unwrap_or_else(|| &self.shared.cmd_signatures)
++            .unwrap_or_else(|| self.shared.cmd_signatures.get(&self.device))
+             .dispatch;
+         unsafe {
+             self.list.as_ref().unwrap().ExecuteIndirect(
 diff --git a/src/dx12/dcomp.rs b/src/dx12/dcomp.rs
 index 46ef3da..035f9bd 100644
 --- a/src/dx12/dcomp.rs
@@ -185,18 +248,76 @@ index f57ba46..475a9e3 100644
  }
  
 diff --git a/src/dx12/device.rs b/src/dx12/device.rs
-index 63fb313..aa74ea5 100644
+index 63fb313..de341fb 100644
 --- a/src/dx12/device.rs
 +++ b/src/dx12/device.rs
-@@ -136,6 +136,7 @@ impl super::Device {
-             None
-         };
+@@ -118,59 +118,15 @@ impl super::Device {
+         // maximum number of CBV/SRV/UAV descriptors in heap for Tier 1
+         let capacity_views = limits.max_non_sampler_bindings as u64;
  
+-        let draw_mesh = if features
+-            .features_wgpu
+-            .contains(wgt::FeaturesWGPU::EXPERIMENTAL_MESH_SHADER)
+-        {
+-            Some(Self::create_command_signature(
+-                &raw,
+-                None,
+-                size_of::<wgt::DispatchIndirectArgs>(),
+-                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
+-                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH,
+-                    ..Default::default()
+-                }],
+-                0,
+-            )?)
+-        } else {
+-            None
+-        };
+-
 +        let drain = Arc::new(super::DrainTracker::new(&adapter, &raw));
          let shared = super::DeviceShared {
              adapter,
              zero_buffer,
-@@ -179,6 +180,7 @@ impl super::Device {
+-            cmd_signatures: super::CommandSignatures {
+-                draw: Self::create_command_signature(
+-                    &raw,
+-                    None,
+-                    size_of::<wgt::DrawIndirectArgs>(),
+-                    &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
+-                        Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DRAW,
+-                        ..Default::default()
+-                    }],
+-                    0,
+-                )?,
+-                draw_indexed: Self::create_command_signature(
+-                    &raw,
+-                    None,
+-                    size_of::<wgt::DrawIndexedIndirectArgs>(),
+-                    &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
+-                        Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED,
+-                        ..Default::default()
+-                    }],
+-                    0,
+-                )?,
+-                draw_mesh,
+-                dispatch: Self::create_command_signature(
+-                    &raw,
+-                    None,
+-                    size_of::<wgt::DispatchIndirectArgs>(),
+-                    &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
+-                        Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH,
+-                        ..Default::default()
+-                    }],
+-                    0,
+-                )?,
++            cmd_signatures: super::LazyCommandSignatures {
++                mesh: features
++                    .features_wgpu
++                    .contains(wgt::FeaturesWGPU::EXPERIMENTAL_MESH_SHADER),
++                made: std::sync::OnceLock::new(),
+             },
+             heap_views: descriptor::GeneralHeap::new(
+                 &raw,
+@@ -179,6 +135,7 @@ impl super::Device {
              )?,
              sampler_heap: super::sampler::SamplerHeap::new(&raw, &private_caps)?,
              private_caps,
@@ -204,7 +325,69 @@ index 63fb313..aa74ea5 100644
          };
  
          let mut rtv_pool =
-@@ -256,23 +258,71 @@ impl super::Device {
+@@ -232,6 +189,61 @@ impl super::Device {
+         })
+     }
+ 
++    /// Rune: the device's own indirect command signatures (`LazyCommandSignatures`), which
++    /// `Device::new` made with the device.
++    pub(super) fn create_command_signatures(
++        raw: &Direct3D12::ID3D12Device,
++        mesh: bool,
++    ) -> Result<super::CommandSignatures, crate::DeviceError> {
++        let draw_mesh = if mesh {
++            Some(Self::create_command_signature(
++                raw,
++                None,
++                size_of::<wgt::DispatchIndirectArgs>(),
++                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
++                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH,
++                    ..Default::default()
++                }],
++                0,
++            )?)
++        } else {
++            None
++        };
++        Ok(super::CommandSignatures {
++            draw: Self::create_command_signature(
++                raw,
++                None,
++                size_of::<wgt::DrawIndirectArgs>(),
++                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
++                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DRAW,
++                    ..Default::default()
++                }],
++                0,
++            )?,
++            draw_indexed: Self::create_command_signature(
++                raw,
++                None,
++                size_of::<wgt::DrawIndexedIndirectArgs>(),
++                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
++                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED,
++                    ..Default::default()
++                }],
++                0,
++            )?,
++            draw_mesh,
++            dispatch: Self::create_command_signature(
++                raw,
++                None,
++                size_of::<wgt::DispatchIndirectArgs>(),
++                &[Direct3D12::D3D12_INDIRECT_ARGUMENT_DESC {
++                    Type: Direct3D12::D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH,
++                    ..Default::default()
++                }],
++                0,
++            )?,
++        })
++    }
++
+     fn create_command_signature(
+         raw: &Direct3D12::ID3D12Device,
+         root_signature: Option<&Direct3D12::ID3D12RootSignature>,
+@@ -256,23 +268,71 @@ impl super::Device {
          signature.ok_or(crate::DeviceError::Unexpected)
      }
  
@@ -282,7 +465,7 @@ index 63fb313..aa74ea5 100644
          Ok(())
      }
  
-@@ -826,6 +876,7 @@ impl crate::Device for super::Device {
+@@ -826,6 +886,7 @@ impl crate::Device for super::Device {
              intermediate_copy_bufs: Vec::new(),
              null_rtv_handle: self.null_rtv_handle,
              list: None,
@@ -290,7 +473,7 @@ index 63fb313..aa74ea5 100644
              free_lists: Vec::new(),
              pass: super::PassState::new(),
              temp: super::Temp::default(),
-@@ -2346,7 +2397,7 @@ impl crate::Device for super::Device {
+@@ -2346,7 +2407,7 @@ impl crate::Device for super::Device {
  
          self.counters.fences.add(1);
  
@@ -299,7 +482,7 @@ index 63fb313..aa74ea5 100644
      }
      unsafe fn destroy_fence(&self, _fence: super::Fence) {
          self.counters.fences.sub(1);
-@@ -2356,7 +2407,7 @@ impl crate::Device for super::Device {
+@@ -2356,7 +2417,7 @@ impl crate::Device for super::Device {
          &self,
          fence: &super::Fence,
      ) -> Result<crate::FenceValue, crate::DeviceError> {
@@ -308,7 +491,7 @@ index 63fb313..aa74ea5 100644
      }
      unsafe fn wait(
          &self,
-@@ -2367,7 +2418,8 @@ impl crate::Device for super::Device {
+@@ -2367,7 +2428,8 @@ impl crate::Device for super::Device {
          let timeout = timeout.unwrap_or(Duration::MAX);
  
          // We first check if the fence has already reached the value we're waiting for.
@@ -318,7 +501,7 @@ index 63fb313..aa74ea5 100644
          if fence_value >= value {
              return Ok(true);
          }
-@@ -2408,17 +2460,23 @@ impl crate::Device for super::Device {
+@@ -2408,17 +2470,23 @@ impl crate::Device for super::Device {
  
              log::trace!("Waiting for fence value {value} for {remaining_wait_duration:?}");
  
@@ -346,7 +529,7 @@ index 63fb313..aa74ea5 100644
                  Foundation::WAIT_TIMEOUT => {
                      log::trace!("Wait timed out!");
                      break Ok(false);
-@@ -2429,7 +2487,10 @@ impl crate::Device for super::Device {
+@@ -2429,7 +2497,10 @@ impl crate::Device for super::Device {
                  }
              };
  
@@ -401,7 +584,7 @@ index fdb63bc..5f64a80 100644
 +    }
 +}
 diff --git a/src/dx12/mod.rs b/src/dx12/mod.rs
-index 285d635..2fb4210 100644
+index 285d635..398264c 100644
 --- a/src/dx12/mod.rs
 +++ b/src/dx12/mod.rs
 @@ -92,7 +92,7 @@ mod suballocation;
@@ -759,7 +942,34 @@ index 285d635..2fb4210 100644
  #[derive(Debug, Clone)]
  struct CommandSignatures {
      draw: Direct3D12::ID3D12CommandSignature,
-@@ -756,6 +1056,7 @@ struct DeviceShared {
+@@ -749,13 +1049,33 @@ struct CommandSignatures {
+     dispatch: Direct3D12::ID3D12CommandSignature,
+ }
+ 
++/// Rune: the device's own indirect command signatures, made at the first indirect draw or
++/// dispatch instead of with the device. A driver that has not seen one takes tens of
++/// milliseconds for each `CreateCommandSignature` (Intel Iris Xe: 28, 15 and 13 ms of a
++/// window's first device), and an app that never draws indirectly needs none.
++struct LazyCommandSignatures {
++    /// Whether the device draws mesh shaders (`EXPERIMENTAL_MESH_SHADER`), so has a `draw_mesh`.
++    mesh: bool,
++    made: std::sync::OnceLock<CommandSignatures>,
++}
++
++impl LazyCommandSignatures {
++    fn get(&self, device: &Direct3D12::ID3D12Device) -> &CommandSignatures {
++        self.made.get_or_init(|| {
++            Device::create_command_signatures(device, self.mesh)
++                .expect("creating the device's indirect command signatures")
++        })
++    }
++}
++
+ struct DeviceShared {
+     adapter: DxgiAdapter,
+     zero_buffer: Direct3D12::ID3D12Resource,
+-    cmd_signatures: CommandSignatures,
++    cmd_signatures: LazyCommandSignatures,
      heap_views: descriptor::GeneralHeap,
      sampler_heap: sampler::SamplerHeap,
      private_caps: PrivateCapabilities,
@@ -767,7 +977,7 @@ index 285d635..2fb4210 100644
  }
  
  unsafe impl Send for DeviceShared {}
-@@ -810,6 +1111,7 @@ pub struct Queue {
+@@ -810,6 +1130,7 @@ pub struct Queue {
      idle_fence_value: AtomicU64,
      pending_waits: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
      pending_signals: Mutex<Vec<(Direct3D12::ID3D12Fence, u64)>>,
@@ -775,7 +985,7 @@ index 285d635..2fb4210 100644
  }
  
  impl Queue {
-@@ -992,7 +1294,11 @@ pub struct CommandEncoder {
+@@ -992,7 +1313,11 @@ pub struct CommandEncoder {
  
      null_rtv_handle: descriptor::Handle,
      list: Option<Direct3D12::ID3D12GraphicsCommandList>,
@@ -788,7 +998,7 @@ index 285d635..2fb4210 100644
      pass: PassState,
      temp: Temp,
  
-@@ -1018,6 +1324,8 @@ impl fmt::Debug for CommandEncoder {
+@@ -1018,6 +1343,8 @@ impl fmt::Debug for CommandEncoder {
  #[derive(Debug)]
  pub struct CommandBuffer {
      raw: Direct3D12::ID3D12GraphicsCommandList,
@@ -797,7 +1007,7 @@ index 285d635..2fb4210 100644
  }
  
  impl crate::DynCommandBuffer for CommandBuffer {}
-@@ -1209,6 +1517,8 @@ unsafe impl Sync for QuerySet {}
+@@ -1209,6 +1536,8 @@ unsafe impl Sync for QuerySet {}
  #[derive(Debug)]
  pub struct Fence {
      raw: Direct3D12::ID3D12Fence,
@@ -806,7 +1016,7 @@ index 285d635..2fb4210 100644
  }
  
  impl crate::DynFence for Fence {}
-@@ -1535,7 +1845,9 @@ impl crate::Surface for Surface {
+@@ -1535,7 +1864,9 @@ impl crate::Surface for Surface {
                      BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                      BufferCount: swap_chain_buffer,
                      Scaling: Dxgi::DXGI_SCALING_STRETCH,
@@ -817,7 +1027,7 @@ index 285d635..2fb4210 100644
                      Flags: flags.0 as u32,
                  };
                  let swap_chain1 = match self.target {
-@@ -1702,6 +2014,7 @@ impl crate::Surface for Surface {
+@@ -1702,6 +2033,7 @@ impl crate::Surface for Surface {
              present_mode: config.present_mode,
              format: config.format,
              size: config.extent,
@@ -825,7 +1035,7 @@ index 285d635..2fb4210 100644
          });
  
          Ok(())
-@@ -1768,6 +2081,14 @@ impl crate::Surface for Surface {
+@@ -1768,6 +2100,14 @@ impl crate::Surface for Surface {
      }
  }
  
@@ -840,7 +1050,7 @@ index 285d635..2fb4210 100644
  impl crate::Queue for Queue {
      type A = Api;
  
-@@ -1777,6 +2098,18 @@ impl crate::Queue for Queue {
+@@ -1777,6 +2117,18 @@ impl crate::Queue for Queue {
          _surface_textures: &[&Texture],
          (signal_fence, signal_value): (&Fence, crate::FenceValue),
      ) -> Result<(), crate::DeviceError> {
@@ -859,7 +1069,7 @@ index 285d635..2fb4210 100644
          let mut temp_lists = self.temp_lists.lock();
          temp_lists.clear();
          for cmd_buf in command_buffers {
-@@ -1790,25 +2123,48 @@ impl crate::Queue for Queue {
+@@ -1790,25 +2142,48 @@ impl crate::Queue for Queue {
          {
              let mut waits = self.pending_waits.lock();
              for (fence, value) in waits.drain(..) {
@@ -913,7 +1123,7 @@ index 285d635..2fb4210 100644
              }
          }
  
-@@ -1838,9 +2194,22 @@ impl crate::Queue for Queue {
+@@ -1838,9 +2213,22 @@ impl crate::Queue for Queue {
          };
  
          profiling::scope!("IDXGISwapchain3::Present");
@@ -939,7 +1149,7 @@ index 285d635..2fb4210 100644
  
          Ok(())
      }
-@@ -1851,18 +2220,51 @@ impl crate::Queue for Queue {
+@@ -1851,18 +2239,51 @@ impl crate::Queue for Queue {
      }
  
      unsafe fn wait_for_idle(&self) -> Result<(), crate::DeviceError> {
@@ -1039,6 +1249,705 @@ index ff41e50..dcb167c 100644
                  .map_err(|e| GetContainerError::FailedToLoad(FxcLib::PATH, e))?;
              let d3dcompile_fn: D3DCompileFn = *lib.get::<D3DCompileFn>(c"D3DCompile".to_bytes())?;
  
+diff --git a/src/gles/adapter.rs b/src/gles/adapter.rs
+index 47b8115..2f1e0e8 100644
+--- a/src/gles/adapter.rs
++++ b/src/gles/adapter.rs
+@@ -1,5 +1,5 @@
+ use alloc::{borrow::ToOwned as _, format, string::String, sync::Arc, vec, vec::Vec};
+-use core::sync::atomic::AtomicU8;
++use core::sync::atomic::{AtomicBool, AtomicU8};
+ 
+ use glow::HasContext;
+ use parking_lot::Mutex;
+@@ -726,6 +726,12 @@ impl super::Adapter {
+             super::PrivateCapabilities::TEXTURE_FORMAT_NORM16_STORAGE,
+             supports_16bit_norm_storage,
+         );
++        private_caps.set(
++            super::PrivateCapabilities::PARALLEL_SHADER_COMPILE,
++            extensions.contains("KHR_parallel_shader_compile")
++                || extensions.contains("GL_KHR_parallel_shader_compile")
++                || extensions.contains("GL_ARB_parallel_shader_compile"),
++        );
+ 
+         // GLSL ES 3.10+ / GLSL 4.30+ natively support coherent/volatile qualifiers
+         // on storage buffers. These were introduced alongside storage buffer support.
+@@ -956,6 +962,8 @@ impl super::Adapter {
+                     shading_language_version,
+                     next_shader_id: Default::default(),
+                     program_cache: Default::default(),
++                    defer_program_links: AtomicBool::new(false),
++                    deferred_links: Mutex::new(Vec::new()),
+                     es: es_ver.is_some(),
+                     max_msaa_samples: max_samples,
+                 }),
+diff --git a/src/gles/command.rs b/src/gles/command.rs
+index 427551c..5cb4b7c 100644
+--- a/src/gles/command.rs
++++ b/src/gles/command.rs
+@@ -230,14 +230,39 @@ impl super::CommandEncoder {
+     }
+ 
+     fn set_pipeline_inner(&mut self, inner: &super::PipelineInner) {
++        if inner.is_pending() {
++            let gl = &self.shared.context.lock();
++            #[cfg(webgl)]
++            if self.shared.context.webgl2_context.is_context_lost() {
++                inner.mark_context_lost();
++            } else if let Err(err) = unsafe { inner.finalize(gl, self.private_caps) } {
++                log::error!("Deferred shader program link failed on early use: {err}");
++            }
++            #[cfg(not(webgl))]
++            if let Err(err) = unsafe { inner.finalize(gl, self.private_caps) } {
++                log::error!("Deferred shader program link failed on early use: {err}");
++            }
++        }
+         self.cmd_buffer.commands.push(C::SetProgram(inner.program));
+ 
+-        self.state
+-            .first_instance_location
+-            .clone_from(&inner.first_instance_location);
+-        self.state
+-            .immediates_descs
+-            .clone_from(&inner.immediates_descs);
++        {
++            let state = inner.link_state.lock();
++            match &*state {
++                super::ProgramLinkState::Ready {
++                    first_instance_location,
++                    immediates_descs,
++                } => {
++                    self.state
++                        .first_instance_location
++                        .clone_from(first_instance_location);
++                    self.state.immediates_descs.clone_from(immediates_descs);
++                }
++                super::ProgramLinkState::Pending(_) | super::ProgramLinkState::Failed(_) => {
++                    self.state.first_instance_location = None;
++                    self.state.immediates_descs.clear();
++                }
++            }
++        }
+ 
+         // rebind textures, if needed
+         let mut dirty_textures = 0u32;
+diff --git a/src/gles/device.rs b/src/gles/device.rs
+index 1c61cf3..6e348d5 100644
+--- a/src/gles/device.rs
++++ b/src/gles/device.rs
+@@ -242,12 +242,124 @@ impl super::Device {
+         }
+     }
+ 
++    /// Returns whether this GL context exposes `KHR_parallel_shader_compile` /
++    /// `ARB_parallel_shader_compile`.
++    pub fn supports_parallel_shader_compile(&self) -> bool {
++        self.shared
++            .private_caps
++            .contains(PrivateCapabilities::PARALLEL_SHADER_COMPILE)
++    }
++
++    /// Enables or disables deferred program linking for subsequently created pipelines.
++    ///
++    /// Has no effect when [`Self::supports_parallel_shader_compile`] is `false`.
++    pub fn set_defer_program_links(&self, defer: bool) {
++        let enable = defer && self.supports_parallel_shader_compile();
++        self.shared
++            .defer_program_links
++            .store(enable, Ordering::Release);
++    }
++
++    /// Number of live pipelines currently waiting for deferred link completion.
++    pub fn pending_deferred_links(&self) -> usize {
++        let mut list = self.shared.deferred_links.lock();
++        list.retain(|weak| weak.upgrade().is_some_and(|inner| inner.is_pending()));
++        list.len()
++    }
++
++    /// Polls every pending deferred program link with `COMPLETION_STATUS_KHR` without blocking,
++    /// finalizing completed programs (deleting attached shaders and binding uniform/block slots)
++    /// and returning how many remain pending along with any link error or context loss.
++    pub fn poll_deferred_links(&self) -> super::DeferredLinkStatus {
++        {
++            let list = self.shared.deferred_links.lock();
++            if list.is_empty() {
++                return super::DeferredLinkStatus::default();
++            }
++        }
++
++        let gl = &self.shared.context.lock();
++
++        #[cfg(webgl)]
++        if self.shared.context.webgl2_context.is_context_lost() {
++            let mut list = self.shared.deferred_links.lock();
++            for weak in list.drain(..) {
++                if let Some(inner) = weak.upgrade() {
++                    inner.mark_context_lost();
++                }
++            }
++            return super::DeferredLinkStatus {
++                pending: 0,
++                finalized: 0,
++                error: None,
++                context_lost: true,
++            };
++        }
++
++        let pending_list = core::mem::take(&mut *self.shared.deferred_links.lock());
++        let mut still_pending = Vec::new();
++        let mut status = super::DeferredLinkStatus::default();
++        let mut iter = pending_list.into_iter();
++
++        while let Some(weak) = iter.next() {
++            let Some(inner) = weak.upgrade() else {
++                continue;
++            };
++            match inner.early_result() {
++                Some(Ok(())) => continue,
++                Some(Err(msg)) => {
++                    if status.error.is_none() {
++                        status.error = Some(msg);
++                    }
++                    continue;
++                }
++                None => {}
++            }
++
++            let completed = unsafe { gl.get_program_completion_status(inner.program) };
++            #[cfg(webgl)]
++            if !completed && self.shared.context.webgl2_context.is_context_lost() {
++                inner.mark_context_lost();
++                for other in still_pending.drain(..).chain(iter) {
++                    if let Some(p) = other.upgrade() {
++                        p.mark_context_lost();
++                    }
++                }
++                status.pending = 0;
++                status.context_lost = true;
++                return status;
++            }
++
++            if !completed {
++                still_pending.push(weak);
++                continue;
++            }
++
++            status.finalized += 1;
++            if let Err(msg) = unsafe { inner.finalize(gl, self.shared.private_caps) } {
++                if status.error.is_none() {
++                    status.error = Some(msg);
++                }
++            }
++        }
++
++        let mut list = self.shared.deferred_links.lock();
++        if list.is_empty() {
++            *list = still_pending;
++        } else {
++            still_pending.append(&mut *list);
++            *list = still_pending;
++        }
++        status.pending = list.len();
++        status
++    }
++
+     unsafe fn compile_shader(
+         gl: &glow::Context,
+         shader: &str,
+         naga_stage: naga::ShaderStage,
+         #[cfg_attr(target_arch = "wasm32", allow(unused))] label: Option<&str>,
+-    ) -> Result<glow::Shader, crate::PipelineError> {
++    ) -> glow::Shader {
+         let target = match naga_stage {
+             naga::ShaderStage::Vertex => glow::VERTEX_SHADER,
+             naga::ShaderStage::Fragment => glow::FRAGMENT_SHADER,
+@@ -271,22 +383,7 @@ impl super::Device {
+         unsafe { gl.compile_shader(raw) };
+ 
+         log::debug!("\tCompiled shader {raw:?}");
+-
+-        let compiled_ok = unsafe { gl.get_shader_compile_status(raw) };
+-        let msg = unsafe { gl.get_shader_info_log(raw) };
+-        if compiled_ok {
+-            if !msg.is_empty() {
+-                log::debug!("\tCompile message: {msg}");
+-            }
+-            Ok(raw)
+-        } else {
+-            log::error!("\tShader compilation failed: {msg}");
+-            unsafe { gl.delete_shader(raw) };
+-            Err(crate::PipelineError::Linkage(
+-                map_naga_stage(naga_stage),
+-                msg,
+-            ))
+-        }
++        raw
+     }
+ 
+     fn create_shader(
+@@ -392,7 +489,7 @@ impl super::Device {
+             Cow::Owned(output)
+         };
+ 
+-        unsafe { Self::compile_shader(gl, &source, naga_stage, stage.module.label.as_deref()) }
++        Ok(unsafe { Self::compile_shader(gl, &source, naga_stage, stage.module.label.as_deref()) })
+     }
+ 
+     unsafe fn create_pipeline<'a>(
+@@ -425,6 +522,11 @@ impl super::Device {
+             .expect("Couldn't acquire program_cache lock");
+         // This guard ensures that we can't accidentally destroy a program whilst we're about to reuse it
+         // The only place that destroys a pipeline is also locking on `program_cache`
++        let defer_link = self.shared.defer_program_links.load(Ordering::Acquire)
++            && self
++                .shared
++                .private_caps
++                .contains(PrivateCapabilities::PARALLEL_SHADER_COMPILE);
+         let program = guard
+             .entry(super::ProgramCacheKey {
+                 stages: program_stages,
+@@ -437,8 +539,8 @@ impl super::Device {
+                     layout,
+                     label,
+                     multiview_mask,
+-                    self.shared.shading_language_version,
+-                    self.shared.private_caps,
++                    &self.shared,
++                    defer_link,
+                 )
+             })
+             .to_owned()?;
+@@ -464,10 +566,11 @@ impl super::Device {
+         layout: &super::PipelineLayout,
+         #[cfg_attr(target_arch = "wasm32", allow(unused))] label: Option<&str>,
+         multiview_mask: Option<NonZeroU32>,
+-        glsl_version: naga::back::glsl::Version,
+-        private_caps: PrivateCapabilities,
++        shared: &super::AdapterShared,
++        defer_link: bool,
+     ) -> Result<Arc<super::PipelineInner>, crate::PipelineError> {
+-        let glsl_version = match glsl_version {
++        let private_caps = shared.private_caps;
++        let glsl_version = match shared.shading_language_version {
+             naga::back::glsl::Version::Embedded { version, .. } => format!("{version} es"),
+             naga::back::glsl::Version::Desktop(version) => format!("{version}"),
+         };
+@@ -484,7 +587,8 @@ impl super::Device {
+         let mut immediates_items = ArrayVec::<_, { crate::MAX_CONCURRENT_SHADER_STAGES }>::new();
+         let mut sampler_map = [None; super::MAX_TEXTURE_SLOTS];
+         let mut has_stages = wgt::ShaderStages::empty();
+-        let mut shaders_to_delete = ArrayVec::<_, { crate::MAX_CONCURRENT_SHADER_STAGES }>::new();
++        let mut attached_shaders =
++            ArrayVec::<(naga::ShaderStage, glow::Shader), { crate::MAX_CONCURRENT_SHADER_STAGES }>::new();
+         let mut clip_distance_count = 0;
+ 
+         for &(naga_stage, stage) in &shaders {
+@@ -502,8 +606,16 @@ impl super::Device {
+                 clip_distance_count: &mut clip_distance_count,
+             };
+ 
+-            let shader = Self::create_shader(gl, naga_stage, stage, context, program)?;
+-            shaders_to_delete.push(shader);
++            match Self::create_shader(gl, naga_stage, stage, context, program) {
++                Ok(shader) => attached_shaders.push((naga_stage, shader)),
++                Err(err) => {
++                    for (_, shader) in attached_shaders {
++                        unsafe { gl.delete_shader(shader) };
++                    }
++                    unsafe { gl.delete_program(program) };
++                    return Err(err);
++                }
++            }
+         }
+ 
+         // Create empty fragment shader if only vertex shader is present
+@@ -517,45 +629,118 @@ impl super::Device {
+                     naga::ShaderStage::Fragment,
+                     Some("(wgpu internal) dummy fragment shader"),
+                 )
+-            }?;
+-            shaders_to_delete.push(shader);
++            };
++            attached_shaders.push((naga::ShaderStage::Fragment, shader));
+         }
+ 
+-        for &shader in shaders_to_delete.iter() {
++        for &(_, shader) in attached_shaders.iter() {
+             unsafe { gl.attach_shader(program, shader) };
+         }
+         unsafe { gl.link_program(program) };
+ 
+-        for shader in shaders_to_delete {
+-            unsafe { gl.delete_shader(shader) };
++        let pending = super::PendingProgramLink {
++            attached_shaders,
++            has_stages,
++            name_binding_map,
++            immediates_items,
++        };
++
++        if defer_link {
++            // Flush compile/link commands to the driver so background shader compilation starts
++            // immediately without stalling the caller on LINK_STATUS or uniform queries.
++            unsafe { gl.flush() };
++            let inner = Arc::new(super::PipelineInner {
++                program,
++                sampler_map,
++                clip_distance_count,
++                link_state: parking_lot::Mutex::new(super::ProgramLinkState::Pending(pending)),
++            });
++            shared.deferred_links.lock().push(Arc::downgrade(&inner));
++            return Ok(inner);
++        }
++
++        match unsafe { Self::finalize_program(gl, program, pending, private_caps) } {
++            Ok((first_instance_location, immediates_descs)) => Ok(Arc::new(super::PipelineInner {
++                program,
++                sampler_map,
++                clip_distance_count,
++                link_state: parking_lot::Mutex::new(super::ProgramLinkState::Ready {
++                    first_instance_location,
++                    immediates_descs,
++                }),
++            })),
++            Err(err) => {
++                unsafe { gl.delete_program(program) };
++                Err(err)
++            }
+         }
++    }
+ 
++    pub(super) unsafe fn finalize_program(
++        gl: &glow::Context,
++        program: glow::Program,
++        pending: super::PendingProgramLink,
++        private_caps: PrivateCapabilities,
++    ) -> Result<
++        (
++            Option<glow::UniformLocation>,
++            ArrayVec<super::ImmediateDesc, { super::MAX_IMMEDIATES_COMMANDS }>,
++        ),
++        crate::PipelineError,
++    > {
+         log::debug!("\tLinked program {program:?}");
+ 
+         let linked_ok = unsafe { gl.get_program_link_status(program) };
+-        let msg = unsafe { gl.get_program_info_log(program) };
+         if !linked_ok {
+-            return Err(crate::PipelineError::Linkage(has_stages, msg));
++            let mut shader_failure = None;
++            for &(stage, shader) in &pending.attached_shaders {
++                if shader_failure.is_none() && !unsafe { gl.get_shader_compile_status(shader) } {
++                    let msg = unsafe { gl.get_shader_info_log(shader) };
++                    log::error!("\tShader compilation failed: {msg}");
++                    shader_failure = Some((stage, msg));
++                }
++            }
++            for (_, shader) in pending.attached_shaders {
++                unsafe { gl.delete_shader(shader) };
++            }
++            if let Some((stage, msg)) = shader_failure {
++                return Err(crate::PipelineError::Linkage(map_naga_stage(stage), msg));
++            }
++            let msg = unsafe { gl.get_program_info_log(program) };
++            return Err(crate::PipelineError::Linkage(pending.has_stages, msg));
+         }
+-        if !msg.is_empty() {
+-            log::debug!("\tLink message: {msg}");
++
++        for (_, shader) in pending.attached_shaders {
++            unsafe { gl.delete_shader(shader) };
++        }
++        if log::log_enabled!(log::Level::Debug) {
++            let msg = unsafe { gl.get_program_info_log(program) };
++            if !msg.is_empty() {
++                log::debug!("\tLink message: {msg}");
++            }
+         }
+ 
+         if !private_caps.contains(PrivateCapabilities::SHADER_BINDING_LAYOUT) {
+             // This remapping is only needed if we aren't able to put the binding layout
+             // in the shader. We can't remap storage buffers this way.
+             unsafe { gl.use_program(Some(program)) };
+-            for (ref name, (register, slot)) in name_binding_map {
++            for (ref name, (register, slot)) in pending.name_binding_map {
+                 log::trace!("Get binding {name:?} from program {program:?}");
+                 match register {
+                     super::BindingRegister::UniformBuffers => {
+-                        let index = unsafe { gl.get_uniform_block_index(program, name) }.unwrap();
++                        let Some(index) = (unsafe { gl.get_uniform_block_index(program, name) })
++                        else {
++                            return Err(crate::DeviceError::Lost.into());
++                        };
+                         log::trace!("\tBinding slot {slot} to block index {index}");
+                         unsafe { gl.uniform_block_binding(program, index, slot as _) };
+                     }
+                     super::BindingRegister::StorageBuffers => {
+-                        let index =
+-                            unsafe { gl.get_shader_storage_block_index(program, name) }.unwrap();
++                        let Some(index) =
++                            (unsafe { gl.get_shader_storage_block_index(program, name) })
++                        else {
++                            return Err(crate::DeviceError::Lost.into());
++                        };
+                         log::error!("Unable to re-map shader storage block {name} to {index}");
+                         return Err(crate::DeviceError::Lost.into());
+                     }
+@@ -569,7 +754,7 @@ impl super::Device {
+ 
+         let mut uniforms = ArrayVec::new();
+ 
+-        for stage_items in immediates_items {
++        for stage_items in pending.immediates_items {
+             for item in stage_items {
+                 let location = unsafe { gl.get_uniform_location(program, &item.access_path) };
+ 
+@@ -592,20 +777,87 @@ impl super::Device {
+             }
+         }
+ 
+-        let first_instance_location = if has_stages.contains(wgt::ShaderStages::VERTEX) {
++        let first_instance_location = if pending.has_stages.contains(wgt::ShaderStages::VERTEX) {
+             // If this returns none (the uniform isn't active), that's fine, we just won't set it.
+             unsafe { gl.get_uniform_location(program, naga::back::glsl::FIRST_INSTANCE_BINDING) }
+         } else {
+             None
+         };
+ 
+-        Ok(Arc::new(super::PipelineInner {
+-            program,
+-            sampler_map,
+-            first_instance_location,
+-            immediates_descs: uniforms,
+-            clip_distance_count,
+-        }))
++        Ok((first_instance_location, uniforms))
++    }
++}
++
++impl super::PipelineInner {
++    pub(super) fn is_pending(&self) -> bool {
++        matches!(*self.link_state.lock(), super::ProgramLinkState::Pending(_))
++    }
++
++    fn early_result(&self) -> Option<Result<(), String>> {
++        match &*self.link_state.lock() {
++            super::ProgramLinkState::Pending(_) => None,
++            super::ProgramLinkState::Ready { .. } => Some(Ok(())),
++            super::ProgramLinkState::Failed(msg) => Some(Err(msg.clone())),
++        }
++    }
++
++    #[cfg(webgl)]
++    pub(super) fn mark_context_lost(&self) {
++        let mut state = self.link_state.lock();
++        if matches!(*state, super::ProgramLinkState::Pending(_)) {
++            *state = super::ProgramLinkState::Failed(String::from("WebGL2 context lost"));
++        }
++    }
++
++    pub(super) fn delete_pending_shaders(&self, gl: &glow::Context) {
++        let mut state = self.link_state.lock();
++        if matches!(*state, super::ProgramLinkState::Pending(_)) {
++            let prev = core::mem::replace(
++                &mut *state,
++                super::ProgramLinkState::Failed(String::from(
++                    "pipeline destroyed before link completed",
++                )),
++            );
++            if let super::ProgramLinkState::Pending(pending) = prev {
++                for (_, shader) in pending.attached_shaders {
++                    unsafe { gl.delete_shader(shader) };
++                }
++            }
++        }
++    }
++
++    pub(super) unsafe fn finalize(
++        &self,
++        gl: &glow::Context,
++        private_caps: PrivateCapabilities,
++    ) -> Result<(), String> {
++        let mut state = self.link_state.lock();
++        match &*state {
++            super::ProgramLinkState::Ready { .. } => return Ok(()),
++            super::ProgramLinkState::Failed(msg) => return Err(msg.clone()),
++            super::ProgramLinkState::Pending(_) => {}
++        }
++        let prev = core::mem::replace(
++            &mut *state,
++            super::ProgramLinkState::Failed(String::new()),
++        );
++        let super::ProgramLinkState::Pending(pending) = prev else {
++            unreachable!()
++        };
++        match unsafe { super::Device::finalize_program(gl, self.program, pending, private_caps) } {
++            Ok((first_instance_location, immediates_descs)) => {
++                *state = super::ProgramLinkState::Ready {
++                    first_instance_location,
++                    immediates_descs,
++                };
++                Ok(())
++            }
++            Err(err) => {
++                let msg = err.to_string();
++                *state = super::ProgramLinkState::Failed(msg.clone());
++                Err(msg)
++            }
++        }
+     }
+ }
+ 
+@@ -1262,6 +1514,7 @@ impl crate::Device for super::Device {
+         self.counters.command_encoders.add(1);
+ 
+         Ok(super::CommandEncoder {
++            shared: Arc::clone(&self.shared),
+             cmd_buffer: super::CommandBuffer::default(),
+             state: Default::default(),
+             private_caps: self.shared.private_caps,
+@@ -1605,6 +1858,7 @@ impl crate::Device for super::Device {
+                 Ok(ref p) => p.program != pipeline.inner.program,
+                 Err(_) => false,
+             });
++            pipeline.inner.delete_pending_shaders(gl);
+             unsafe { gl.delete_program(pipeline.inner.program) };
+         }
+ 
+@@ -1641,6 +1895,7 @@ impl crate::Device for super::Device {
+                 Ok(ref p) => p.program != pipeline.inner.program,
+                 Err(_) => false,
+             });
++            pipeline.inner.delete_pending_shaders(gl);
+             unsafe { gl.delete_program(pipeline.inner.program) };
+         }
+ 
+diff --git a/src/gles/mod.rs b/src/gles/mod.rs
+index 24e26c6..54f5498 100644
+--- a/src/gles/mod.rs
++++ b/src/gles/mod.rs
+@@ -113,11 +113,17 @@ use self::wgl::AdapterContext;
+ #[cfg(windows)]
+ pub use self::wgl::{Instance, Surface};
+ 
+-use alloc::{boxed::Box, string::String, string::ToString as _, sync::Arc, vec::Vec};
++use alloc::{
++    boxed::Box,
++    string::String,
++    string::ToString as _,
++    sync::{Arc, Weak},
++    vec::Vec,
++};
+ use core::{
+     fmt,
+     ops::Range,
+-    sync::atomic::{AtomicU32, AtomicU8},
++    sync::atomic::{AtomicBool, AtomicU32, AtomicU8},
+ };
+ use parking_lot::Mutex;
+ 
+@@ -249,6 +255,9 @@ bitflags::bitflags! {
+         /// `GL_ARB_shader_image_load_store`; GLES needs `GL_NV_image_formats`
+         /// (which itself depends on `GL_EXT_texture_norm16`).
+         const TEXTURE_FORMAT_NORM16_STORAGE = 1 << 20;
++        /// Supports asynchronous shader compilation and program linking status
++        /// via `KHR_parallel_shader_compile` / `ARB_parallel_shader_compile`.
++        const PARALLEL_SHADER_COMPILE = 1 << 21;
+     }
+ }
+ 
+@@ -295,6 +304,8 @@ struct AdapterShared {
+     shading_language_version: naga::back::glsl::Version,
+     next_shader_id: AtomicU32,
+     program_cache: Mutex<ProgramCache>,
++    defer_program_links: AtomicBool,
++    deferred_links: Mutex<Vec<Weak<PipelineInner>>>,
+     es: bool,
+ 
+     /// Result of `gl.get_parameter_i32(glow::MAX_SAMPLES)`.
+@@ -315,6 +326,8 @@ impl fmt::Debug for AdapterShared {
+             shading_language_version,
+             next_shader_id,
+             program_cache: _,
++            defer_program_links,
++            deferred_links: _,
+             es,
+             max_msaa_samples,
+         } = self;
+@@ -326,6 +339,7 @@ impl fmt::Debug for AdapterShared {
+             .field("options", options)
+             .field("shading_language_version", shading_language_version)
+             .field("next_shader_id", next_shader_id)
++            .field("defer_program_links", defer_program_links)
+             .field("es", es)
+             .field("max_msaa_samples", max_msaa_samples)
+             .finish_non_exhaustive()
+@@ -737,13 +751,54 @@ unsafe impl Send for ImmediateDesc {}
+ /// sampler (in this layout) that the texture is used with.
+ type SamplerBindMap = [Option<u8>; MAX_TEXTURE_SLOTS];
+ 
++/// Outcome of one non-blocking poll of deferred GLES shader program links.
++#[derive(Clone, Debug, Default, PartialEq, Eq)]
++pub struct DeferredLinkStatus {
++    /// Live programs still compiling or linking in the GL driver.
++    pub pending: usize,
++    /// Programs finalized during this poll (succeeded or failed).
++    pub finalized: usize,
++    /// First compile or link error observed while finalizing completed programs.
++    pub error: Option<String>,
++    /// True when the GL context was lost (e.g. WebGL2 `isContextLost()`), abandoning
++    /// any remaining deferred links without blocking.
++    pub context_lost: bool,
++}
++
++struct PendingProgramLink {
++    attached_shaders:
++        ArrayVec<(naga::ShaderStage, glow::Shader), { crate::MAX_CONCURRENT_SHADER_STAGES }>,
++    has_stages: wgt::ShaderStages,
++    name_binding_map: FastHashMap<String, (BindingRegister, u8)>,
++    immediates_items:
++        ArrayVec<Vec<naga::back::glsl::ImmediateItem>, { crate::MAX_CONCURRENT_SHADER_STAGES }>,
++}
++
++impl fmt::Debug for PendingProgramLink {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("PendingProgramLink")
++            .field("attached_shaders", &self.attached_shaders.len())
++            .field("has_stages", &self.has_stages)
++            .finish_non_exhaustive()
++    }
++}
++
++#[derive(Debug)]
++enum ProgramLinkState {
++    Pending(PendingProgramLink),
++    Ready {
++        first_instance_location: Option<glow::UniformLocation>,
++        immediates_descs: ArrayVec<ImmediateDesc, MAX_IMMEDIATES_COMMANDS>,
++    },
++    Failed(String),
++}
++
+ #[derive(Debug)]
+ struct PipelineInner {
+     program: glow::Program,
+     sampler_map: SamplerBindMap,
+-    first_instance_location: Option<glow::UniformLocation>,
+-    immediates_descs: ArrayVec<ImmediateDesc, MAX_IMMEDIATES_COMMANDS>,
+     clip_distance_count: u32,
++    link_state: Mutex<ProgramLinkState>,
+ }
+ 
+ #[cfg(send_sync)]
+@@ -1125,6 +1180,7 @@ unsafe impl Send for CommandBuffer {}
+ // inside the encoder and stays there until `reset_all`.
+ 
+ pub struct CommandEncoder {
++    shared: Arc<AdapterShared>,
+     cmd_buffer: CommandBuffer,
+     state: command::State,
+     private_caps: PrivateCapabilities,
 diff --git a/src/gles/wgl.rs b/src/gles/wgl.rs
 index 09ee3e9..4edbf3b 100644
 --- a/src/gles/wgl.rs
@@ -1403,3 +2312,379 @@ index e227590..21c4fec 100644
 +        assert_eq!(f.sync.0.lock().completed, 1);
 +    }
 +}
+diff --git a/src/vulkan/instance.rs b/src/vulkan/instance.rs
+index 1775875..cec4173 100644
+--- a/src/vulkan/instance.rs
++++ b/src/vulkan/instance.rs
+@@ -230,7 +230,14 @@ impl super::Instance {
+         flags: wgt::InstanceFlags,
+     ) -> Result<Vec<&'static CStr>, crate::InstanceError> {
+         let instance_extensions = Self::enumerate_instance_extension_properties(entry, None)?;
++        Ok(Self::filter_desired_extensions(&instance_extensions, flags))
++    }
+ 
++    /// Rune: intersects wgpu-hal's desired instance extensions with `instance_extensions`.
++    fn filter_desired_extensions(
++        instance_extensions: &[vk::ExtensionProperties],
++        flags: wgt::InstanceFlags,
++    ) -> Vec<&'static CStr> {
+         // Check our extensions against the available extensions
+         let mut extensions: Vec<&'static CStr> = Vec::new();
+ 
+@@ -298,7 +305,7 @@ impl super::Instance {
+                 false
+             }
+         });
+-        Ok(extensions)
++        extensions
+     }
+ 
+     /// # Safety
+@@ -325,6 +332,38 @@ impl super::Instance {
+         memory_budget_thresholds: wgt::MemoryBudgetThresholds,
+         has_nv_optimus: bool,
+         drop_callback: Option<crate::DropCallback>,
++    ) -> Result<Self, crate::InstanceError> {
++        unsafe {
++            Self::from_raw_with_direct_drivers(
++                entry,
++                raw_instance,
++                instance_api_version,
++                android_sdk_version,
++                debug_utils_create_info,
++                extensions,
++                flags,
++                memory_budget_thresholds,
++                has_nv_optimus,
++                drop_callback,
++                #[cfg(target_os = "linux")]
++                Vec::new(),
++            )
++        }
++    }
++
++    #[allow(clippy::too_many_arguments)]
++    unsafe fn from_raw_with_direct_drivers(
++        entry: ash::Entry,
++        raw_instance: ash::Instance,
++        instance_api_version: u32,
++        android_sdk_version: u32,
++        debug_utils_create_info: Option<super::DebugUtilsCreateInfo>,
++        extensions: Vec<&'static CStr>,
++        flags: wgt::InstanceFlags,
++        memory_budget_thresholds: wgt::MemoryBudgetThresholds,
++        has_nv_optimus: bool,
++        drop_callback: Option<crate::DropCallback>,
++        #[cfg(target_os = "linux")] direct_drivers: Vec<libloading::Library>,
+     ) -> Result<Self, crate::InstanceError> {
+         log::debug!("Instance version: 0x{instance_api_version:x}");
+ 
+@@ -380,6 +419,8 @@ impl super::Instance {
+                 has_nv_optimus,
+                 instance_api_version,
+                 android_sdk_version,
++                #[cfg(target_os = "linux")]
++                _direct_drivers: direct_drivers,
+             }),
+         })
+     }
+@@ -625,6 +666,30 @@ impl super::Instance {
+                 },
+             );
+ 
++        #[cfg(target_os = "linux")]
++        let direct_drivers = if callback.is_none()
++            && !desc.flags.intersects(
++                wgt::InstanceFlags::DEBUG
++                    | wgt::InstanceFlags::VALIDATION
++                    | wgt::InstanceFlags::GPU_BASED_VALIDATION,
++            ) {
++            match direct_drivers::active_paths() {
++                Some(paths) if !paths.is_empty() => Some(unsafe { direct_drivers::load(&paths) }?),
++                _ => None,
++            }
++        } else {
++            None
++        };
++
++        #[cfg(target_os = "linux")]
++        let mut extensions = if let Some(loaded) = direct_drivers.as_ref() {
++            let mut exts = Self::filter_desired_extensions(&loaded.extensions, desc.flags);
++            exts.push(vk::LUNARG_DIRECT_DRIVER_LOADING_NAME);
++            exts
++        } else {
++            Self::desired_extensions(&entry, instance_api_version, desc.flags)?
++        };
++        #[cfg(not(target_os = "linux"))]
+         let mut extensions = Self::desired_extensions(&entry, instance_api_version, desc.flags)?;
+         let mut create_info = vk::InstanceCreateInfo::default();
+ 
+@@ -830,6 +895,17 @@ impl super::Instance {
+                 create_info = create_info.push_next(&mut validation_features);
+             }
+ 
++            #[cfg(target_os = "linux")]
++            let mut direct_driver_list = direct_drivers.as_ref().map(|loaded| {
++                vk::DirectDriverLoadingListLUNARG::default()
++                    .mode(vk::DirectDriverLoadingModeLUNARG::EXCLUSIVE)
++                    .drivers(&loaded.infos)
++            });
++            #[cfg(target_os = "linux")]
++            if let Some(direct_driver_list) = direct_driver_list.as_mut() {
++                create_info = create_info.push_next(direct_driver_list);
++            }
++
+             unsafe {
+                 profiling::scope!("vkCreateInstance");
+                 entry.create_instance(&create_info, None)
+@@ -842,8 +918,13 @@ impl super::Instance {
+             })?
+         };
+ 
++        #[cfg(target_os = "linux")]
++        let direct_driver_libs = direct_drivers
++            .map(|loaded| loaded.libraries)
++            .unwrap_or_default();
++
+         unsafe {
+-            Self::from_raw(
++            Self::from_raw_with_direct_drivers(
+                 entry,
+                 vk_instance,
+                 instance_api_version,
+@@ -854,6 +935,8 @@ impl super::Instance {
+                 desc.memory_budget_thresholds,
+                 has_nv_optimus,
+                 None,
++                #[cfg(target_os = "linux")]
++                direct_driver_libs,
+             )
+         }
+     }
+@@ -1049,3 +1132,199 @@ impl crate::Surface for super::Surface {
+         };
+     }
+ }
++
++#[cfg(target_os = "linux")]
++impl super::Instance {
++    /// Rune: scopes `VK_LUNARG_direct_driver_loading` (exclusive mode) to `paths` for any
++    /// Vulkan instance created on the current thread during `f`, restoring any previous list on
++    /// return or unwind.
++    pub fn with_direct_drivers<R>(paths: Vec<std::path::PathBuf>, f: impl FnOnce() -> R) -> R {
++        direct_drivers::with(paths, f)
++    }
++}
++
++#[cfg(target_os = "linux")]
++mod direct_drivers {
++    use alloc::{string::String, vec, vec::Vec};
++    use core::{cell::RefCell, ffi::c_char, ptr};
++    use std::path::PathBuf;
++
++    use ash::vk;
++
++    const MAX_DRIVER_EXTENSIONS: u32 = 4096;
++
++    std::thread_local! {
++        static PATHS: RefCell<Option<Vec<PathBuf>>> = const { RefCell::new(None) };
++    }
++
++    struct Guard(Option<Vec<PathBuf>>);
++
++    impl Drop for Guard {
++        fn drop(&mut self) {
++            let prev = self.0.take();
++            PATHS.with(|cell| {
++                *cell.borrow_mut() = prev;
++            });
++        }
++    }
++
++    pub(super) fn with<R>(paths: Vec<PathBuf>, f: impl FnOnce() -> R) -> R {
++        let prev = PATHS.with(|cell| cell.borrow_mut().replace(paths));
++        let _guard = Guard(prev);
++        f()
++    }
++
++    pub(super) fn active_paths() -> Option<Vec<PathBuf>> {
++        PATHS.with(|cell| cell.borrow().clone())
++    }
++
++    pub(super) struct LoadedDirectDrivers {
++        pub(super) libraries: Vec<libloading::Library>,
++        pub(super) infos: Vec<vk::DirectDriverLoadingInfoLUNARG<'static>>,
++        pub(super) extensions: Vec<vk::ExtensionProperties>,
++    }
++
++    /// Loads each candidate ICD library with `dlopen`, resolves `vk_icdGetInstanceProcAddr`,
++    /// verifies the ICD interface v7 entry points required by Vulkan-Loader's
++    /// `loader_add_direct_driver`, and queries each driver's instance extensions directly
++    /// without calling the loader's `vkEnumerateInstanceExtensionProperties(NULL, ...)` (which
++    /// would trigger `loader_preload_icds` and `dlopen` every installed system ICD).
++    pub(super) unsafe fn load(
++        paths: &[PathBuf],
++    ) -> Result<LoadedDirectDrivers, crate::InstanceError> {
++        let mut libraries = Vec::new();
++        let mut infos = Vec::new();
++        let mut extensions = Vec::new();
++
++        for path in paths {
++            // Match Vulkan-Loader's `RTLD_LAZY | RTLD_LOCAL` and add `RTLD_NODELETE` so
++            // `dlclose` never unmaps a driver (such as NVIDIA's GLX/Vulkan ICD) or runs
++            // its `.fini_array` destructors while the loader or another thread could still
++            // call into it.
++            let lib = match unsafe {
++                libloading::os::unix::Library::open(
++                    Some(path),
++                    libc::RTLD_LAZY | libc::RTLD_LOCAL | libc::RTLD_NODELETE,
++                )
++            } {
++                Ok(lib) => libloading::Library::from(lib),
++                Err(err) => {
++                    log::debug!("direct driver load failed for {}: {err}", path.display());
++                    continue;
++                }
++            };
++            let get_proc: unsafe extern "system" fn(
++                vk::Instance,
++                *const c_char,
++            ) -> vk::PFN_vkVoidFunction = match unsafe {
++                lib.get::<unsafe extern "system" fn(
++                    vk::Instance,
++                    *const c_char,
++                ) -> vk::PFN_vkVoidFunction>(b"vk_icdGetInstanceProcAddr\0")
++            } {
++                Ok(sym) => *sym,
++                Err(err) => {
++                    log::debug!(
++                        "direct driver {} lacks vk_icdGetInstanceProcAddr: {err}",
++                        path.display()
++                    );
++                    continue;
++                }
++            };
++
++            let has_negotiate = unsafe {
++                get_proc(
++                    vk::Instance::null(),
++                    c"vk_icdNegotiateLoaderICDInterfaceVersion".as_ptr(),
++                )
++            }
++            .is_some();
++            let has_create =
++                unsafe { get_proc(vk::Instance::null(), c"vkCreateInstance".as_ptr()) }.is_some();
++            let enum_ext_raw = unsafe {
++                get_proc(
++                    vk::Instance::null(),
++                    c"vkEnumerateInstanceExtensionProperties".as_ptr(),
++                )
++            };
++            let (true, true, Some(enum_ext_fn)) = (has_negotiate, has_create, enum_ext_raw) else {
++                log::debug!(
++                    "direct driver {} lacks ICD interface v7 entry points",
++                    path.display()
++                );
++                continue;
++            };
++
++            let enum_ext: vk::PFN_vkEnumerateInstanceExtensionProperties =
++                unsafe { core::mem::transmute(enum_ext_fn) };
++
++            let mut count = 0u32;
++            let res = unsafe { enum_ext(ptr::null(), &mut count, ptr::null_mut()) };
++            if res != vk::Result::SUCCESS || count > MAX_DRIVER_EXTENSIONS {
++                log::debug!(
++                    "direct driver {} vkEnumerateInstanceExtensionProperties count failed: {res:?} ({count})",
++                    path.display()
++                );
++                continue;
++            }
++            let mut driver_exts = if count > 0 {
++                let mut buf = vec![vk::ExtensionProperties::default(); count as usize];
++                let res = unsafe { enum_ext(ptr::null(), &mut count, buf.as_mut_ptr()) };
++                if res != vk::Result::SUCCESS && res != vk::Result::INCOMPLETE {
++                    log::debug!(
++                        "direct driver {} vkEnumerateInstanceExtensionProperties read failed: {res:?}",
++                        path.display()
++                    );
++                    continue;
++                }
++                buf.truncate(count as usize);
++                buf
++            } else {
++                Vec::new()
++            };
++
++            extensions.append(&mut driver_exts);
++            infos.push(
++                vk::DirectDriverLoadingInfoLUNARG::default()
++                    .pfn_get_instance_proc_addr(Some(get_proc)),
++            );
++            libraries.push(lib);
++        }
++
++        if infos.is_empty() {
++            return Err(crate::InstanceError::new(String::from(
++                "no direct Vulkan driver loaded with ICD interface v7",
++            )));
++        }
++
++        Ok(LoadedDirectDrivers {
++            libraries,
++            infos,
++            extensions,
++        })
++    }
++
++    #[cfg(test)]
++    mod tests {
++        use super::*;
++
++        #[test]
++        fn direct_drivers_scope_restores_on_return_and_unwind() {
++            assert_eq!(active_paths(), None);
++            let outer = vec![PathBuf::from("/usr/lib64/libvulkan_intel.so")];
++            let inner = vec![PathBuf::from("/usr/lib64/libvulkan_radeon.so")];
++            with(outer.clone(), || {
++                assert_eq!(active_paths(), Some(outer.clone()));
++                let panicked = std::panic::catch_unwind(|| {
++                    with(inner.clone(), || {
++                        assert_eq!(active_paths(), Some(inner.clone()));
++                        panic!("unwind guard check");
++                    });
++                });
++                assert!(panicked.is_err());
++                assert_eq!(active_paths(), Some(outer.clone()));
++            });
++            assert_eq!(active_paths(), None);
++        }
++    }
++}
+diff --git a/src/vulkan/mod.rs b/src/vulkan/mod.rs
+index 51e7414..b41baca 100644
+--- a/src/vulkan/mod.rs
++++ b/src/vulkan/mod.rs
+@@ -167,6 +167,13 @@ pub struct InstanceShared {
+     memory_budget_thresholds: wgt::MemoryBudgetThresholds,
+     debug_utils: Option<DebugUtils>,
+     get_physical_device_properties: Option<khr::get_physical_device_properties2::Instance>,
++    /// Rune: ICD libraries opened with `RTLD_NODELETE` for `VK_LUNARG_direct_driver_loading`.
++    /// `InstanceShared::drop` destroys `raw` (`vkDestroyInstance`) before any field drops;
++    /// declaring `_direct_drivers` before `entry` then releases our handle while `libvulkan.so`
++    /// is still open, and `RTLD_NODELETE` prevents `dlclose` from unmapping driver code or
++    /// running `.fini_array` destructors while the loader or another thread could still use it.
++    #[cfg(target_os = "linux")]
++    _direct_drivers: Vec<libloading::Library>,
+     entry: ash::Entry,
+     has_nv_optimus: bool,
+     android_sdk_version: u32,
+@@ -192,6 +199,8 @@ impl fmt::Debug for InstanceShared {
+             memory_budget_thresholds,
+             debug_utils: _,
+             get_physical_device_properties: _,
++            #[cfg(target_os = "linux")]
++            _direct_drivers: _,
+             entry: _,
+             has_nv_optimus,
+             android_sdk_version,

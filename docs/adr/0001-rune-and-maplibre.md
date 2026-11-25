@@ -706,3 +706,71 @@ predates this bump.
 **What would take the pin further.** The next bump is `scripts/vendor-patches.sh`, one reading of the picture diff,
 and this section again; `parley_engine`'s `line-dictionaries` is still the one feature that keeps a copy, and Windows
 still draws through MapLibre's unsupported target. Neither is ours to fix.
+
+### Taken: `2899b3d3` → `1f1d68c4` — 245 commits, two new vendored crates, and no scene moves (#296)
+
+`dev` stood at `1f1d68c4f07f9f814e86b065cffe685f9a694606` (`#1997`, 2026-11-25) when #296 was opened: **245 commits**
+past the pin `2899b3d3a41b6c9d00e52884cddfdd66ab71374b` (2026-11-23). Both `rune` and `rune-kit` move, and the workspace
+compiles with nothing in `src/` touched — no API the wall uses was renamed or changed. The bump is taken now because
+the desk's screen (#294) spends exactly the surface this range reworked: `TextEdit`, `WheelEvent`, drag, and text
+clipping; reading the renderer while that code is fresh is cheaper than reading it after the next screen.
+
+The range adds ways the wall does not adopt: `El::elide_middle`/`elide_head` and `line_home_end` on `TextEdit`, the
+`ColorScheme` override, `El::no_scroll_anchor`, `El::line_fills` and `PillStyle`'s ring, per-segment icons on
+`SegmentedControl`, and the offscreen renderer. A bump takes the renderer, not every feature beside it.
+
+**The vendored set grows from six to eight.** `scripts/vendor-patches.sh` reads the rev's `[patch.crates-io]`, and
+this rev patches two crates the pin did not:
+
+- **`naga`** (`a1cfa9cd`, #1815) — 4.9 MB, 162 files, one file and 157 patch lines. Rune compiles its interface
+  shaders at runtime, and its WGSL uses pipeline overridable constants. naga 30.0.1's pipeline-constants pass
+  rewrites `Statement::Emit` ranges by looking up only their first and last handle; when a constant folds onto a
+  handle that already exists, several old handles become one new one and the range stretches over expressions the
+  original did not emit, or inverts. The shader then fails with `ExpressionAlreadyInScope`. Rune's patch records
+  the span each old handle produced and rebuilds the range from the first old handle's start to the last one's end,
+  which is exact even when a fold appends nothing. Without the copy, Rune at this rev can fail to compile a shader
+  the wall draws.
+- **`accesskit_atspi_common`** (`8a54a0a7`, #1819) — 240 KB, 19 files, one file and 115 patch lines. AT-SPI exposes
+  `setsize` for a row or a tree item, and a levelled item in a flat tree carries its own level's count; the
+  published crate asks the container first, so a container reports its number of children as its own sibling set
+  size and a second-level item answers with the root's count. Rune's patch reads an item-like node's (or a `Row`'s)
+  own `size_of_set` before falling back. It is Linux only, and it is in the gate's build through `accesskit_unix`.
+
+The other six copies were re-made, and four grew with upstream's own patches: `winit` 20 files/1,611 lines → 29/2,122,
+`wgpu-hal` 12/1,405 → 18/2,690, `sctk-adwaita` 4/917 → 5/1,033, `accesskit_windows` 6/1,785 → 6/1,893.
+`parley_engine` (10 files/708 lines) and `accesskit_macos` (6/1,176) are byte-identical. `vendor/README.md` carries
+the new counts and the two new sections.
+
+**What could have moved the wall's pixels.** Five commits, named for the next reader:
+
+- `cc051b12` (#1747) — a text input's uninked caret, placeholder and selection now derive from `El::color` instead
+  of hardcoded values. This is the one that could have moved the desk's search and rename fields.
+- `b21e0f50` (#1755) — truncated text clips to its box, and end truncation keeps the first grapheme. Any wall label
+  with an ellipsis is this class.
+- `9f35ebad` (#1813) — sub-texel image and scaled-layer crops clamp the upper texel bound to at least the lower one.
+  The newsroom scenes are the wall's bitmaps.
+- `800f89e9` (#1868) — `min_w`/`max_w` are clamped before `aspect_ratio` transfers them, matching Chromium. The
+  desk's chart and unit cards set both.
+- `e481c19f` (#1800) — backdrop blur grows past four slots. Named and dismissed: the wall has no backdrop blur; its
+  `tx.blur()` is focus, not pixels.
+- The hover rewrites (`4bd96797` #1797, `cbf6e396` #1986) and the scroll-bar scoping (`2bef386e` #1799) need a
+  pointer, and a capture has none.
+
+**What the review found: no scene moves at all.** All **53** wall scenes and all **5** desk scenes were rendered
+twice; every scene's two runs are identical (`INV-11`). **48** wall scenes are byte-for-byte identical to their
+goldens, and the same five scenes the #280 bump already bounded differ by the same numbers: `installations` by 15
+pixels, `newsroom`, `newsroom-page-2`, `newsroom-story` and `newsroom-story-back` by 16 each, every pixel by exactly
+one step (`max Δ1/255`, `0 changed`). All five are inside their stated bounds, so they are rounding, not this bump.
+The desk's five scenes are byte-for-byte identical, including both text fields.
+
+**No golden was regenerated.** `--update-goldens` moved nothing: the captures and the reviewed pictures agree. That
+is the strongest result a bump can have, and it is the reason to take it while the pin is 245 commits old rather
+than 600.
+
+**The lockfile.** One new crate: `moxcms` 0.8.1 (BSD-3-Clause OR Apache-2.0), which `rune-image` uses for the RGB ICC
+profile conversion added in `86a5a574` (#1991); it is named in `THIRD-PARTY-NOTICES.md`. `naga` and
+`accesskit_atspi_common` lose their registry source and checksum because they are now built from `vendor/`.
+
+**What could not be run here.** The vendored `winit`, `wgpu-hal`, `sctk-adwaita` and `accesskit` copies compile on
+macOS and Windows only, in CI's `check` and `map` jobs. `map (windows-latest)` remains red for the parked reason in
+#228, and that red predates this bump.
