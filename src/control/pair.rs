@@ -327,8 +327,8 @@ fn paired_at() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control::Intent;
     use crate::control::apply;
+    use crate::verb::Intent;
 
     /// A wall that pairs in memory only: a test may not write to the machine's `devices.toml` (`INV-11`).
     fn capture() -> State {

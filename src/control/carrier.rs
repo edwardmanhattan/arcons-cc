@@ -15,7 +15,7 @@
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
-use crate::ui::Origin;
+use crate::verb::Origin;
 
 /// One line in, one line out, and a way to hang up.
 ///

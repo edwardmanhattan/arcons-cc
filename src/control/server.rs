@@ -25,7 +25,7 @@ use std::time::Duration;
 use super::carrier::Carrier;
 use super::sessions::{Job, Queue};
 use super::{Refused, SOCKET_MODE};
-use crate::ui::Origin;
+use crate::verb::Origin;
 
 /// How long a client waits for the wall to answer before it is told the wall did not.
 ///
@@ -351,8 +351,9 @@ fn ask_the_wall(
 mod tests {
     use super::*;
     use crate::control::wire::Answer;
-    use crate::control::{self, Changed, Intent, LAST_PANE};
+    use crate::control::{self, Changed, LAST_PANE};
     use crate::ui::State;
+    use crate::verb::Intent;
     use std::io::{BufRead, BufReader, Write};
 
     /// A socket in this test's own directory, so two runs of the gate cannot collide and nothing is left in the

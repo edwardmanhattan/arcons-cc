@@ -36,10 +36,7 @@ pub mod view;
 mod viewpoint;
 
 pub use filter::Filter;
-pub use view::{Dir, Layout, Rect, TreeCamera};
-
-/// What a pane is called. Small numbers, unique for the life of the layout.
-pub type ViewId = u32;
+pub use view::{Dir, Layout, Rect, TreeCamera, drop_for};
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -47,10 +44,11 @@ use std::process::ExitCode;
 use rune::{AppSpec, Cx, El, col, el, row, spacer, text};
 
 use crate::config;
-use crate::control::{self, Intent};
+use crate::control;
 use crate::live::LiveThread;
 use crate::map::geometry::Camera;
 use crate::units::Picture;
+use crate::verb::{Intent, Origin, PaneContent, RenameTarget, ViewId};
 
 /// The **window title** — what a window manager and a task bar read.
 ///
@@ -58,36 +56,6 @@ use crate::units::Picture;
 /// the app's name used to be, because that is the operator's question ("where am I?") and the app's name
 /// is what the window already says.
 pub const TITLE: &str = "Arcons Command Center";
-
-/// **What a pane is** (#116): a map, or a chain of command.
-///
-/// A pane used to *be* a map — a camera, a map thread, a frame — and this ticket's tree has none of
-/// those. The kind is a value on the pane rather than a second pane type, because layout, grip, name,
-/// chrome and filter are the pane's: a tree pane is a pane, and every one of those keeps working.
-///
-/// The distinction is load-bearing for `INV-04`: a tree pane has **no frame**, so there is nothing for
-/// a marker to be projected against, and it draws nothing that projects.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum PaneContent {
-    /// A camera, a map thread, a frame, and everything that projects.
-    #[default]
-    Map,
-    /// The chain of command. `organisation` names the structure the pane is about; `None` is **every
-    /// structure the wall knows**, which is the chain of command as a whole — the supreme command above
-    /// each branch root, because `/tni-commander` is one post shared by every branch.
-    Tree { organisation: Option<i64> },
-    /// **The newsroom** (#136): the strategic-environment feed, one page of stories at a time. No
-    /// camera, no thread, no frame — the pane holds a [`newsroom::View`] and draws rows.
-    Newsroom,
-}
-
-impl PaneContent {
-    /// Whether this pane draws a map. The one question every caller that used to take a pane for
-    /// granted asks.
-    pub fn is_map(&self) -> bool {
-        matches!(self, PaneContent::Map)
-    }
-}
 
 /// One pane: a camera, the map thread that renders it, and the frame it last drew.
 ///
@@ -341,17 +309,6 @@ pub struct PaneDrag {
     pub drop: Option<view::Drop>,
 }
 
-/// **What a rename sheet is renaming** (#139): a pane, or a workspace.
-///
-/// The sheet is one sheet — one field, one limit, one Enter/Escape contract — and this is the only thing
-/// that differs between naming a pane and naming the workspace on screen. Keeping it as a value rather
-/// than a second sheet is what stops the two renaming paths from drifting apart.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RenameTarget {
-    Pane(ViewId),
-    Workspace(usize),
-}
-
 /// A rename in progress (#83, #139): what is being renamed, and the field being typed into.
 ///
 /// The field is Rune's `TextEdit` and not a `String`: it owns the caret, the selection, the input method and
@@ -503,7 +460,7 @@ pub struct State {
     /// **An intent script waiting for its frame** (#172): a scene that drives the wall **only** through the
     /// control plane carries its steps here, and `poll` applies the ones that are due. Empty on a wall — nothing
     /// scripts a wall — which is why it is a field on the state and not an environment variable.
-    pub pending_intents: Vec<(f64, crate::control::Intent)>,
+    pub pending_intents: Vec<(f64, crate::verb::Intent)>,
     /// How many of [`State::pending_intents`] have been applied, in order: a script is a sequence, and applying
     /// step 3 before step 2 would be a different wall.
     pub intents_applied: usize,
@@ -670,49 +627,6 @@ pub struct State {
     asked_organisations: std::collections::HashSet<i64>,
     asked_organisations_list: bool,
     asked_tni: bool,
-}
-
-/// **Whose pointer a cursor is** (#205).
-///
-/// A pointer is a hand, and a fleet has more than one: the wall's own, a CLI's, a phone's. Each cursor is keyed by
-/// this, so one client moving its pointer cannot move another's — and `ADR-0006` decision 5 is the reason the wall
-/// draws every one of them: a press must be visible where it lands.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Origin(String);
-
-impl Origin {
-    /// The wall's own pointer — the OS's, for the hand on the glass.
-    pub fn wall() -> Origin {
-        Origin("wall".to_string())
-    }
-
-    /// **The client with no identity of its own**: a `ctl` over the local socket. One client at a time and its
-    /// credential is the socket's file mode (`INV-08`), so "ctl" is the honest name for it.
-    pub fn ctl() -> Origin {
-        Origin("ctl".to_string())
-    }
-
-    /// A named client — a paired phone's device name, once #194 lands. Trimmed, and nothing else: a client's name is
-    /// its own, not a key this wall gets to respell.
-    pub fn named(name: &str) -> Origin {
-        Origin(name.trim().to_string())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Default for Origin {
-    fn default() -> Self {
-        Origin::ctl()
-    }
-}
-
-impl std::fmt::Display for Origin {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
 }
 
 /// **A cursor the wall owns** (#167): where a client is pointing, in the picture panel's points.
@@ -8917,7 +8831,7 @@ mod tests {
 
     /// The same thing the key handler does for `Left`, so the test drives the model and not a key event.
     fn close_submenu_through(state: &mut State) -> bool {
-        crate::control::apply(state, crate::control::Intent::MenuSubmenu { open: false }).is_ok()
+        crate::control::apply(state, crate::verb::Intent::MenuSubmenu { open: false }).is_ok()
     }
 
     /// **The ring is the active descendant** (#164): the row the keyboard is on is the row an assistive client is
@@ -9371,9 +9285,9 @@ mod tests {
 
         // Every verb the menu produces is one the vocabulary's own table names, so a renamed intent cannot leave
         // a row pointing at a name nothing answers to.
-        let known: Vec<&'static str> = crate::control::vocabulary()
+        let known: Vec<&'static str> = crate::verb::vocabulary()
             .iter()
-            .map(crate::control::Intent::verb)
+            .map(crate::verb::Intent::verb)
             .collect();
         for verb in seen {
             assert!(
@@ -10147,9 +10061,9 @@ mod reach_tests {
 
     /// The vocabulary's verbs, as the wire names them.
     fn vocabulary() -> BTreeSet<&'static str> {
-        crate::control::vocabulary()
+        crate::verb::vocabulary()
             .iter()
-            .map(crate::control::Intent::verb)
+            .map(crate::verb::Intent::verb)
             .collect()
     }
 
@@ -10319,7 +10233,7 @@ mod reach_tests {
         }
         assert_eq!(
             seen.len() + REMOTE_ONLY.len(),
-            crate::control::vocabulary().len(),
+            crate::verb::vocabulary().len(),
             "the two tables are the vocabulary (#240): a verb is reached, or it is explained"
         );
     }
@@ -10486,9 +10400,9 @@ mod settings_tests {
     #[test]
     fn every_settings_row_that_is_a_verb_is_one_the_glass_lists() {
         let state = wall_with(&["phone"]);
-        let known: Vec<&'static str> = crate::control::vocabulary()
+        let known: Vec<&'static str> = crate::verb::vocabulary()
             .iter()
-            .map(crate::control::Intent::verb)
+            .map(crate::verb::Intent::verb)
             .collect();
         let reached = crate::ui::reaches();
         let mut verbs = 0;

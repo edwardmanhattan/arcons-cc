@@ -105,8 +105,10 @@ mod tests {
     use super::*;
     use crate::control::carrier::{Loopback, Peer};
     use crate::control::wire::{self, Answer};
-    use crate::control::{self, Changed, Intent, REFUSALS, RefusalKind, refusal_kind};
-    use crate::ui::{Origin, PaneContent, State};
+    use crate::control::{self, Changed, REFUSALS, RefusalKind, refusal_kind};
+    use crate::ui::State;
+    use crate::verb::Intent;
+    use crate::verb::{Origin, PaneContent};
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use std::time::{Duration, Instant};
@@ -449,7 +451,7 @@ mod tests {
         let drawn: Vec<&str> = state
             .cursors
             .keys()
-            .map(crate::ui::Origin::as_str)
+            .map(crate::verb::Origin::as_str)
             .collect();
         assert_eq!(
             drawn,

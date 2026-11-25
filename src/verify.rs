@@ -1548,7 +1548,7 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
                 state.settings.pane_gap,
             );
             let ink_colour = ink(tokens::ink());
-            let mut counts: Vec<(crate::ui::ViewId, usize)> = Vec::new();
+            let mut counts: Vec<(crate::verb::ViewId, usize)> = Vec::new();
             for (id, rect) in rects {
                 let mut count = 0;
                 let (filter, maximise) = crate::ui::view::chrome_buttons(rect);
@@ -2766,10 +2766,10 @@ pub fn assert_scene(image: &Image, scene: &str) -> Result<Vec<String>, Vec<Strin
             // root, or a flattened forest, draws fewer plates than the server sent posts.
             let expected = {
                 let ids: Vec<i64> = match state.pane(tree_id).map(|pane| &pane.content) {
-                    Some(crate::ui::PaneContent::Tree {
+                    Some(crate::verb::PaneContent::Tree {
                         organisation: Some(id),
                     }) => vec![*id],
-                    Some(crate::ui::PaneContent::Tree { organisation: None }) => {
+                    Some(crate::verb::PaneContent::Tree { organisation: None }) => {
                         state.organisations.iter().map(|row| row.id).collect()
                     }
                     _ => Vec::new(),
@@ -4562,12 +4562,12 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                 state.pane_viewport(),
                 state.settings.pane_gap,
             );
-            let trees: Vec<crate::ui::ViewId> = rects
+            let trees: Vec<crate::verb::ViewId> = rects
                 .iter()
                 .filter(|(id, _)| state.pane(*id).is_some_and(|pane| !pane.content.is_map()))
                 .map(|(id, _)| *id)
                 .collect();
-            let maps: Vec<crate::ui::ViewId> = rects
+            let maps: Vec<crate::verb::ViewId> = rects
                 .iter()
                 .filter(|(id, _)| state.pane(*id).is_some_and(|pane| pane.content.is_map()))
                 .map(|(id, _)| *id)
@@ -4612,7 +4612,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
                 state.pane_viewport(),
                 state.settings.pane_gap,
             );
-            let feeds: Vec<(crate::ui::ViewId, &crate::ui::newsroom::View)> = rects
+            let feeds: Vec<(crate::verb::ViewId, &crate::ui::newsroom::View)> = rects
                 .iter()
                 .filter_map(|(id, _)| {
                     state
@@ -5285,7 +5285,7 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
     // **One card per pane, and its own** (#99): the selection belongs to a window, so the question is
     // asked per pane. A wall-wide count would pass with the same card in every pane — which is the bug
     // the operator photographed.
-    let cards: Vec<(crate::ui::ViewId, i64)> = state
+    let cards: Vec<(crate::verb::ViewId, i64)> = state
         .panes()
         .iter()
         .filter_map(|pane| {

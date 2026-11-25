@@ -21,8 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::map::geometry::Viewport;
 use crate::ui::tokens;
-
-use super::ViewId;
+use crate::verb::{Edge, ViewId};
 
 /// Which way a split runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -420,6 +419,36 @@ impl Drop {
             Drop::Swap { a: _, b } => b,
             Drop::Retile { dragged, .. } => dragged,
         }
+    }
+}
+
+/// **The drop an [`Edge`] names**, in the shape a pointer's release builds.
+///
+/// One function, so a client's preview and the wall's landing are the same drop and therefore the same
+/// layout. Two ways of computing "where it lands" is the bug `Intent::Drop` exists to prevent.
+pub fn drop_for(edge: Edge, pane: ViewId, onto: ViewId) -> Drop {
+    match edge {
+        Edge::Centre => Drop::Swap { a: onto, b: pane },
+        Edge::Left => Drop::Retile {
+            dragged: pane,
+            target: onto,
+            side: Side::Left,
+        },
+        Edge::Right => Drop::Retile {
+            dragged: pane,
+            target: onto,
+            side: Side::Right,
+        },
+        Edge::Top => Drop::Retile {
+            dragged: pane,
+            target: onto,
+            side: Side::Top,
+        },
+        Edge::Bottom => Drop::Retile {
+            dragged: pane,
+            target: onto,
+            side: Side::Bottom,
+        },
     }
 }
 

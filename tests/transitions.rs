@@ -11,7 +11,8 @@
 //! it refused (and nothing moved at all).
 
 use arcons_cc::ui::view::Border;
-use arcons_cc::ui::{Begin, Interaction, PaneDrag, Rename, RenameTarget, State};
+use arcons_cc::ui::{Begin, Interaction, PaneDrag, Rename, State};
+use arcons_cc::verb::RenameTarget;
 
 /// Every state the wall can be in, with an instance of each. A new variant of `Interaction` fails to
 /// compile here until it is listed — which is the whole point: no state without a row in the table.

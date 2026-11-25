@@ -100,7 +100,7 @@ mod tests {
     use super::*;
 
     /// Stand where `ask` stands: the pane on the wall now is the one the answer belongs to.
-    fn waiting(state: &mut State) -> (crate::ui::ViewId, Camera) {
+    fn waiting(state: &mut State) -> (crate::verb::ViewId, Camera) {
         let pane = state.focused();
         state.viewpoint_pane = Some(pane);
         (pane, state.camera_of(pane))

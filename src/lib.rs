@@ -20,4 +20,5 @@ pub mod platform;
 pub mod scene;
 pub mod ui;
 pub mod units;
+pub mod verb;
 pub mod verify;

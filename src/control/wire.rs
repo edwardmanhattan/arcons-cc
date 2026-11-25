@@ -23,7 +23,7 @@ use super::projection::Wall;
 use super::snapshot::Scene;
 use super::watch::Watch;
 use super::{Changed, Intent, PROTOCOL, Paired, RefusalKind, Refused};
-use crate::ui::{PaneContent, RenameTarget};
+use crate::verb::{PaneContent, RenameTarget};
 
 /// An intent as the JSON a client sends.
 pub fn to_wire(intent: &Intent) -> Value {
@@ -189,7 +189,7 @@ pub fn from_wire(value: &Value) -> Result<Intent, Refused> {
         },
         "pane.drop" => Intent::Drop {
             pane: pane(object)?,
-            onto: integer(object, "onto")? as crate::ui::ViewId,
+            onto: integer(object, "onto")? as crate::verb::ViewId,
             // **A word this wall does not use is a refusal, not a default** (#219, `INV-07`): guessing `centre` for
             // an edge a newer wall added would land a pane somewhere the client did not ask for.
             edge: object
@@ -200,7 +200,7 @@ pub fn from_wire(value: &Value) -> Result<Intent, Refused> {
         },
         "pane.resize" => Intent::Resize {
             pane: pane(object)?,
-            other: integer(object, "other")? as crate::ui::ViewId,
+            other: integer(object, "other")? as crate::verb::ViewId,
             ratio: object
                 .get("ratio")
                 .and_then(Value::as_f64)
@@ -323,12 +323,12 @@ pub fn from_wire(value: &Value) -> Result<Intent, Refused> {
 
 /// **Whose pointer** (#205), when a client says. Absent is the local client's — a `ctl` over the socket — and a phone
 /// will name itself once pairing gives it a name (#194). A name is trimmed and otherwise the client's own.
-fn origin_of(object: &Map<String, Value>) -> Result<Option<crate::ui::Origin>, Refused> {
+fn origin_of(object: &Map<String, Value>) -> Result<Option<crate::verb::Origin>, Refused> {
     match object.get("origin") {
         None => Ok(None),
         Some(value) => value
             .as_str()
-            .map(|name| Some(crate::ui::Origin::named(name)))
+            .map(|name| Some(crate::verb::Origin::named(name)))
             .ok_or(Refused("\"origin\" is a client name")),
     }
 }
@@ -342,8 +342,8 @@ fn device_name(object: &Map<String, Value>) -> Result<String, Refused> {
     }
 }
 
-fn pane(object: &Map<String, Value>) -> Result<crate::ui::ViewId, Refused> {
-    Ok(integer(object, "pane")? as crate::ui::ViewId)
+fn pane(object: &Map<String, Value>) -> Result<crate::verb::ViewId, Refused> {
+    Ok(integer(object, "pane")? as crate::verb::ViewId)
 }
 
 fn integer(object: &Map<String, Value>, key: &str) -> Result<i64, Refused> {
@@ -377,7 +377,7 @@ fn target(object: &Map<String, Value>) -> Result<RenameTarget, Refused> {
         .ok_or(Refused("\"target\" is {\"pane\": n} or {\"workspace\": n}"))?;
     if target.contains_key("pane") {
         Ok(RenameTarget::Pane(
-            integer(target, "pane")? as crate::ui::ViewId
+            integer(target, "pane")? as crate::verb::ViewId
         ))
     } else if target.contains_key("workspace") {
         Ok(RenameTarget::Workspace(
@@ -713,7 +713,7 @@ pub fn reply(answer: Answer) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control::vocabulary;
+    use crate::verb::vocabulary;
 
     /// **A round trip is the identity**, for every variant in the vocabulary — the test that keeps the two
     /// halves of this file, and the CLI that builds the same JSON, from drifting apart (#165).

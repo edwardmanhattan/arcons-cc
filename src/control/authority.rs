@@ -84,7 +84,7 @@ fn this_walls_socket() -> PathBuf {
 pub fn answer(
     state: &mut State,
     request: &Request,
-    hand: Option<crate::ui::Origin>,
+    hand: Option<crate::verb::Origin>,
 ) -> (Answer, bool) {
     match request {
         // **Whose hand asked** (#222): a request that arrived on a carrier with a name is that client's, whatever the
@@ -294,7 +294,7 @@ mod tests {
         let mut state = State::default();
         let (reply, changed) = answer(
             &mut state,
-            &Request::Intent(crate::control::Intent::NewWorkspace),
+            &Request::Intent(crate::verb::Intent::NewWorkspace),
             None,
         );
         assert_eq!(reply, Answer::Changed(Ok(Changed(true))));
@@ -371,7 +371,7 @@ mod tests {
         for _ in 0..2 {
             let _ = answer(
                 &mut wall_state,
-                &Request::Intent(crate::control::Intent::NewWorkspace),
+                &Request::Intent(crate::verb::Intent::NewWorkspace),
                 None,
             );
         }
@@ -571,7 +571,7 @@ mod tests {
         assert!(viewer.is_viewer());
 
         // The press. The same door every handler uses.
-        let outcome = crate::control::apply(&mut viewer, crate::control::Intent::NewWorkspace);
+        let outcome = crate::control::apply(&mut viewer, crate::verb::Intent::NewWorkspace);
         assert_eq!(
             outcome,
             Ok(Applied::Changed(Changed(false))),
@@ -653,7 +653,7 @@ mod tests {
 
         let mut viewer = State::default();
         viewer.session = Some(Session::new(Box::new(peer)).expect("a session"));
-        let asked = crate::control::apply(&mut viewer, crate::control::Intent::ClosePane(1));
+        let asked = crate::control::apply(&mut viewer, crate::verb::Intent::ClosePane(1));
         eprintln!("DEBUG asked={asked:?} session={}", viewer.session.is_some());
 
         // The refused press: the session logs it and stays open.
@@ -681,7 +681,7 @@ mod tests {
     fn a_cursor_whose_client_hung_up_is_no_longer_drawn() {
         use crate::control::carrier::Loopback;
         use crate::control::sessions::Queue;
-        use crate::ui::Origin;
+        use crate::verb::Origin;
 
         let queue = Queue::new();
         let (wall_end, peer) = Loopback::named("phone");

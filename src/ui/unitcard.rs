@@ -12,10 +12,11 @@ use std::time::Instant;
 
 use rune::{El, col, el, row, spacer, text};
 
-use crate::control::{self, Intent};
-use crate::ui::ViewId;
+use crate::control;
 use crate::ui::tokens;
 use crate::units::card::{Card, Placement, WIDTH};
+use crate::verb::Intent;
+use crate::verb::ViewId;
 
 /// **The card's one control** (#240, #169): lock this pane's camera onto the hull the card is about.
 pub const FOLLOW: &str = "Follow";

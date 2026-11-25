@@ -20,8 +20,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::config::layout::Axis;
+use crate::ui::State;
 use crate::ui::view::{Dir, Shape};
-use crate::ui::{PaneContent, State, ViewId};
+use crate::verb::{PaneContent, ViewId};
 
 /// The wall, as a controller sees it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -28,7 +28,8 @@ use crate::data::types::{
     Installation, InstallationType, TacticalObjectCategoryFacet, TacticalObjectDomainFacet,
     TacticalObjectFacets,
 };
-use crate::ui::{State, ViewId};
+use crate::ui::State;
+use crate::verb::ViewId;
 
 /// What **this pane** hides. Empty is everything.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
