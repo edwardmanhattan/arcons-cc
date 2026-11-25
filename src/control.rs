@@ -3,7 +3,7 @@
 //!
 //! `docs/adr/0005-control-plane.md` is this module's decision: a client sends **intents** and the wall that
 //! owns the pixels renders them, over a unix socket whose permissions are the authentication. This module is
-//! the vocabulary and the door; the socket and the CLI are #165, the cursor is #167, the menu's keys are #164.
+//! the vocabulary and the carriers; the door itself is `ui::State::apply`. The socket and the CLI are #165, the cursor is #167, the menu's keys are #164.
 //!
 //! ## The rule
 //!
@@ -24,13 +24,14 @@
 //! ## Refusals
 //!
 //! A refusal is a **name**, never silence and never a default (`INV-07`'s rule, applied to verbs). The rule
-//! behind the name is the one the UI already owns: [`apply`]`(ClosePane)` asks `State::can_close`, the same
+//! behind the name is the one the UI already owns: [`ui::State::apply`]`(ClosePane)` asks `State::can_close`, the same
 //! predicate the menu row is built from (#141), so the control and the action cannot disagree.
 
-use crate::ui::{self, MenuAction, State};
-use crate::verb::{Edge, Intent, RenameTarget};
 #[cfg(test)]
-use crate::verb::{PaneContent, ViewId};
+use crate::ui::State;
+use crate::verb::{Edge, Intent};
+#[cfg(test)]
+use crate::verb::{PaneContent, RenameTarget, ViewId};
 
 // **The transport is a unix socket**, so the listener, the wire it speaks and the CLI that talks to it are
 // behind `unix` (#165). The vocabulary above is not: `Intent` and `apply` are the wall's own state machine, and
@@ -313,366 +314,6 @@ pub fn refusal_kind(why: &str) -> Option<RefusalKind> {
         .map(|(_, kind)| *kind)
 }
 
-/// Whether this process handed `intent` to its authority instead of applying it (#204).
-///
-/// A viewer has a session and no authority of its own; everything else — a wall, a capture, the authority process
-/// itself — applies in place. Two whole blocks rather than a `cfg`-ed expression: the field exists on one platform
-/// only, and a branch would leave the rest of this function type-checked against it.
-fn asked_the_authority(state: &State, intent: &Intent) -> bool {
-    #[cfg(unix)]
-    {
-        // **True whenever this is a viewer**, whether or not the ask got through: a viewer that applied locally because
-        // the wire was busy would move a pane the authority has not agreed to, and then move it back when the scene
-        // arrives. A request that could not be queued is a press that did not happen — which the next scene shows.
-        let Some(session) = state.session.as_ref() else {
-            return false;
-        };
-        let _ = session.ask(wire::Request::Intent(intent.clone()));
-        true
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (state, intent);
-        false
-    }
-}
-
-/// **The door.** Apply one intent, or say why not.
-///
-/// This is the only place an *input* changes the wall: the pointer's handlers, `on_key` and (from #165) the
-/// socket all come here, so "the mouse can do it and the CLI cannot" stops being a category of bug. What it
-/// calls is the same code the wall already trusted — the point is not a new implementation of closing a pane,
-/// it is that there is one entrance to the old one.
-pub fn apply(state: &mut State, intent: Intent) -> Result<Applied, Refused> {
-    apply_by(state, intent, None)
-}
-
-/// **The door, and whose hand knocked** (#222).
-///
-/// A request that arrived on a carrier with a name is that client's, whatever the frame said: the relay knows a phone
-/// by the device name in `devices.toml`, the socket knows its client as `ctl`, and the origin the carrier reports wins
-/// over an `origin` an intent carries. That is the ticket's rule made mechanical — a cursor is named by the hand that
-/// moved it, so one remote cannot move another's pointer by typing its name.
-///
-/// `None` is a caller with no carrier: the pointer's own handlers, a scene's script, a test. Those may say which
-/// origin they mean, which is what #205's per-client cursors are.
-pub fn apply_by(
-    state: &mut State,
-    intent: Intent,
-    hand: Option<crate::verb::Origin>,
-) -> Result<Applied, Refused> {
-    // **A viewer does not change the wall** (#204): it asks its authority, and answers `changed: false` — which is the
-    // truth, because no pixel moved. The change arrives later as a `Scene`, and until it does the pending intent is a
-    // request rather than a fact. Every handler comes through here (#170, #173), so this is the only place that has to
-    // know the difference — and a wall, a capture and the authority itself all answer `false` to it and apply in place.
-    if asked_the_authority(state, &intent) {
-        return Ok(Applied::Changed(Changed(false)));
-    }
-    let changed = match intent {
-        Intent::FocusPane(pane) => {
-            if state.pane(pane).is_none() {
-                return Err(Refused("no such pane"));
-            }
-            state.focus_pane(pane)
-        }
-        Intent::ToggleFullSize(pane) => {
-            if state.pane(pane).is_none() {
-                return Err(Refused("no such pane"));
-            }
-            ui::toggle_full_size(state, pane)
-        }
-        Intent::ClosePane(pane) => {
-            if state.pane(pane).is_none() {
-                return Err(Refused("no such pane"));
-            }
-            // **The same predicate the menu row is built from** (#141): the control and the action cannot
-            // disagree, and a refusal is the rule's name rather than a no-op.
-            if !state.can_close(pane) {
-                return Err(Refused(LAST_PANE));
-            }
-            ui::close_from_menu(state, pane)
-        }
-        Intent::BeginRename(target) => {
-            if !target_exists(state, target) {
-                return Err(Refused(no_such(target)));
-            }
-            ui::begin_rename_target(state, target);
-            true
-        }
-        Intent::Rename { target, name } => {
-            if !target_exists(state, target) {
-                return Err(Refused(no_such(target)));
-            }
-            ui::rename_to(state, target, name.as_deref())
-        }
-        Intent::SplitPane { pane, content } => {
-            if state.pane(pane).is_none() {
-                return Err(Refused("no such pane"));
-            }
-            ui::open_pane_beside(state, pane, content).is_some()
-        }
-        Intent::SplitAt { pane, at } => {
-            if state.pane(pane).is_none() {
-                return Err(Refused("no such pane"));
-            }
-            // No frame means no camera to unproject against, and a pane opened at a guessed point shows the
-            // wrong water — the failure `INV-04` exists to prevent (#77).
-            if state.pane(pane).and_then(|pane| pane.frame).is_none() {
-                return Err(Refused("the pane has no frame yet"));
-            }
-            ui::split_at(state, pane, at).is_some()
-        }
-        Intent::SplitToWorkspace(pane) => {
-            if state.pane(pane).is_none() {
-                return Err(Refused("no such pane"));
-            }
-            ui::new_workspace_from_pane(state, pane).is_some()
-        }
-        Intent::MovePane { pane, workspace } => {
-            let Some(source) = state.workspace_of(pane) else {
-                return Err(Refused("no such pane"));
-            };
-            if workspace >= state.workspaces.len() {
-                return Err(Refused("no such workspace"));
-            }
-            if workspace == source {
-                return Err(Refused("the pane is already in that workspace"));
-            }
-            if !ui::move_pane_to(state, pane, workspace) {
-                return Err(Refused("the tiling refused the pane"));
-            }
-            true
-        }
-        Intent::CloseOtherPanes => {
-            // **An empty workspace has no focused pane to keep** (#141's state): the intent says so by name rather
-            // than closing nothing and calling it a success.
-            let Some(closed) = state.close_panes_but_focused() else {
-                return Err(Refused("no pane has the keys"));
-            };
-            closed > 0
-        }
-        Intent::CloseAllPanes => {
-            // **The wall's last pane is the one thing no intent may take** (#141), and the refusal is the request's:
-            // `State::close_all_panes` asks the rule before the first pane goes, so a `None` here is a settled no and
-            // not a wall with two panes missing. The words are `LAST_PANE` — the wall's rule — because the rule is
-            // about the wall, never about this workspace.
-            let Some(closed) = state.close_all_panes() else {
-                return Err(Refused(LAST_PANE));
-            };
-            // An empty workspace is already what the client asked for, so nothing closed is not a change.
-            closed > 0
-        }
-        Intent::CloseOtherWorkspaces => state.close_workspaces_but_active() > 0,
-        Intent::CloseWorkspace(workspace) => {
-            if workspace >= state.workspaces.len() {
-                return Err(Refused("no such workspace"));
-            }
-            // **The action and its row read one answer** (#242): the rule is in `State::close_workspace`, the same
-            // predicate `State::offers_close_workspace` gives the menu, so a row that says it can and an action that
-            // says it cannot is unrepresentable.
-            match state.close_workspace(workspace) {
-                Ok(changed) => changed,
-                Err(why) => return Err(Refused(why)),
-            }
-        }
-        Intent::Drop { pane, onto, edge } => {
-            if state.pane(pane).is_none() || state.pane(onto).is_none() {
-                return Err(Refused("no such pane"));
-            }
-            // **A drop on itself is a rule, not a tiling that failed** (#219): the pointer cannot make one —
-            // `drop_for` answers `None` over the pane it is dragging — so a client that says it meant it gets the
-            // rule's own name rather than `Layout::apply`'s `false`.
-            if pane == onto {
-                return Err(Refused(SELF_DROP));
-            }
-            // **The release's own call**: `ui::drop_for` builds the `view::Drop` a pointer's release builds, and
-            // `State::apply_drop` is what that release calls, so the preview a client drew and this landing are
-            // one function. A second layout computed here is the bug this intent exists to prevent.
-            if !state.apply_drop(ui::drop_for(edge, pane, onto)) {
-                // Both ids are on the wall and the tiling still said no: the two are in different workspaces, or
-                // the workspace on screen holds one pane. A crossing is `pane.move` and then a drop (#219).
-                return Err(Refused("the tiling refused the pane"));
-            }
-            true
-        }
-        Intent::Resize { pane, other, ratio } => {
-            if state.pane(pane).is_none() || state.pane(other).is_none() {
-                return Err(Refused("no such pane"));
-            }
-            // **The field's shape first** (#219): a share the tiling cannot hold is a call to fix, not a rule
-            // about panes, and the refusal names the range so a client is not left guessing it.
-            let (low, high) = crate::config::layout::RATIO_RANGE;
-            if !ratio.is_finite() || !(low..=high).contains(&ratio) {
-                return Err(Refused(RATIO_WORDS));
-            }
-            // **The pair names the border**, unordered: a border carries both of its sides because an id alone
-            // cannot say which of a pane's edges is meant (`Layout::set_ratio`). No border, no ratio to set.
-            let border = state.borders().into_iter().find(|border| {
-                (border.a == pane && border.b == other) || (border.a == other && border.b == pane)
-            });
-            let Some(border) = border else {
-                return Err(Refused(NOT_NEIGHBOURS));
-            };
-            // **The border drag's own call**, clamp and all: `State::set_ratio` is what a hand's release ends in,
-            // so the share a client asked for is the share the gutter lands on.
-            if !state.set_ratio(&border, ratio.clamp(low, high)) {
-                return Err(Refused("the tiling refused the pane"));
-            }
-            true
-        }
-        Intent::OpenPane(content) => ui::open_pane_focused(state, content).is_some(),
-        Intent::Follow { pane, unit, zoom } => {
-            let Some(held) = state.pane(pane) else {
-                return Err(Refused("no such pane"));
-            };
-            if !held.content.is_map() {
-                return Err(Refused("the pane draws no map"));
-            }
-            match unit {
-                Some(unit) => {
-                    if !state.follow(pane, unit, zoom) {
-                        // **Absence is not zero** (`INV-01`): a hull with no fix cannot be followed, and the reason
-                        // names the hull rather than leaving a camera where a guess would put it.
-                        return Err(Refused("the hull has not reported"));
-                    }
-                }
-                None => {
-                    if let Some(held) = state.pane_mut(pane) {
-                        held.follow = None;
-                    }
-                }
-            }
-            true
-        }
-        Intent::Select { pane, unit } => {
-            if state.pane(pane).is_none() {
-                return Err(Refused("no such pane"));
-            }
-            match unit {
-                Some(unit) => {
-                    state.select_in(pane, unit);
-                }
-                None => state.clear_selection(pane),
-            }
-            true
-        }
-        Intent::FocusWorkspace(index) => {
-            if index >= state.workspaces.len() {
-                return Err(Refused("no such workspace"));
-            }
-            state.switch_to(index)
-        }
-        Intent::NewWorkspace => {
-            state.add_workspace();
-            true
-        }
-        Intent::Camera { pane, camera } => {
-            if state.pane(pane).is_none() {
-                return Err(Refused("no such pane"));
-            }
-            state.set_camera_of(pane, camera);
-            true
-        }
-        Intent::MenuFocus { row } => {
-            if state.menu().is_none() {
-                return Err(Refused("no menu is open"));
-            }
-            ui::menu_ring(state, row)
-        }
-        Intent::MenuSubmenu { open } => {
-            let Some(menu) = state.menu() else {
-                return Err(Refused("no menu is open"));
-            };
-            if open {
-                // **A submenu opens from the ring** (#164): the keyboard's row, never the pointer's.
-                let Some(ring) = menu.ring else {
-                    return Err(Refused("no row has the ring"));
-                };
-                let Some(row) = ui::menu_rows(state).get(ring).cloned() else {
-                    return Err(Refused("the ring is on no row"));
-                };
-                if !row.opens() {
-                    return Err(Refused("the row opens nothing"));
-                }
-                let MenuAction::Submenu(key) = row.action else {
-                    return Err(Refused("the row opens nothing"));
-                };
-                ui::open_submenu(state, key);
-                // The first row of the surface that just appeared, as a native menu does.
-                ui::menu_ring(state, Some(0));
-                true
-            } else {
-                if menu.open.is_none() {
-                    return Err(Refused("no submenu is open"));
-                }
-                ui::close_submenu(state);
-                true
-            }
-        }
-        Intent::MenuChoose => {
-            if state.menu().is_none() {
-                return Err(Refused("no menu is open"));
-            }
-            if state.menu().and_then(|menu| menu.ring).is_none() {
-                return Err(Refused("no row has the ring"));
-            }
-            ui::menu_choose(state)
-        }
-        Intent::CursorMove { at, origin } => {
-            state.cursor_move(hand.or(origin).unwrap_or_default(), at);
-            true
-        }
-        Intent::CursorPress { origin } => {
-            let origin = hand.or(origin).unwrap_or_default();
-            if !state.cursors.contains_key(&origin) {
-                // Nothing to press with: a client must point before it can press, and guessing a point would be
-                // the wall inventing input nobody gave it.
-                return Err(Refused("the cursor has not been placed"));
-            }
-            state.cursor_press(&origin);
-            true
-        }
-        Intent::CursorRelease { origin } => {
-            let origin = hand.or(origin).unwrap_or_default();
-            let Some(cursor) = state.cursors.get(&origin).copied() else {
-                return Err(Refused("the cursor has not been placed"));
-            };
-            if !cursor.down {
-                return Err(Refused("the cursor is not pressed"));
-            }
-            state.cursor_release(&origin);
-            true
-        }
-        Intent::PairBegin => pair::begin(state)?.0,
-        Intent::PairClaim { code, name } => {
-            // **The one verb whose answer is more than a flag** (#194): the key goes back to the carrier, once.
-            return Ok(Applied::Paired(pair::claim(state, &code, &name)?));
-        }
-        Intent::PairForget { name } => pair::forget(state, &name).0,
-        Intent::OpenSettings => ui::open_settings(state),
-        Intent::CloseSurfaces => ui::close_surfaces(state),
-    };
-    if changed {
-        state.layout_dirty = true;
-    }
-    Ok(Applied::Changed(Changed(changed)))
-}
-
-/// Whether the thing a rename names is on the wall.
-fn target_exists(state: &State, target: RenameTarget) -> bool {
-    match target {
-        RenameTarget::Pane(pane) => state.pane(pane).is_some(),
-        RenameTarget::Workspace(index) => index < state.workspaces.len(),
-    }
-}
-
-fn no_such(target: RenameTarget) -> &'static str {
-    match target {
-        RenameTarget::Pane(_) => "no such pane",
-        RenameTarget::Workspace(_) => "no such workspace",
-    }
-}
-
 /// The socket's path: `$XDG_RUNTIME_DIR/arcons-cc/control.sock`, or the configuration directory when the run
 /// directory is missing.
 ///
@@ -773,7 +414,7 @@ mod tests {
         let mut state = State::default();
         let only = state.focused();
         assert!(state.is_single_pane());
-        let refused = apply(&mut state, Intent::ClosePane(only)).unwrap_err();
+        let refused = state.apply(Intent::ClosePane(only)).unwrap_err();
         assert_eq!(
             refused,
             Refused(LAST_PANE),
@@ -792,7 +433,7 @@ mod tests {
             .split_pane_as(first, camera, PaneContent::Map)
             .expect("a second pane");
         assert_eq!(
-            apply(&mut state, Intent::ClosePane(first)),
+            state.apply(Intent::ClosePane(first)),
             Ok(Applied::Changed(Changed(true)))
         );
         assert_eq!(state.pane_count(), 1);
@@ -805,7 +446,7 @@ mod tests {
         let mut state = State::default();
         let before = state.pane_count();
         assert_eq!(
-            apply(&mut state, Intent::OpenPane(PaneContent::Newsroom)),
+            state.apply(Intent::OpenPane(PaneContent::Newsroom)),
             Ok(Applied::Changed(Changed(true)))
         );
         assert_eq!(state.pane_count(), before + 1);
@@ -825,13 +466,10 @@ mod tests {
         let only = state.focused();
         // Take the wall's only pane out of its workspace: the state #141 allows and #153 restores.
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::MovePane {
-                    pane: only,
-                    workspace: 1
-                }
-            ),
+            state.apply(Intent::MovePane {
+                pane: only,
+                workspace: 1
+            }),
             Ok(Applied::Changed(Changed(true)))
         );
         assert!(
@@ -841,12 +479,12 @@ mod tests {
         assert_eq!(state.active, 1, "the move switched to where the pane went");
         // Back to the empty one, then open a pane there.
         assert_eq!(
-            apply(&mut state, Intent::FocusWorkspace(0)),
+            state.apply(Intent::FocusWorkspace(0)),
             Ok(Applied::Changed(Changed(true)))
         );
         assert!(state.layout().is_none());
         assert_eq!(
-            apply(&mut state, Intent::OpenPane(PaneContent::Newsroom)),
+            state.apply(Intent::OpenPane(PaneContent::Newsroom)),
             Ok(Applied::Changed(Changed(true))),
             "opening a pane in an empty workspace is a change, not a no-op"
         );
@@ -883,13 +521,13 @@ mod tests {
         let keep = state.focused();
         assert_eq!(state.pane_count(), 3);
         assert_eq!(
-            apply(&mut state, Intent::CloseOtherPanes),
+            state.apply(Intent::CloseOtherPanes),
             Ok(Applied::Changed(Changed(true)))
         );
         assert_eq!(state.pane_count(), 1, "one pane is left");
         assert_eq!(state.focused(), keep, "and it is the one with the keys");
         assert_eq!(
-            apply(&mut state, Intent::CloseOtherPanes),
+            state.apply(Intent::CloseOtherPanes),
             Ok(Applied::Changed(Changed(false))),
             "closing nothing is not a change, and not an error"
         );
@@ -905,17 +543,17 @@ mod tests {
     fn closing_the_other_panes_on_an_empty_workspace_is_refused() {
         let mut state = State::default();
         let only = state.focused();
-        apply(
-            &mut state,
-            Intent::MovePane {
+        state
+            .apply(Intent::MovePane {
                 pane: only,
                 workspace: 1,
-            },
-        )
-        .expect("the pane moves");
-        apply(&mut state, Intent::FocusWorkspace(0)).expect("back to the empty one");
+            })
+            .expect("the pane moves");
+        state
+            .apply(Intent::FocusWorkspace(0))
+            .expect("back to the empty one");
         assert_eq!(
-            apply(&mut state, Intent::CloseOtherPanes),
+            state.apply(Intent::CloseOtherPanes),
             Err(Refused("no pane has the keys"))
         );
     }
@@ -930,26 +568,22 @@ mod tests {
         let second = state
             .split_pane_as(only, camera, PaneContent::Map)
             .expect("a second pane");
-        apply(
-            &mut state,
-            Intent::MovePane {
+        state
+            .apply(Intent::MovePane {
                 pane: second,
                 workspace: 1,
-            },
-        )
-        .expect("a pane in workspace 2");
-        apply(
-            &mut state,
-            Intent::MovePane {
+            })
+            .expect("a pane in workspace 2");
+        state
+            .apply(Intent::MovePane {
                 pane: second,
                 workspace: 2,
-            },
-        )
-        .expect("and in workspace 3");
+            })
+            .expect("and in workspace 3");
         assert_eq!(state.workspaces.len(), 3);
         let active_before = state.active;
         assert_eq!(
-            apply(&mut state, Intent::CloseOtherWorkspaces),
+            state.apply(Intent::CloseOtherWorkspaces),
             Ok(Applied::Changed(Changed(true)))
         );
         assert_eq!(state.workspaces.len(), 1, "one workspace is left");
@@ -971,7 +605,7 @@ mod tests {
         );
         let _ = active_before;
         assert_eq!(
-            apply(&mut state, Intent::CloseOtherWorkspaces),
+            state.apply(Intent::CloseOtherWorkspaces),
             Ok(Applied::Changed(Changed(false))),
             "one workspace is nothing to close"
         );
@@ -997,14 +631,11 @@ mod tests {
             panic!("the fixture's live hull has a fix");
         };
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::Follow {
-                    pane,
-                    unit: Some(unit),
-                    zoom: Some(13.0)
-                }
-            ),
+            state.apply(Intent::Follow {
+                pane,
+                unit: Some(unit),
+                zoom: Some(13.0)
+            }),
             Ok(Applied::Changed(Changed(true)))
         );
         let camera = state.camera_of(pane);
@@ -1016,14 +647,12 @@ mod tests {
 
         // A camera intent is the operator's: the follow goes, and the camera stays where it was put.
         let elsewhere = crate::map::geometry::Camera::new((-5.0, 105.0), 10.0);
-        apply(
-            &mut state,
-            Intent::Camera {
+        state
+            .apply(Intent::Camera {
                 pane,
                 camera: elsewhere,
-            },
-        )
-        .expect("a camera");
+            })
+            .expect("a camera");
         assert_eq!(
             state.pane(pane).and_then(|pane| pane.follow),
             None,
@@ -1050,25 +679,19 @@ mod tests {
             .expect("a hull that has never reported")
             .id_unit;
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::Follow {
-                    pane,
-                    unit: Some(silent),
-                    zoom: None
-                }
-            ),
+            state.apply(Intent::Follow {
+                pane,
+                unit: Some(silent),
+                zoom: None
+            }),
             Err(Refused("the hull has not reported"))
         );
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::Follow {
-                    pane,
-                    unit: None,
-                    zoom: None
-                }
-            ),
+            state.apply(Intent::Follow {
+                pane,
+                unit: None,
+                zoom: None
+            }),
             Ok(Applied::Changed(Changed(true))),
             "letting go is never a refusal"
         );
@@ -1092,25 +715,19 @@ mod tests {
 
         state.set_frame_clock(1.0);
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::CursorMove {
-                    at: (100.0, 100.0),
-                    origin: Some(phone.clone()),
-                }
-            ),
+            state.apply(Intent::CursorMove {
+                at: (100.0, 100.0),
+                origin: Some(phone.clone()),
+            }),
             Ok(Applied::Changed(Changed(true)))
         );
         // A second and a half later — one full fade — the tablet points somewhere else.
         state.set_frame_clock(1.0 + crate::ui::Cursor::FADE);
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::CursorMove {
-                    at: (300.0, 200.0),
-                    origin: Some(tablet.clone()),
-                }
-            ),
+            state.apply(Intent::CursorMove {
+                at: (300.0, 200.0),
+                origin: Some(tablet.clone()),
+            }),
             Ok(Applied::Changed(Changed(true)))
         );
 
@@ -1128,13 +745,11 @@ mod tests {
         assert!(state.cursors[&tablet].visible_at(now));
 
         // A press is one client's: the phone's button goes down, the tablet's does not.
-        apply(
-            &mut state,
-            Intent::CursorPress {
+        state
+            .apply(Intent::CursorPress {
                 origin: Some(phone.clone()),
-            },
-        )
-        .expect("the phone's press");
+            })
+            .expect("the phone's press");
         assert!(state.cursors[&phone].down);
         assert!(
             !state.cursors[&tablet].down,
@@ -1143,12 +758,9 @@ mod tests {
 
         // And a client that has not pointed is refused **by name**, not handed somebody else's pointer.
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::CursorPress {
-                    origin: Some(crate::verb::Origin::named("stranger")),
-                }
-            ),
+            state.apply(Intent::CursorPress {
+                origin: Some(crate::verb::Origin::named("stranger")),
+            }),
             Err(Refused("the cursor has not been placed"))
         );
     }
@@ -1161,7 +773,7 @@ mod tests {
         assert!(state.pane(pane).and_then(|pane| pane.frame).is_some());
         let camera = crate::map::geometry::Camera::new((-5.5, 105.25), 9.5);
         assert_eq!(
-            apply(&mut state, Intent::Camera { pane, camera }),
+            state.apply(Intent::Camera { pane, camera }),
             Ok(Applied::Changed(Changed(true)))
         );
         assert_eq!(state.camera_of(pane), camera);
@@ -1182,11 +794,11 @@ mod tests {
         let ghost = 99;
         assert!(state.pane(ghost).is_none());
         assert_eq!(
-            apply(&mut state, Intent::FocusPane(ghost)),
+            state.apply(Intent::FocusPane(ghost)),
             Err(Refused("no such pane"))
         );
         assert_eq!(
-            apply(&mut state, Intent::ClosePane(ghost)),
+            state.apply(Intent::ClosePane(ghost)),
             Err(Refused("no such pane"))
         );
     }
@@ -1198,18 +810,15 @@ mod tests {
         let before = state.active;
         let pane = state.focused();
         assert_eq!(
-            apply(&mut state, Intent::FocusWorkspace(99)),
+            state.apply(Intent::FocusWorkspace(99)),
             Err(Refused("no such workspace"))
         );
         assert_eq!(state.active, before);
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::MovePane {
-                    pane,
-                    workspace: 99
-                }
-            ),
+            state.apply(Intent::MovePane {
+                pane,
+                workspace: 99
+            }),
             Err(Refused("no such workspace"))
         );
     }
@@ -1223,13 +832,10 @@ mod tests {
             .workspace_of(pane)
             .expect("the focused pane is in a workspace");
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::MovePane {
-                    pane,
-                    workspace: here
-                }
-            ),
+            state.apply(Intent::MovePane {
+                pane,
+                workspace: here
+            }),
             Err(Refused("the pane is already in that workspace"))
         );
     }
@@ -1240,14 +846,12 @@ mod tests {
     fn a_rename_lands_without_a_sheet() {
         let mut state = State::default();
         assert!(matches!(state.interaction, crate::ui::Interaction::Idle));
-        apply(
-            &mut state,
-            Intent::Rename {
+        state
+            .apply(Intent::Rename {
                 target: RenameTarget::Workspace(0),
                 name: Some("Straits watch".to_string()),
-            },
-        )
-        .expect("a name is not a change the machine refuses");
+            })
+            .expect("a name is not a change the machine refuses");
         assert_eq!(state.workspaces[0].name, "Straits watch");
         assert!(
             matches!(state.interaction, crate::ui::Interaction::Idle),
@@ -1255,14 +859,12 @@ mod tests {
         );
 
         // An empty name falls back to the default, because the header has to say something.
-        apply(
-            &mut state,
-            Intent::Rename {
+        state
+            .apply(Intent::Rename {
                 target: RenameTarget::Workspace(0),
                 name: None,
-            },
-        )
-        .expect("clearing a workspace's name is allowed");
+            })
+            .expect("clearing a workspace's name is allowed");
         assert_eq!(state.workspaces[0].name, "Workspace 1");
     }
 
@@ -1274,13 +876,10 @@ mod tests {
         let pane = state.focused();
         assert!(state.pane(pane).and_then(|pane| pane.frame).is_none());
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::SplitAt {
-                    pane,
-                    at: (10.0, 10.0)
-                }
-            ),
+            state.apply(Intent::SplitAt {
+                pane,
+                at: (10.0, 10.0)
+            }),
             Err(Refused("the pane has no frame yet"))
         );
         assert_eq!(state.pane_count(), 1, "the refusal left the wall alone");
@@ -1291,16 +890,16 @@ mod tests {
     fn selecting_a_hull_and_clearing_it() {
         let mut state = State::default();
         let pane = state.focused();
-        apply(
-            &mut state,
-            Intent::Select {
+        state
+            .apply(Intent::Select {
                 pane,
                 unit: Some(7),
-            },
-        )
-        .expect("a hull");
+            })
+            .expect("a hull");
         assert_eq!(state.selected_in(pane), Some(7));
-        apply(&mut state, Intent::Select { pane, unit: None }).expect("a clear");
+        state
+            .apply(Intent::Select { pane, unit: None })
+            .expect("a clear");
         assert_eq!(state.selected_in(pane), None);
     }
 
@@ -1320,7 +919,7 @@ mod tests {
             crate::ui::Interaction::Menu { open: Some(_), .. }
         ));
         assert_eq!(
-            apply(&mut state, Intent::CloseSurfaces),
+            state.apply(Intent::CloseSurfaces),
             Ok(Applied::Changed(Changed(true)))
         );
         assert!(
@@ -1331,7 +930,7 @@ mod tests {
             "the waterfall closes first"
         );
         assert_eq!(
-            apply(&mut state, Intent::CloseSurfaces),
+            state.apply(Intent::CloseSurfaces),
             Ok(Applied::Changed(Changed(true)))
         );
         assert!(
@@ -1339,7 +938,7 @@ mod tests {
             "then the menu"
         );
         assert_eq!(
-            apply(&mut state, Intent::CloseSurfaces),
+            state.apply(Intent::CloseSurfaces),
             Ok(Applied::Changed(Changed(false))),
             "and with nothing open, dismissing changes nothing"
         );
@@ -1435,14 +1034,11 @@ mod pane_drop {
             .map(|border| (border.dir, border.at, border.start, border.span))
             .collect();
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::Drop {
-                    pane: first,
-                    onto: second,
-                    edge: Edge::Centre,
-                }
-            ),
+            state.apply(Intent::Drop {
+                pane: first,
+                onto: second,
+                edge: Edge::Centre,
+            }),
             Ok(Applied::Changed(Changed(true))),
             "a swap is a change on screen"
         );
@@ -1479,14 +1075,11 @@ mod pane_drop {
         ] {
             let (mut state, first, second, _third) = three_panes();
             assert_eq!(
-                apply(
-                    &mut state,
-                    Intent::Drop {
-                        pane: second,
-                        onto: first,
-                        edge,
-                    }
-                ),
+                state.apply(Intent::Drop {
+                    pane: second,
+                    onto: first,
+                    edge,
+                }),
                 Ok(Applied::Changed(Changed(true))),
                 "a drop on the {edge:?} edge is a change"
             );
@@ -1527,7 +1120,7 @@ mod pane_drop {
         let at = (target.x + target.w / 2.0, target.y + target.h * 0.1);
         assert_eq!(
             stated.drop_for(first, at),
-            Some(ui::drop_for(Edge::Top, first, second)),
+            Some(crate::ui::drop_for(Edge::Top, first, second)),
             "a point in the target's top band is the top edge, and the edge's drop is the pointer's drop"
         );
 
@@ -1536,7 +1129,7 @@ mod pane_drop {
         let middle = (target.x + target.w / 2.0, target.y + target.h / 2.0);
         assert_eq!(
             stated.drop_for(first, middle),
-            Some(ui::drop_for(Edge::Centre, first, second)),
+            Some(crate::ui::drop_for(Edge::Centre, first, second)),
             "the middle of a pane is a swap, and the centre edge is the same swap"
         );
 
@@ -1547,14 +1140,11 @@ mod pane_drop {
         };
         assert!(statep.apply_drop(pointer), "the release landed");
         assert_eq!(
-            apply(
-                &mut stated,
-                Intent::Drop {
-                    pane: first,
-                    onto: second,
-                    edge: Edge::Top,
-                }
-            ),
+            stated.apply(Intent::Drop {
+                pane: first,
+                onto: second,
+                edge: Edge::Top,
+            }),
             Ok(Applied::Changed(Changed(true)))
         );
         assert_eq!(
@@ -1579,14 +1169,11 @@ mod pane_drop {
         let (mut state, first, second, _third) = three_panes();
         let panel = state.pane_viewport().w as f32;
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::Resize {
-                    pane: first,
-                    other: second,
-                    ratio: 0.58,
-                }
-            ),
+            state.apply(Intent::Resize {
+                pane: first,
+                other: second,
+                ratio: 0.58,
+            }),
             Ok(Applied::Changed(Changed(true)))
         );
         let split = rect(&state, second).x;
@@ -1597,14 +1184,11 @@ mod pane_drop {
         // **The pair names the border**, so the other order is the same request: a client that reads the tiling
         // cannot know which of the two the border calls its first side.
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::Resize {
-                    pane: second,
-                    other: first,
-                    ratio: 0.42,
-                }
-            ),
+            state.apply(Intent::Resize {
+                pane: second,
+                other: first,
+                ratio: 0.42,
+            }),
             Ok(Applied::Changed(Changed(true))),
             "the same border, named the other way round"
         );
@@ -1623,14 +1207,11 @@ mod pane_drop {
         let (mut state, first, _second, _third) = three_panes();
         for edge in crate::verb::EDGES {
             assert_eq!(
-                apply(
-                    &mut state,
-                    Intent::Drop {
-                        pane: first,
-                        onto: first,
-                        edge: *edge,
-                    }
-                ),
+                state.apply(Intent::Drop {
+                    pane: first,
+                    onto: first,
+                    edge: *edge,
+                }),
                 Err(Refused("the pane cannot be swapped with itself")),
                 "{edge:?} on the pane itself is the rule, not a layout that refused"
             );
@@ -1650,25 +1231,22 @@ mod pane_drop {
         let elsewhere = state
             .split_pane_as(lone, camera, PaneContent::Map)
             .expect("a second pane");
-        apply(
-            &mut state,
-            Intent::MovePane {
+        state
+            .apply(Intent::MovePane {
                 pane: elsewhere,
                 workspace: 1,
-            },
-        )
-        .expect("a pane in workspace 2");
-        apply(&mut state, Intent::FocusWorkspace(0)).expect("back to the wall with one pane");
+            })
+            .expect("a pane in workspace 2");
+        state
+            .apply(Intent::FocusWorkspace(0))
+            .expect("back to the wall with one pane");
         assert_eq!(state.pane_count(), 1);
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::Drop {
-                    pane: lone,
-                    onto: elsewhere,
-                    edge: Edge::Right,
-                }
-            ),
+            state.apply(Intent::Drop {
+                pane: lone,
+                onto: elsewhere,
+                edge: Edge::Right,
+            }),
             Err(Refused("the tiling refused the pane")),
             "a workspace's last pane has no cell to split"
         );
@@ -1690,26 +1268,20 @@ mod pane_drop {
             "the fixture must not have a border between {second} and {third}"
         );
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::Resize {
-                    pane: second,
-                    other: third,
-                    ratio: 0.5,
-                }
-            ),
+            state.apply(Intent::Resize {
+                pane: second,
+                other: third,
+                ratio: 0.5,
+            }),
             Err(Refused("those panes are not neighbours"))
         );
         // A pane is not its own neighbour either.
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::Resize {
-                    pane: first,
-                    other: first,
-                    ratio: 0.5,
-                }
-            ),
+            state.apply(Intent::Resize {
+                pane: first,
+                other: first,
+                ratio: 0.5,
+            }),
             Err(Refused("those panes are not neighbours"))
         );
         assert_eq!(state.pane_count(), 3);
@@ -1723,14 +1295,11 @@ mod pane_drop {
         let (low, high) = crate::config::layout::RATIO_RANGE;
         for ratio in [-0.5, 0.0, low - 0.01, high + 0.01, 1.0, 7.0, f32::NAN] {
             assert_eq!(
-                apply(
-                    &mut state,
-                    Intent::Resize {
-                        pane: first,
-                        other: second,
-                        ratio,
-                    }
-                ),
+                state.apply(Intent::Resize {
+                    pane: first,
+                    other: second,
+                    ratio,
+                }),
                 Err(Refused("\"ratio\" is a share from 0.05 to 0.95")),
                 "{ratio} is not a share a split can take"
             );
@@ -1746,25 +1315,19 @@ mod pane_drop {
         );
         // The ends of the range are inside it.
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::Resize {
-                    pane: first,
-                    other: second,
-                    ratio: low,
-                }
-            ),
+            state.apply(Intent::Resize {
+                pane: first,
+                other: second,
+                ratio: low,
+            }),
             Ok(Applied::Changed(Changed(true)))
         );
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::Resize {
-                    pane: first,
-                    other: second,
-                    ratio: high,
-                }
-            ),
+            state.apply(Intent::Resize {
+                pane: first,
+                other: second,
+                ratio: high,
+            }),
             Ok(Applied::Changed(Changed(true)))
         );
     }
@@ -1778,37 +1341,28 @@ mod pane_drop {
         assert!(state.pane(ghost).is_none());
         for (pane, onto) in [(ghost, first), (first, ghost)] {
             assert_eq!(
-                apply(
-                    &mut state,
-                    Intent::Drop {
-                        pane,
-                        onto,
-                        edge: Edge::Left,
-                    }
-                ),
+                state.apply(Intent::Drop {
+                    pane,
+                    onto,
+                    edge: Edge::Left,
+                }),
                 Err(Refused("no such pane"))
             );
         }
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::Resize {
-                    pane: ghost,
-                    other: first,
-                    ratio: 0.5,
-                }
-            ),
+            state.apply(Intent::Resize {
+                pane: ghost,
+                other: first,
+                ratio: 0.5,
+            }),
             Err(Refused("no such pane"))
         );
         assert_eq!(
-            apply(
-                &mut state,
-                Intent::Resize {
-                    pane: first,
-                    other: ghost,
-                    ratio: 0.5,
-                }
-            ),
+            state.apply(Intent::Resize {
+                pane: first,
+                other: ghost,
+                ratio: 0.5,
+            }),
             Err(Refused("no such pane"))
         );
         // The words are the wire's, and a word this wall does not use is not an edge.
@@ -1837,12 +1391,12 @@ mod workspace_close {
         let mut state = State::default();
         assert_eq!(state.workspaces.len(), 3);
         assert_eq!(
-            apply(&mut state, Intent::FocusWorkspace(1)),
+            state.apply(Intent::FocusWorkspace(1)),
             Ok(Applied::Changed(Changed(true)))
         );
         assert!(state.workspaces[1].panes.is_empty());
         assert_eq!(
-            apply(&mut state, Intent::CloseWorkspace(1)),
+            state.apply(Intent::CloseWorkspace(1)),
             Ok(Applied::Changed(Changed(true)))
         );
         assert_eq!(state.workspaces.len(), 2, "the workspace is gone");
@@ -1870,7 +1424,7 @@ mod workspace_close {
         let only = state.focused();
         assert_eq!(state.workspaces[0].panes.len(), 1);
         assert_eq!(
-            apply(&mut state, Intent::CloseWorkspace(0)),
+            state.apply(Intent::CloseWorkspace(0)),
             Err(Refused("the workspace holds panes"))
         );
         assert_eq!(state.workspaces.len(), 3, "the refusal changed nothing");
@@ -1896,7 +1450,7 @@ mod workspace_close {
         assert_eq!(state.workspaces.len(), 1);
         assert!(state.workspaces[0].panes.is_empty());
         assert_eq!(
-            apply(&mut state, Intent::CloseWorkspace(0)),
+            state.apply(Intent::CloseWorkspace(0)),
             Err(Refused("the last workspace on the wall"))
         );
         assert_eq!(state.workspaces.len(), 1, "a refusal is a settled no");
@@ -1907,7 +1461,7 @@ mod workspace_close {
         );
         assert_eq!(LAST_WORKSPACE, "the last workspace on the wall");
         assert_eq!(
-            apply(&mut state, Intent::CloseWorkspace(9)),
+            state.apply(Intent::CloseWorkspace(9)),
             Err(Refused("no such workspace"))
         );
     }
@@ -1967,7 +1521,7 @@ mod close_all {
     fn close_all_empties_the_workspace_on_screen_and_keeps_its_chip() {
         let (mut state, first, second, third) = two_workspaces();
         assert_eq!(
-            apply(&mut state, Intent::CloseAllPanes),
+            state.apply(Intent::CloseAllPanes),
             Ok(Applied::Changed(Changed(true))),
             "the wall changed on screen"
         );
@@ -2021,7 +1575,7 @@ mod close_all {
             .expect("a third pane");
         assert_eq!(state.pane_count(), 3);
         assert_eq!(
-            apply(&mut state, Intent::CloseAllPanes),
+            state.apply(Intent::CloseAllPanes),
             Err(Refused(LAST_PANE)),
             "the rule is `LAST_PANE` — the wall's name, not a rule about the workspace"
         );
@@ -2042,10 +1596,7 @@ mod close_all {
         let mut state = State::default();
         let only = state.focused();
         assert_eq!(state.pane_count(), 1);
-        assert_eq!(
-            apply(&mut state, Intent::CloseAllPanes),
-            Err(Refused(LAST_PANE))
-        );
+        assert_eq!(state.apply(Intent::CloseAllPanes), Err(Refused(LAST_PANE)));
         assert!(state.pane(only).is_some(), "the refusal changed nothing");
     }
 
@@ -2058,7 +1609,7 @@ mod close_all {
         assert_eq!(state.active, index, "a new workspace is on screen");
         assert!(state.workspaces[index].panes.is_empty());
         assert_eq!(
-            apply(&mut state, Intent::CloseAllPanes),
+            state.apply(Intent::CloseAllPanes),
             Ok(Applied::Changed(Changed(false))),
             "the workspace on screen holds no pane, so no pixel moved"
         );
@@ -2072,7 +1623,7 @@ mod close_all {
     fn close_others_keeps_a_pane_and_close_all_does_not() {
         let (mut state, first, second, _third) = two_workspaces();
         assert_eq!(
-            apply(&mut state, Intent::CloseOtherPanes),
+            state.apply(Intent::CloseOtherPanes),
             Ok(Applied::Changed(Changed(true)))
         );
         assert_eq!(
@@ -2089,7 +1640,7 @@ mod close_all {
 
         let (mut state, first, second, third) = two_workspaces();
         assert_eq!(
-            apply(&mut state, Intent::CloseAllPanes),
+            state.apply(Intent::CloseAllPanes),
             Ok(Applied::Changed(Changed(true)))
         );
         assert_ne!(

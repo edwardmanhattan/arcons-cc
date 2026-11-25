@@ -198,7 +198,7 @@ fn the_walls_failures_are_logged_and_not_printed_to_a_console_nobody_reads() {
 /// **A handler may not change the wall except through the control plane** (#173, epic #162).
 ///
 /// `ADR-0005` says a client sends intents and the wall renders them; `#170` made that one door
-/// (`control::apply`). The day a closure in the view assigns a field "just this once", there are two dialects of
+/// (`State::apply`). The day a closure in the view assigns a field "just this once", there are two dialects of
 /// state change again and the socket is the one that drifts. So this test reads every event handler the view
 /// builds — `El::on_press`, `on_secondary_press`, the `_local` variants, `on_drag`, `on_wheel`, `on_submit`,
 /// `on_hover` — and fails when one of them calls a **settled** mutator directly.
@@ -206,8 +206,8 @@ fn the_walls_failures_are_logged_and_not_printed_to_a_console_nobody_reads() {
 /// The exceptions are not hidden: they are the handlers' own helper functions, named below with the reason each
 /// one is allowed to touch the wall itself. A new helper is a deliberate line in this list, not a quiet bypass.
 #[test]
-fn no_handler_changes_the_wall_except_through_control() {
-    // The wall's settled changes: the mutators `control::apply` calls. A handler calling one of these has gone
+fn no_handler_changes_the_wall_except_through_the_door() {
+    // The wall's settled changes: the mutators `State::apply` calls. A handler calling one of these has gone
     // around the door.
     const SETTLED: &[&str] = &[
         "focus_pane",
@@ -283,7 +283,7 @@ fn no_handler_changes_the_wall_except_through_control() {
             if handler.body.contains(&call) {
                 offenders.push(format!(
                     "line {}: `{}` calls `{settled}` — that is the door's job (#173); call \
-                     `control::apply` with the intent it means",
+                     `State::apply` with the intent it means",
                     handler.line, handler.kind
                 ));
             }
@@ -428,7 +428,7 @@ fn the_remote_twin_s_golden_is_the_pointer_twin_s() {
 ///
 /// `panes-drop` is a wall reached by a hand on a pane's handle — `fixtures/scripts/panes-drop.json` presses it and
 /// drags it to another pane's top edge — and `panes-drop-remote` is the same wall reached by one `pane.drop`, through
-/// `control::apply`. The two goldens are **one file**, byte for byte, and this test is what says so: without it a
+/// `State::apply`. The two goldens are **one file**, byte for byte, and this test is what says so: without it a
 /// `--update-goldens` run on one of them would let a drop intent that computed its own layout carry its own golden,
 /// and the pair would prove nothing while both stayed green.
 ///

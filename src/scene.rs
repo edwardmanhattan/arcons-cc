@@ -691,7 +691,7 @@ fn pairing(state: &mut State) {
     // drawing it, so the flag is the scene's to carry — otherwise the golden and the structure assertion would
     // be looking at two different codes, one of them a lottery.
     state.headless = true;
-    crate::control::apply(state, crate::verb::Intent::PairBegin).ok();
+    state.apply(crate::verb::Intent::PairBegin).ok();
 }
 
 /// The `panes-menu` scene (#81): **a tiled wall with its menu open**, which is the only wall that offers
@@ -763,7 +763,7 @@ fn panes_drop(state: &mut State) {
 /// The `panes-drop-remote` scene (#219): **the pointer's twin, driven only by intents**.
 ///
 /// `load`'s panes and nothing else, then `fixtures/intents/panes-drop-remote.json` — one `pane.drop` between two
-/// frames, through `control::apply`. It is the same wall `panes-drop` reaches with a hand on the handle, and the
+/// frames, through `State::apply`. It is the same wall `panes-drop` reaches with a hand on the handle, and the
 /// golden is the same file, which is the claim: a slot a client can name and a drag a hand makes are one landing.
 fn panes_drop_remote(state: &mut State) {
     panes(state);
@@ -1457,7 +1457,7 @@ fn beside(at: (f32, f32)) -> (f32, f32) {
 ///
 /// The steps are `cursor.move`, `cursor.press`, `cursor.release` at 1.90–1.94 seconds, so the capture at 2 s is a
 /// cursor that has just let go: drawn, with the card its press opened behind it. Everything reaching the wall goes
-/// through `control::apply`, so what the capture proves is that a *remote* press selects a hull, not that the
+/// through `State::apply`, so what the capture proves is that a *remote* press selects a hull, not that the
 /// scene can call `select_in`.
 fn cursor_hull(state: &mut State) {
     load(state);
@@ -1630,7 +1630,7 @@ pub fn load_intents(name: &str) -> Vec<(f64, crate::verb::Intent)> {
 /// **Apply the script's due steps**, in order, and say whether anything changed (#172).
 ///
 /// Called from `poll` with the frame clock: a virtual clock in a capture, the real one on a wall. The steps go
-/// through `control::apply` — the same door the pointer and a socket use — so a scene driven this way is a
+/// through `State::apply` — the same door the pointer and a socket use — so a scene driven this way is a
 /// client, not a second implementation of one.
 pub fn apply_due_intents(state: &mut State, now: f64) -> bool {
     let mut changed = false;
@@ -1647,7 +1647,7 @@ pub fn apply_due_intents(state: &mut State, now: f64) -> bool {
         // must see the time the file says, not the end of the script. The clock is restored after each one.
         let clock = state.frame_clock();
         state.set_frame_clock(*at);
-        let result = crate::control::apply(state, intent);
+        let result = state.apply(intent);
         state.set_frame_clock(clock);
         match result {
             Ok(applied) => changed |= applied.changed(),
@@ -1851,7 +1851,7 @@ mod tests {
     use super::*;
 
     /// **A remote's press on a hull opens its card** (#167): the scene's three cursor intents reach the wall
-    /// through `control::apply`, the press lands on the marker the drawing would put there, and the cursor is
+    /// through `State::apply`, the press lands on the marker the drawing would put there, and the cursor is
     /// still visible a sixth of a second later.
     #[test]
     fn the_cursor_scene_presses_the_hull_it_points_at() {

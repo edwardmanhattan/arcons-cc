@@ -12,7 +12,6 @@ use std::time::Instant;
 
 use rune::{El, col, el, row, spacer, text};
 
-use crate::control;
 use crate::ui::tokens;
 use crate::units::card::{Card, Placement, WIDTH};
 use crate::verb::Intent;
@@ -112,15 +111,13 @@ pub fn card(card: &Card, placement: Placement, now: Instant, follow: Option<Foll
                         .grow(1.0),
                 )
                 .on_press(move |state: &mut crate::ui::State| {
-                    control::apply(
-                        state,
-                        Intent::Follow {
+                    state
+                        .apply(Intent::Follow {
                             pane,
                             unit,
                             zoom: None,
-                        },
-                    )
-                    .ok();
+                        })
+                        .ok();
                 }),
         );
     }

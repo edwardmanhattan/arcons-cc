@@ -1138,11 +1138,11 @@ mod tests {
         let before = state.pane_count();
         let map = state.focused();
         // The header's control builds this intent; a capture and a client send it (#170).
-        crate::control::apply(
-            &mut state,
-            crate::verb::Intent::OpenPane(crate::verb::PaneContent::Tree { organisation: None }),
-        )
-        .expect("a tree pane opens beside the focused one");
+        state
+            .apply(crate::verb::Intent::OpenPane(
+                crate::verb::PaneContent::Tree { organisation: None },
+            ))
+            .expect("a tree pane opens beside the focused one");
         assert_eq!(state.pane_count(), before + 1, "the wall gained a pane");
         let tree = state.focused();
         assert_ne!(tree, map, "the new pane is the one the operator asked for");

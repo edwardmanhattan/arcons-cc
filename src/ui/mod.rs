@@ -19,6 +19,7 @@
 //! so the gate stays free of C++ and of a network. `--probe-map` is the headless witness.
 
 pub mod devices;
+mod door;
 pub mod filter;
 pub mod icons;
 pub mod installations;
@@ -44,7 +45,6 @@ use std::process::ExitCode;
 use rune::{AppSpec, Cx, El, col, el, row, spacer, text};
 
 use crate::config;
-use crate::control;
 use crate::live::LiveThread;
 use crate::map::geometry::Camera;
 use crate::units::Picture;
@@ -1788,13 +1788,13 @@ impl State {
     pub fn press_marker(&mut self, pane: ViewId, id_unit: i64) {
         self.marker_press = true;
         let unit = (self.selected_in(pane) != Some(id_unit)).then_some(id_unit);
-        control::apply(self, Intent::Select { pane, unit }).ok();
+        self.apply(Intent::Select { pane, unit }).ok();
     }
 
     /// A press on the map itself: clear that pane, unless the press was a marker's.
     pub fn press_background(&mut self, pane: ViewId) {
         if !self.marker_press {
-            control::apply(self, Intent::Select { pane, unit: None }).ok();
+            self.apply(Intent::Select { pane, unit: None }).ok();
         }
     }
 
@@ -1872,27 +1872,21 @@ impl State {
         };
         let local = (at.0 - f64::from(rect.x), at.1 - f64::from(rect.y));
         let hull = self.hull_at(id, local);
-        control::apply(self, Intent::FocusPane(id)).ok();
+        self.apply(Intent::FocusPane(id)).ok();
         match hull {
             Some(unit) => {
-                control::apply(
-                    self,
-                    Intent::Select {
-                        pane: id,
-                        unit: Some(unit),
-                    },
-                )
+                self.apply(Intent::Select {
+                    pane: id,
+                    unit: Some(unit),
+                })
                 .ok();
             }
             // The water: clear this pane's card, as a press on the map does (#99).
             None => {
-                control::apply(
-                    self,
-                    Intent::Select {
-                        pane: id,
-                        unit: None,
-                    },
-                )
+                self.apply(Intent::Select {
+                    pane: id,
+                    unit: None,
+                })
                 .ok();
             }
         }
@@ -2516,7 +2510,9 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .help("Name this workspace")
                 .on_press(|state: &mut State| {
                     let index = state.active;
-                    control::apply(state, Intent::BeginRename(RenameTarget::Workspace(index))).ok();
+                    state
+                        .apply(Intent::BeginRename(RenameTarget::Workspace(index)))
+                        .ok();
                 }),
         )
         .child(workspace_chips(state))
@@ -2539,11 +2535,9 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .font(tokens::LABEL)
                 .color(tokens::ink_dim())
                 .on_press(|state: &mut State| {
-                    control::apply(
-                        state,
-                        Intent::OpenPane(PaneContent::Tree { organisation: None }),
-                    )
-                    .ok();
+                    state
+                        .apply(Intent::OpenPane(PaneContent::Tree { organisation: None }))
+                        .ok();
                 }),
         )
         // The newsroom control (#136), in the same row and the same shape as the tree's: a word, and a
@@ -2554,7 +2548,7 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .font(tokens::LABEL)
                 .color(tokens::ink_dim())
                 .on_press(|state: &mut State| {
-                    control::apply(state, Intent::OpenPane(PaneContent::Newsroom)).ok();
+                    state.apply(Intent::OpenPane(PaneContent::Newsroom)).ok();
                 }),
         )
         .child(
@@ -2563,7 +2557,7 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
                 .font(tokens::LABEL)
                 .color(tokens::ink_dim())
                 .on_press(|state: &mut State| {
-                    control::apply(state, Intent::OpenSettings).ok();
+                    state.apply(Intent::OpenSettings).ok();
                 }),
         );
 
@@ -2738,8 +2732,8 @@ fn workspace_chips(state: &State) -> El {
                 .on_press(move |state: &mut State| {
                     // A chip press starts the next surface: the workspace menu, if one is open, goes before the
                     // wall switches.
-                    control::apply(state, Intent::CloseSurfaces).ok();
-                    control::apply(state, Intent::FocusWorkspace(index)).ok();
+                    state.apply(Intent::CloseSurfaces).ok();
+                    state.apply(Intent::FocusWorkspace(index)).ok();
                 })
                 // **Name a workspace that is not on screen** (#154): a right-click on a chip opens the
                 // rename sheet for **that** chip, without switching to it. The gesture is the pane menu's
@@ -2755,7 +2749,8 @@ fn workspace_chips(state: &State) -> El {
                     if index == state.active {
                         open_workspace_menu(state, index, (at.x, at.y));
                     } else {
-                        control::apply(state, Intent::BeginRename(RenameTarget::Workspace(index)))
+                        state
+                            .apply(Intent::BeginRename(RenameTarget::Workspace(index)))
                             .ok();
                     }
                 })
@@ -2779,7 +2774,7 @@ fn workspace_chips(state: &State) -> El {
             .color(tokens::ink_dim())
             .help("New workspace")
             .on_press(|state: &mut State| {
-                control::apply(state, Intent::NewWorkspace).ok();
+                state.apply(Intent::NewWorkspace).ok();
             }),
     )
 }
@@ -2978,7 +2973,7 @@ impl SettingRow {
                 // room read off the wall, and a sheet drawn under that panel is a second surface over the one the
                 // pair is looking at. Pressing `Close` is the sheet's own way out and closes nothing else.
                 let yields_the_wall = matches!(self, SettingRow::Pair);
-                control::apply(state, intent).ok();
+                state.apply(intent).ok();
                 if yields_the_wall {
                     close_settings(state);
                 }
@@ -3363,7 +3358,7 @@ fn filter_panel(state: &State, body: El) -> El {
             // **Dismissing one surface is an intent** (#173): the panel's catcher walks the same ladder Escape
             // does, so a client's `surface.close` and a press on the wall's glass cannot disagree.
             .on_press(|state: &mut State| {
-                control::apply(state, Intent::CloseSurfaces).ok();
+                state.apply(Intent::CloseSurfaces).ok();
             })
             .child(panel),
     )
@@ -3586,7 +3581,7 @@ fn close_plate() -> El {
         .border(tokens::HAIRLINE, tokens::focus_edge())
         .on_press(|state: &mut State| {
             if let Some(pane) = state.maximised() {
-                control::apply(state, Intent::ToggleFullSize(pane)).ok();
+                state.apply(Intent::ToggleFullSize(pane)).ok();
             }
         })
 }
@@ -3858,7 +3853,7 @@ fn pane_chrome(state: &State, pane: ViewId, rect: Rect) -> El {
         .color(tokens::ink())
         .help(help)
         .on_press(move |state: &mut State| {
-            control::apply(state, Intent::ToggleFullSize(pane)).ok();
+            state.apply(Intent::ToggleFullSize(pane)).ok();
         });
     row()
         .key(format!("pane-chrome-{pane}"))
@@ -4145,7 +4140,9 @@ fn name_plate(pane: &Pane) -> El {
         .fill(tokens::name_plate())
         .border(tokens::HAIRLINE, tokens::hairline())
         .on_press(move |state: &mut State| {
-            control::apply(state, Intent::BeginRename(RenameTarget::Pane(id))).ok();
+            state
+                .apply(Intent::BeginRename(RenameTarget::Pane(id)))
+                .ok();
         })
         .child(
             text(shown)
@@ -4736,7 +4733,7 @@ impl MenuItem {
             Some(intent) => {
                 // A refusal is the row's own rule answering: `Close` on the wall's last pane is not offered
                 // (that row is not built), so a refusal here is a race the redraw settles.
-                control::apply(state, intent).ok();
+                state.apply(intent).ok();
             }
             // A trigger's press opens the surface its hover would: the wall has a mouse and a hand.
             None => {
@@ -4884,11 +4881,13 @@ fn workspace_menu_view(state: &State, body: El) -> El {
         let closing = label == MENU_CLOSE_WORKSPACE;
         row = row.on_press(move |state: &mut State| {
             // The press that starts the next intent dismisses the menu first, through the control plane.
-            control::apply(state, Intent::CloseSurfaces).ok();
+            state.apply(Intent::CloseSurfaces).ok();
             if closing {
-                control::apply(state, Intent::CloseWorkspace(index)).ok();
+                state.apply(Intent::CloseWorkspace(index)).ok();
             } else {
-                control::apply(state, Intent::BeginRename(RenameTarget::Workspace(index))).ok();
+                state
+                    .apply(Intent::BeginRename(RenameTarget::Workspace(index)))
+                    .ok();
             }
         });
         surface = surface.child(row);
@@ -5163,7 +5162,7 @@ pub const ELLIPSIS: char = '…';
 #[cfg(feature = "map")]
 fn open_menu(state: &mut State, id: ViewId, event: &rune::PointerEvent, scale: f32) {
     let scale = if scale > 0.0 { scale } else { 1.0 };
-    control::apply(state, Intent::FocusPane(id)).ok();
+    state.apply(Intent::FocusPane(id)).ok();
     // Through the machine, so a right-click during a lift is refused rather than opening a surface the
     // operator's held pointer cannot reach (#101).
     state.begin(Begin::Menu {
@@ -5179,16 +5178,14 @@ fn press_in(state: &mut State, id: ViewId) {
     // **that pane's** selection is cleared (#99 — the map underneath is that pane's, and the press must not
     // walk over to the pane that happens to have the keys), and the press was not for the menu, so the menu
     // goes.
-    control::apply(state, Intent::FocusPane(id)).ok();
-    control::apply(
-        state,
-        Intent::Select {
+    state.apply(Intent::FocusPane(id)).ok();
+    state
+        .apply(Intent::Select {
             pane: id,
             unit: None,
-        },
-    )
-    .ok();
-    control::apply(state, Intent::CloseSurfaces).ok();
+        })
+        .ok();
+    state.apply(Intent::CloseSurfaces).ok();
 }
 
 /// #81 `Close pane`: the pane goes, its slot collapses into its sibling, and its map thread is joined
@@ -5490,14 +5487,12 @@ fn wheel(state: &mut State, id: ViewId, event: &rune::WheelEvent) -> bool {
     );
     // **The gesture computes, the intent applies** (#170): the zoom maths is the viewer's, and the camera it
     // settles on is a value the control plane can also be sent.
-    control::apply(
-        state,
-        Intent::Camera {
+    state
+        .apply(Intent::Camera {
             pane: id,
             camera: moved,
-        },
-    )
-    .ok();
+        })
+        .ok();
     if let Some(map) = state.pane(id).and_then(|pane| pane.map.as_ref()) {
         map.set_camera(moved);
     }
@@ -5546,14 +5541,12 @@ fn drag_map(state: &mut State, id: ViewId, drag: &mut rune::Drag) {
             // A press that did not move is not a change: applying the camera it started on would schedule a
             // write of an arrangement that is already on disk (`arranged()`), and say "changed" for a click.
             if settled != current {
-                control::apply(
-                    state,
-                    Intent::Camera {
+                state
+                    .apply(Intent::Camera {
                         pane: id,
                         camera: settled,
-                    },
-                )
-                .ok();
+                    })
+                    .ok();
             }
             // One render now rather than at the next idle tick: the gesture just ended, and the
             // operator is looking at where it ended.
@@ -6234,7 +6227,7 @@ fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool
         if let Some(intent) = intent {
             // A refusal is the model's own answer (a row that opens nothing, no ring to act on): the key is
             // consumed either way, because a menu that let Enter through to the wall would be two gestures.
-            control::apply(state, intent).ok();
+            state.apply(intent).ok();
             return true;
         }
     }
@@ -6244,7 +6237,9 @@ fn on_key(state: &mut State, event: &rune::KeyEvent, _tx: &mut rune::Tx) -> bool
     // **Escape is an intent like any other** (#170): the ladder that decides which surface goes is
     // `ui::close_surfaces`, and a socket's `surface.close` walks the same one — there is no second answer to
     // "what does dismissing mean" for a client that has no key.
-    control::apply(state, Intent::CloseSurfaces).is_ok_and(|changed| changed.changed())
+    state
+        .apply(Intent::CloseSurfaces)
+        .is_ok_and(|changed| changed.changed())
 }
 /// Start the socket actor, once, before the first frame.
 ///
@@ -7170,7 +7165,7 @@ mod tests {
     #[test]
     fn the_pairing_code_is_drawn_for_two_minutes_and_not_after() {
         let mut state = State::default();
-        control::apply(&mut state, Intent::PairBegin).expect("pairing opens");
+        state.apply(Intent::PairBegin).expect("pairing opens");
         let words = state.pairing().expect("a code on the wall").words();
         assert!(
             frame_once(state).find("pairing-code").is_some(),
@@ -7178,7 +7173,7 @@ mod tests {
         );
 
         let mut state = State::default();
-        control::apply(&mut state, Intent::PairBegin).expect("pairing opens");
+        state.apply(Intent::PairBegin).expect("pairing opens");
         state.set_frame_clock(crate::control::pair::PAIR_FOR);
         assert!(
             state.pairing().is_none(),
@@ -8831,7 +8826,9 @@ mod tests {
 
     /// The same thing the key handler does for `Left`, so the test drives the model and not a key event.
     fn close_submenu_through(state: &mut State) -> bool {
-        crate::control::apply(state, crate::verb::Intent::MenuSubmenu { open: false }).is_ok()
+        state
+            .apply(crate::verb::Intent::MenuSubmenu { open: false })
+            .is_ok()
     }
 
     /// **The ring is the active descendant** (#164): the row the keyboard is on is the row an assistive client is
@@ -10441,7 +10438,7 @@ mod settings_tests {
         );
     }
 
-    /// **A press on `Pair a phone` draws the code** (#194, #240): the row goes through `control::apply`, the wall
+    /// **A press on `Pair a phone` draws the code** (#194, #240): the row goes through `State::apply`, the wall
     /// has a live code, and the sheet gives it the wall — a code is a picture for the room, not a row under a
     /// setting.
     #[test]

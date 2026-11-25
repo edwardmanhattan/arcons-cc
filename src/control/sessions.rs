@@ -205,13 +205,10 @@ mod tests {
     /// pane that another client is about to close.
     fn two_panes() -> State {
         let mut state = State::default();
-        let outcome = control::apply(
-            &mut state,
-            Intent::SplitPane {
-                pane: 1,
-                content: PaneContent::Map,
-            },
-        );
+        let outcome = state.apply(Intent::SplitPane {
+            pane: 1,
+            content: PaneContent::Map,
+        });
         assert!(
             outcome.is_ok(),
             "the wall this test drives must have two panes: {outcome:?}"
@@ -473,7 +470,7 @@ mod tests {
     }
 
     /// **A carrier that carries anybody renounces nothing** (#222): the socket's own client has a name (`ctl`), and a
-    /// loopback with none is the local client's default — so the fallback is the same origin `control::apply` gives an
+    /// loopback with none is the local client's default — so the fallback is the same origin `State::apply` gives an
     /// absent one, not a third spelling of "nobody".
     #[test]
     fn an_unnamed_carrier_leaves_the_origin_to_the_local_client() {
