@@ -993,8 +993,8 @@ pub fn view(state: &State, _cx: &mut Cx<State>) -> El {
     let body = col()
         .w_full()
         .h_full()
-        .gap(tokens::GAP)
-        .padding(tokens::PAD)
+        .gap(tokens::DESK_ZONE_GAP)
+        .padding(tokens::DESK_WINDOW_PAD)
         .fill(tokens::bg())
         .child(title_bar())
         .child(
@@ -1002,13 +1002,16 @@ pub fn view(state: &State, _cx: &mut Cx<State>) -> El {
                 .w_full()
                 .grow(1.0)
                 .items_stretch()
-                .gap(tokens::GAP)
+                .gap(tokens::DESK_ZONE_GAP)
                 .child(desk::rail(state))
                 .child(
                     col()
                         .grow(1.0)
                         .h_full()
-                        .gap(tokens::GAP)
+                        // A long send result must wrap inside the tray, not widen the column and push
+                        // the report off the window (#294 review).
+                        .min_w(tokens::DESK_SCROLL_MIN_W)
+                        .gap(tokens::DESK_ZONE_GAP)
                         .child(crate::ui::chart::view(state, _cx.env().scale))
                         .child(desk::tray(state)),
                 )
@@ -1084,110 +1087,206 @@ fn separator(mark: &'static str) -> El {
 /// whole point of this screen is that a guess at a position is worse than a blank.
 fn form(state: &State) -> El {
     let selected = state.desk.selected_vessel();
-    let name = selected.map_or_else(
-        || "No vessel selected".to_string(),
-        |vessel| vessel.name.clone(),
-    );
-    let subtitle = selected.map_or_else(String::new, |vessel| {
-        let state_word = if vessel.last.is_none() {
-            "never reported"
-        } else if state.desk.in_batch(vessel.id_unit) {
-            "in the batch"
-        } else {
-            "prefilled"
-        };
-        format!("Hull {} · {state_word}", vessel.hull_number)
-    });
-    let last_known_label = if selected.and_then(|vessel| vessel.last.as_ref()).is_some() {
-        "LAST KNOWN"
-    } else {
-        "LAST KNOWN · NONE"
-    };
 
-    let mut form = col()
+    // **The report is a sheet, not another column of text on the window.** The fill and the 16 pt inside
+    // edge are what let the eye tell the place a fact is written from the rail it was picked in (#294).
+    let sheet = col()
         .key("inspector")
         .w(tokens::DESK_PANEL)
         .h_full()
-        .gap(tokens::GAP)
+        .padding(tokens::DESK_PANEL_PAD)
+        .gap(0.0)
+        .fill(tokens::panel())
+        .border(tokens::HAIRLINE, tokens::card_edge())
+        .radius(tokens::PANEL_RADIUS);
+
+    // **Nothing selected is not an empty form.** A time and a regime under a placeholder name would be a
+    // verdict about nobody. One message, at the top of a sheet, and no fake last known to fill the space.
+    let Some(vessel) = selected else {
+        return sheet.child(
+            col()
+                .key("report-scroll")
+                .w_full()
+                .grow(1.0)
+                .min_h(tokens::DESK_SCROLL_MIN_H)
+                .gap(tokens::DESK_LABEL_GAP)
+                .child(
+                    text("No vessel selected")
+                        .key("report-name")
+                        .font(tokens::DESK_HEADING)
+                        .color(tokens::ink()),
+                )
+                .child(caption("Select a vessel to report.").key("no-selection")),
+        );
+    };
+
+    let state_word = if vessel.last.is_none() {
+        "never reported"
+    } else if state.desk.in_batch(vessel.id_unit) {
+        "in the batch"
+    } else {
+        "prefilled"
+    };
+    let subtitle = format!("Hull {} · {state_word}", vessel.hull_number);
+
+    // Identity: the status, the name, the hull. The name is the sheet's one 18 pt line.
+    let head = col()
+        .key("report-head")
+        .w_full()
+        .gap(tokens::DESK_LABEL_GAP)
+        .pb(tokens::DESK_SECTION_GAP)
         .child(caption(report_header(state)).key("report-header"))
         .child(
-            text(name)
+            text(vessel.name.clone())
                 .key("report-name")
-                .font(tokens::TITLE)
+                .font(tokens::DESK_HEADING)
                 .color(tokens::ink()),
         )
-        .child(caption(subtitle))
-        .child(hairline())
-        .child(caption(last_known_label).key("last-known-label"))
-        .child(last_known(selected))
-        .child(hairline());
-    // **Nothing selected is not an empty form.** A time and a regime under "No vessel selected" would be
-    // a verdict about nobody: the field belongs to a hull, and with no hull the panel says what to do
-    // instead of drawing six segments and a banner that cannot be sent anywhere.
-    if selected.is_none() {
-        return form
-            .child(caption("Select a vessel to report").key("no-selection"))
-            .child(spacer());
-    }
-    form = form
-        .child(caption("THIS REPORT · ONE FIX"))
-        .child(coordinates(state))
-        .child(measurements(state))
-        .child(hairline())
+        .child(caption(subtitle));
+
+    let mut observed = col()
+        .key("observed-block")
+        .w_full()
+        .pt(tokens::DESK_SECTION_GAP)
+        .gap(0.0)
         .child(
             row()
                 .key("observed-at")
                 .w_full()
                 .gap(tokens::GAP)
                 .items_center()
-                .child(caption("OBSERVED AT"))
+                .child(caption("OBSERVED AT · WIB"))
                 .child(spacer())
                 .child(quiet_button("Now", "now", |state, tx| {
                     state.today();
                     tx.blur();
-                }))
-                .child(caption("WIB")),
+                })),
         )
-        .child(segments(state));
+        .child(segments(state).pt(tokens::GAP));
     if let Some(error) = &state.error {
-        form = form.child(
+        observed = observed.child(
             text(format!("{}: {error}", error.field()))
                 .key("field-error")
                 .role("alert")
                 .font(tokens::LABEL)
-                .color(tokens::ink()),
+                .color(tokens::ink())
+                .wrap()
+                .pt(tokens::GAP),
         );
     }
     if let Some(notice) = &state.notice {
-        form = form.child(
+        observed = observed.child(
             text(notice)
                 .key("field-notice")
                 .font(tokens::LABEL)
-                .color(tokens::ink_dim()),
+                .color(tokens::ink_dim())
+                .wrap()
+                .pt(tokens::GAP),
         );
     }
+    observed = observed.child(verdict(state));
+
+    let scroll = col()
+        .key("report-scroll")
+        .w_full()
+        .grow(1.0)
+        .min_h(tokens::DESK_SCROLL_MIN_H)
+        .scroll(rune::ScrollSpec {
+            stick_bottom: false,
+        })
+        .gap(0.0)
+        .child(head)
+        .child(hairline())
+        .child(
+            col()
+                .key("last-known-block")
+                .w_full()
+                .pt(tokens::DESK_SECTION_GAP)
+                .child(last_known(vessel)),
+        )
+        .child(
+            col()
+                .key("fix-block")
+                .w_full()
+                .pt(tokens::DESK_SECTION_GAP)
+                .gap(0.0)
+                .child(
+                    col()
+                        .w_full()
+                        .gap(tokens::DESK_LABEL_GAP)
+                        .child(caption("THIS REPORT · ONE FIX").key("fix-label"))
+                        .child(coordinates(state)),
+                )
+                .child(measurements(state).pt(tokens::DESK_GROUP_GAP)),
+        )
+        .child(observed)
+        .child(
+            col()
+                .key("source-block")
+                .w_full()
+                .pt(tokens::DESK_SECTION_GAP)
+                .gap(tokens::DESK_LABEL_GAP)
+                .child(caption("SOURCE · KEPT HERE, NEVER SENT").key("source-label"))
+                .child(source_note(state)),
+        );
+
+    sheet.child(scroll).child(action_shelf(state))
+}
+
+/// The one control that commits the row, pinned to the bottom of the report sheet.
+///
+/// It is a **tonal** control, not the accent: Send is the only filled accent on the desk, because Send is
+/// the action that leaves the desk. The readiness line belongs here, next to the button it governs, not
+/// halfway up the form.
+fn action_shelf(state: &State) -> El {
+    col()
+        .key("report-action")
+        .w_full()
+        .gap(0.0)
+        .child(hairline())
+        .child(
+            col()
+                .w_full()
+                .pt(tokens::DESK_GROUP_GAP)
+                .gap(tokens::GAP)
+                .child(readiness_line(state))
+                .child(update_button(state)),
+        )
+}
+
+/// The verdict on the time: the sentence, the exact instant, the hedge, and where the clock came from.
+///
+/// It is one block, 16 pt under the time field, not four lines scattered through the form. The readiness
+/// line is elsewhere: it is a property of the action, not of the clock.
+fn verdict(state: &State) -> El {
     let banner_colour = match state.verdict.regime {
         Regime::Live => tokens::accent(),
         Regime::Backfill | Regime::Refused | Regime::Future => tokens::ink(),
         Regime::Unknown => tokens::ink_dim(),
     };
     let utc = zoned::utc_civil(state.epoch_ms);
-    // **The banner, not a line of small print.** This sentence is the whole reason the field exists:
-    // it says whether the time will be kept or replaced. The wireframe draws it as a filled block, and a
-    // block is also what a reader can find at arm's length without hunting for one grey line among five.
-    form = form
+    // **The banner, not a line of small print.** This sentence is the whole reason the field exists: it
+    // says whether the time will be kept or replaced. The block is also what a reader finds at arm's
+    // length without hunting for one grey line among five.
+    let mut block = col()
+        .key("verdict-block")
+        .w_full()
+        .pt(tokens::DESK_PANEL_PAD)
+        .gap(tokens::DESK_LABEL_GAP)
         .child(
             el().key("regime-banner")
                 .w_full()
-                .padding(tokens::CHIP_PAD)
+                .px(tokens::DESK_CONTROL_PAD)
+                .py(tokens::DESK_CONTROL_PAD)
                 .border(tokens::HAIRLINE, banner_colour)
                 .radius(tokens::PANEL_RADIUS)
                 .child(
                     text(state.verdict.regime.sentence())
                         .key("regime")
                         .role("status")
-                        .font(tokens::TITLE)
-                        .color(banner_colour),
+                        .font(tokens::DESK_BANNER)
+                        .color(banner_colour)
+                        .wrap(),
                 ),
         )
         .child(
@@ -1200,29 +1299,24 @@ fn form(state: &State) -> El {
             .color(tokens::ink_dim()),
         );
     if state.verdict.near_boundary {
-        form = form.child(
+        block = block.child(
             text(HEDGE)
                 .key("regime-hedge")
                 .font(tokens::LABEL)
                 .color(tokens::ink_dim()),
         );
     }
-    form.child(
+    block.child(
         text(state.clock_line())
             .key("clock-source")
             .font(tokens::LABEL)
             .color(tokens::ink_dim()),
     )
-    .child(readiness_line(state))
-    .child(hairline())
-    .child(caption("SOURCE · KEPT HERE, NEVER SENT"))
-    .child(source_note(state))
-    .child(spacer())
-    .child(update_button(state))
 }
 
-/// `REPORT · 1 OF 2 VESSELS` when the hull has a row, `NOT IN THE BATCH` when it has not, and the empty
-/// word when nothing is selected. The position is the tray's, so the two panels count the same draft.
+/// `REPORT · 1 OF 2 VESSELS` when the hull has a row, `NOT IN THE BATCH` when it has not. The position is
+/// the tray's, so the two panels count the same draft. The empty desk draws no status at all (#294): there
+/// is no vessel to have a position in.
 fn report_header(state: &State) -> String {
     let Some(vessel) = state.desk.selected_vessel() else {
         return "REPORT · NO VESSEL SELECTED".to_string();
@@ -1241,30 +1335,71 @@ fn report_header(state: &State) -> String {
 ///
 /// Absence is not zero: a hull that never reported has no coordinates, and the line says so instead of
 /// drawing `0.00000, 0.00000` — a real place in the Gulf of Guinea and a false fact about the ship.
-fn last_known(selected: Option<&Vessel>) -> El {
-    let Some(last) = selected.and_then(|vessel| vessel.last.as_ref()) else {
-        return line("no position in the standing picture").key("last-known");
+fn last_known(vessel: &Vessel) -> El {
+    let label = if vessel.last.is_some() {
+        "LAST KNOWN"
+    } else {
+        "LAST KNOWN · NONE"
     };
+    let mut label_row = row()
+        .w_full()
+        .items_center()
+        .gap(tokens::GAP)
+        .child(caption(label).key("last-known-label"))
+        .child(spacer());
+    let mut block = col()
+        .key("last-known")
+        .role("group")
+        .w_full()
+        .gap(tokens::DESK_LABEL_GAP);
+
+    let Some(last) = vessel.last.as_ref() else {
+        return block
+            .label("Last known: no position in the standing picture".to_string())
+            .child(label_row)
+            .child(line("no position in the standing picture").key("last-known-none"));
+    };
+
     let civil = zoned::at_offset(last.recorded_at_ms, WIB_OFFSET_MS);
-    let mut words = format!(
-        "{:.5}, {:.5} · {:02}:{:02}:{:02} WIB · {}",
+    label_row = label_row.child(
+        text(last.age_words())
+            .key("last-known-age")
+            .font(tokens::DESK_VALUE)
+            .color(tokens::ink()),
+    );
+
+    let place = format!(
+        "{:.5}, {:.5} · {:02}:{:02}:{:02} WIB",
+        last.latitude, last.longitude, civil.hour, civil.minute, civil.second
+    );
+    let mut said = format!(
+        "Last known, {}, {:.5}, {:.5} at {:02}:{:02}:{:02} WIB",
+        last.age_words(),
         last.latitude,
         last.longitude,
         civil.hour,
         civil.minute,
-        civil.second,
-        last.age_words()
+        civil.second
     );
+    let mut provenance = Vec::new();
     if last.backfilled {
-        words.push_str(" · backfilled");
+        provenance.push("backfilled".to_string());
+        said.push_str(", backfilled");
     }
     if let Some(speed) = last.speed_kn {
-        words.push_str(&format!(" · {speed:.1} kn"));
+        provenance.push(format!("{speed:.1} kn"));
+        said.push_str(&format!(", {speed:.1} knots"));
     }
     if let Some(course) = last.course_deg {
-        words.push_str(&format!(" · {course:.0}°"));
+        provenance.push(format!("{course:.0}°"));
+        said.push_str(&format!(", {course:.0} degrees"));
     }
-    line(words).key("last-known")
+
+    block = block.label(said).child(label_row).child(line(place));
+    if !provenance.is_empty() {
+        block = block.child(caption(provenance.join(" · ")).key("last-known-source"));
+    }
+    block
 }
 
 /// The two coordinate fields. A filled one is a solid box with the value the row would carry; an empty one
@@ -1344,14 +1479,15 @@ fn numeric_field(
         || placeholder.to_string(),
         |value| format!("{value:.places$}"),
     );
+    let label_key = format!("{key}-label");
     let mut field = el()
         .key(key)
         .role("textbox")
         .read_only(true)
         .label(format!("{label}, {words}"))
         .w_full()
-        .h(tokens::NAME_H + tokens::GAP)
-        .px(tokens::GAP)
+        .h(tokens::DESK_FIELD_H)
+        .px(tokens::DESK_CONTROL_PAD)
         .items_center()
         .radius(tokens::GAP)
         .fill(tokens::bg())
@@ -1373,8 +1509,8 @@ fn numeric_field(
     }
     col()
         .grow(1.0)
-        .gap(tokens::CARD_GAP)
-        .child(caption(label))
+        .gap(tokens::DESK_LABEL_GAP)
+        .child(caption(label).key(label_key))
         .child(field)
 }
 
@@ -1391,6 +1527,7 @@ fn readiness_line(state: &State) -> El {
         .role("status")
         .font(tokens::LABEL)
         .color(tokens::ink_dim())
+        .wrap()
 }
 
 /// Decision 6's note is the desk's own record: kept here, never sent, and empty until the operator types
@@ -1402,13 +1539,20 @@ fn source_note(state: &State) -> El {
         .source_note
         .as_deref()
         .unwrap_or("no note yet");
+    let empty = state.desk.batch().source_note.is_none();
     el().key("source-note")
         .role("note")
         .label(format!("Source note, kept on this desk: {note}"))
         .w_full()
-        .padding(tokens::CHIP_PAD)
+        .h(tokens::DESK_FIELD_H)
+        .px(tokens::DESK_CONTROL_PAD)
+        .items_center()
         .border_sides([0.0, 0.0, tokens::HAIRLINE, 0.0], tokens::card_edge())
-        .child(line(note))
+        .child(text(note).font(tokens::LABEL).color(if empty {
+            tokens::ink_dim()
+        } else {
+            tokens::ink()
+        }))
 }
 
 /// The inspector's way into the draft. The same action as the tray's `+ Add vessel`, with the word the
@@ -1426,22 +1570,27 @@ fn update_button(state: &State) -> El {
         .role("button")
         .label(label)
         .disabled(!enabled)
-        .px(tokens::GAP)
-        .py(tokens::CHIP_PAD)
+        .w_full()
+        .h(tokens::DESK_ACTION_H)
+        .px(tokens::DESK_GROUP_GAP)
         .radius(tokens::GAP)
-        .fill(if enabled {
-            tokens::accent()
-        } else {
-            tokens::name_plate()
-        })
+        .fill(tokens::name_plate())
+        .border(
+            tokens::HAIRLINE,
+            if enabled {
+                tokens::focus_edge()
+            } else {
+                tokens::card_edge()
+            },
+        )
         .items_center()
         .justify_center()
         .on_press_tx(|state: &mut State, tx: &mut rune::Tx| {
             state.add_selected();
             tx.blur();
         })
-        .child(text(label).font(tokens::LABEL).color(if enabled {
-            tokens::bg()
+        .child(text(label).font(tokens::DESK_ACTION).color(if enabled {
+            tokens::ink()
         } else {
             tokens::ink_dim()
         }))
@@ -1455,7 +1604,7 @@ fn segments(state: &State) -> El {
         .key("segments")
         .role("group")
         .label(format!("Observed at {}", state.segments.text()))
-        .gap(tokens::CARD_GAP)
+        .gap(tokens::GAP)
         .child(
             row()
                 .gap(tokens::GAP)
@@ -1513,8 +1662,8 @@ fn quiet_button(
     el().key(key)
         .role("button")
         .label(words)
-        .px(tokens::GAP)
-        .py(tokens::CHIP_PAD)
+        .h(tokens::DESK_QUIET_H)
+        .px(tokens::DESK_CONTROL_PAD)
         .radius(tokens::GAP)
         .fill(tokens::name_plate())
         .border(tokens::HAIRLINE, tokens::card_edge())
@@ -1552,8 +1701,8 @@ fn calendar(state: &State) -> El {
         .key("calendar-popover")
         .role("dialog")
         .label("Choose a date")
-        .w(tokens::SETTINGS_W)
-        .padding(tokens::PAD)
+        .w(tokens::DESK_CALENDAR_W)
+        .padding(tokens::DESK_PANEL_PAD)
         .gap(tokens::GAP)
         .radius(tokens::PANEL_RADIUS)
         .fill(tokens::panel())
@@ -1686,10 +1835,14 @@ mod tests {
     use crate::scene;
 
     fn frame_once(state: State) -> rune::Runtime<State> {
+        frame_at(state, tokens::DESK_WINDOW)
+    }
+
+    fn frame_at(state: State, size: (f32, f32)) -> rune::Runtime<State> {
         let mut runtime = rune::Runtime::new(
             state,
             view,
-            tokens::DESK_WINDOW,
+            size,
             rune::Env {
                 system_dark: true,
                 scale: 1.0,
@@ -1708,6 +1861,14 @@ mod tests {
             .into_iter()
             .find(|element| element.key.as_deref() == Some(key))
             .unwrap_or_else(|| panic!("nothing is drawn at {key}"))
+    }
+
+    fn bottom(element: &rune::ElementInfo) -> f32 {
+        element.rect[1] + element.rect[3]
+    }
+
+    fn right(element: &rune::ElementInfo) -> f32 {
+        element.rect[0] + element.rect[2]
     }
 
     #[test]
@@ -1792,7 +1953,8 @@ mod tests {
 
     /// **The anchor, measured.** Rune reports each element's rect, so this is not a description of the
     /// layout but a reading of it: with the calendar open the field is in the same place, and the
-    /// popover's top edge is at or below the field's bottom edge.
+    /// popover is one gap from it on the side with room. At 1440×900 the report sheet puts the field far
+    /// enough down that the popover flips above it; that is Rune's flip, not a failure.
     #[test]
     fn opening_the_calendar_does_not_move_the_field() {
         let mut closed_state = scene::state_for("time-field");
@@ -1817,10 +1979,11 @@ mod tests {
             popover[0], anchor[0],
             "the popover is not left-aligned with its anchor: anchor {anchor:?}, popover {popover:?}"
         );
-        assert_eq!(
-            popover[1],
-            anchor[1] + anchor[3] + tokens::GAP,
-            "the popover is not one gap below the field it belongs to: field {anchor:?}, popover {popover:?}"
+        let below = popover[1] == anchor[1] + anchor[3] + tokens::GAP;
+        let above = popover[1] + popover[3] + tokens::GAP == anchor[1];
+        assert!(
+            below || above,
+            "the popover is not one gap from the field it belongs to: field {anchor:?}, popover {popover:?}"
         );
     }
 
@@ -2112,10 +2275,10 @@ mod tests {
             Some("REPORT · NOT IN THE BATCH"),
             "the selected hull is not in the draft, and the header must not pretend it is"
         );
-        let known = element(&runtime, "last-known").text.unwrap_or_default();
+        let known = element(&runtime, "last-known").label.unwrap_or_default();
         assert!(
             known.contains("-6.10230") && known.contains("5 h") && known.contains("backfilled"),
-            "the last known line is {known:?}"
+            "the last known block is announced as {known:?}"
         );
         assert!(
             element(&runtime, "coordinate-latitude")
@@ -2383,11 +2546,301 @@ mod tests {
     }
 
     #[test]
+    fn the_rail_keeps_one_age_and_mark_column_across_rows() {
+        let runtime = frame_once(scene::state_for("batch"));
+        let slots = ["age-slot-1", "age-slot-2", "age-slot-3"].map(|key| element(&runtime, key));
+        for slot in &slots {
+            assert_eq!(
+                slot.rect[2],
+                tokens::DESK_AGE_W,
+                "the age slot is not a fixed width: {:?}",
+                slot.rect
+            );
+        }
+        let first = right(&slots[0]);
+        for slot in &slots[1..] {
+            assert!(
+                (right(slot) - first).abs() < 0.5,
+                "the age's right edge moved between rows: {first} vs {} ({:?})",
+                right(slot),
+                slot.rect
+            );
+        }
+        let marks = ["mark-slot-1", "mark-slot-2", "mark-slot-3"].map(|key| element(&runtime, key));
+        for mark in &marks {
+            assert_eq!(
+                mark.rect[2],
+                tokens::DESK_MARK_W,
+                "the mark slot is not fixed: {:?}",
+                mark.rect
+            );
+            assert!(
+                (right(mark) - right(&marks[0])).abs() < 0.5,
+                "the mark slot's right edge moved: {:?} vs {:?}",
+                mark.rect,
+                marks[0].rect
+            );
+        }
+    }
+
+    #[test]
+    fn the_tray_cards_are_not_clipped_by_their_scroll_viewport() {
+        let runtime = frame_once(scene::state_for("batch"));
+        let view = element(&runtime, "tray-cards");
+        assert_eq!(
+            view.rect[3],
+            tokens::DESK_CARD_H,
+            "the cards viewport is not one card tall"
+        );
+        for key in ["tray-card-1", "tray-card-2"] {
+            let card = element(&runtime, key);
+            assert_eq!(
+                card.rect[3],
+                tokens::DESK_CARD_H,
+                "{key} is not one card tall"
+            );
+            assert!(
+                card.rect[1] >= view.rect[1] - 0.5 && bottom(&card) <= bottom(&view) + 0.5,
+                "{key} is clipped by the cards viewport: card {:?}, viewport {:?}",
+                card.rect,
+                view.rect
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_commit_controls_share_a_baseline_and_one_is_accent() {
+        let runtime = frame_once(scene::state_for("batch"));
+        let update = element(&runtime, "update-batch");
+        let send = element(&runtime, "send-reports");
+        let readiness = element(&runtime, "readiness");
+        assert_eq!(update.rect[3], tokens::DESK_ACTION_H);
+        assert_eq!(send.rect[3], tokens::DESK_ACTION_H);
+        assert!(
+            (bottom(&update) - bottom(&send)).abs() < 0.5,
+            "the report's commit and Send do not share a bottom edge: {} vs {}",
+            bottom(&update),
+            bottom(&send)
+        );
+        assert!(
+            (update.rect[1] - bottom(&readiness) - tokens::GAP).abs() < 0.5,
+            "the readiness line is not one gap above the action: {:?} vs {:?}",
+            readiness.rect,
+            update.rect
+        );
+        assert_eq!(
+            update.fill,
+            tokens::name_plate(),
+            "the report's commit is not tonal"
+        );
+        assert_eq!(
+            send.fill,
+            tokens::accent(),
+            "Send is not the one filled accent"
+        );
+    }
+
+    #[test]
+    fn the_report_uses_the_section_scale_and_scrolls_only_when_short() {
+        let runtime = frame_once(scene::state_for("batch"));
+        let head = element(&runtime, "report-head");
+        let last = element(&runtime, "last-known");
+        let fix = element(&runtime, "fix-label");
+        let fix_block = element(&runtime, "fix-block");
+        let observed = element(&runtime, "observed-at");
+        let observed_block = element(&runtime, "observed-block");
+        let source = element(&runtime, "source-label");
+        let tolerance = 1.0;
+        assert!(
+            last.rect[1] - (bottom(&head) + tokens::HAIRLINE)
+                >= tokens::DESK_SECTION_GAP - tolerance,
+            "the first section is not a section gap below the identity block"
+        );
+        assert!(
+            fix.rect[1] - bottom(&last) >= tokens::DESK_SECTION_GAP - tolerance,
+            "the fix is not a section gap below the last known block"
+        );
+        assert!(
+            observed.rect[1] - bottom(&fix_block) >= tokens::DESK_SECTION_GAP - tolerance,
+            "the time is not a section gap below the fix"
+        );
+        assert!(
+            source.rect[1] - bottom(&observed_block) >= tokens::DESK_SECTION_GAP - tolerance,
+            "the source note is not a section gap below the verdict"
+        );
+
+        let label = element(&runtime, "coordinate-latitude-label");
+        let field = element(&runtime, "coordinate-latitude");
+        assert!(
+            (field.rect[1] - bottom(&label) - tokens::DESK_LABEL_GAP).abs() < 0.5,
+            "the label and the field are not one label gap apart: {:?} vs {:?}",
+            label.rect,
+            field.rect
+        );
+
+        let scroll = element(&runtime, "report-scroll");
+        let source_block = element(&runtime, "source-block");
+        assert!(
+            bottom(&source_block) <= bottom(&scroll) + 0.5,
+            "at 1440x900 the report should fit, not scroll: content {}, viewport {}",
+            bottom(&source_block),
+            bottom(&scroll)
+        );
+
+        let short = frame_at(scene::state_for("batch"), (tokens::DESK_WINDOW.0, 730.0));
+        let short_scroll = element(&short, "report-scroll");
+        let short_source = element(&short, "source-block");
+        let short_update = element(&short, "update-batch");
+        assert!(
+            bottom(&short_source) > bottom(&short_scroll),
+            "at 1440x730 the report content should overflow and scroll: content {}, viewport {}",
+            bottom(&short_source),
+            bottom(&short_scroll)
+        );
+        assert!(
+            bottom(&short_update) <= 730.0 - tokens::DESK_WINDOW_PAD + 0.5,
+            "the action shelf is not visible at 1440x730: {:?}",
+            short_update.rect
+        );
+        assert_eq!(
+            short_update.rect[3],
+            tokens::DESK_ACTION_H,
+            "the report's action shrank at 1440x730: {:?}",
+            short_update.rect
+        );
+        let short_send = element(&short, "send-reports");
+        assert_eq!(
+            short_send.rect[3],
+            tokens::DESK_ACTION_H,
+            "Send shrank at 1440x730: {:?}",
+            short_send.rect
+        );
+        assert!(
+            (bottom(&short_update) - bottom(&short_send)).abs() < 0.5,
+            "the two commit controls do not share a baseline at 1440x730: {} vs {}",
+            bottom(&short_update),
+            bottom(&short_send)
+        );
+    }
+
+    #[test]
+    fn a_four_vessel_batch_overflows_the_cards_row_instead_of_the_report() {
+        let mut state = scene::state_for("batch");
+        let held: Vec<u64> = state
+            .desk
+            .batch()
+            .rows()
+            .iter()
+            .map(|row| row.id_unit)
+            .collect();
+        for id in held {
+            state.desk.remove(id);
+        }
+        let ids: Vec<u64> = state
+            .desk
+            .visible()
+            .into_iter()
+            .take(4)
+            .map(|vessel| vessel.id_unit)
+            .collect();
+        for id in ids {
+            state.select(id);
+            state.add_selected();
+        }
+        let runtime = frame_once(state);
+        let cards: Vec<_> = runtime
+            .elements()
+            .into_iter()
+            .filter(|element| {
+                element
+                    .key
+                    .as_deref()
+                    .is_some_and(|key| key.starts_with("tray-card-"))
+            })
+            .collect();
+        assert_eq!(cards.len(), 4, "the batch of four did not draw four cards");
+        let view = element(&runtime, "tray-cards");
+        let furthest = cards.iter().map(right).fold(0.0, f32::max);
+        assert!(
+            furthest > right(&view) + 0.5,
+            "four cards fit the viewport without scrolling, so the scroll row is not doing its job: \
+             viewport {:?}, furthest card right {furthest}",
+            view.rect
+        );
+        for card in &cards {
+            assert_eq!(card.rect[3], tokens::DESK_CARD_H, "a card changed height");
+        }
+    }
+
+    #[test]
+    fn the_chart_pans_with_a_drag_and_zooms_with_the_wheel() {
+        let mut runtime = frame_once(scene::state_for("batch"));
+        let before = runtime.state.chart.camera();
+        runtime.pointer_down(500.0, 300.0);
+        runtime.pointer_move(560.0, 300.0);
+        runtime.pointer_up(560.0, 300.0);
+        runtime.frame(0.0);
+        let after = runtime.state.chart.camera();
+        assert_ne!(before, after, "a drag on the chart must pan the camera");
+
+        let zoom_before = after.zoom;
+        runtime.wheel_event(rune::WheelEvent::new(0.0, -100.0).at(500.0, 300.0));
+        runtime.frame(0.0);
+        let zoom_after = runtime.state.chart.camera().zoom;
+        assert!(
+            (zoom_after - zoom_before).abs() > 0.1,
+            "a wheel on the chart must zoom: {zoom_before} -> {zoom_after}"
+        );
+    }
+
+    #[test]
+    fn a_long_send_result_wraps_in_the_tray_and_keeps_the_report_on_screen() {
+        let mut state = scene::state_for("batch");
+        state.send_failure = Some(
+            "KRI ABDUL HALIM PERDANAKUSUMA: the route refused the row and named the field; \
+             KRI SULTAN HASANUDDIN: the vessel has no commander appointed, so there is no report \
+             to attribute. "
+                .repeat(3),
+        );
+        let runtime = frame_once(state);
+        let window_right = tokens::DESK_WINDOW.0 - tokens::DESK_WINDOW_PAD;
+        let inspector = element(&runtime, "inspector");
+        let tray = element(&runtime, "batch-tray");
+        let foot = element(&runtime, "tray-foot");
+        assert!(
+            right(&inspector) <= window_right + 0.5,
+            "the long send result pushed the report off the window: {:?}",
+            inspector.rect
+        );
+        assert!(
+            right(&tray) <= window_right + 0.5,
+            "the long send result widened the tray past the window: {:?}",
+            tray.rect
+        );
+        assert!(
+            foot.rect[3] > tokens::DESK_QUIET_H,
+            "the long send result did not wrap: {:?}",
+            foot.rect
+        );
+        let send = element(&runtime, "send-reports");
+        assert!(
+            bottom(&send) <= bottom(&tray) + 0.5,
+            "Send is outside the tray after the wrap: {:?} vs {:?}",
+            send.rect,
+            tray.rect
+        );
+    }
+
+    #[test]
     fn the_empty_desk_has_nothing_selected_and_a_disabled_send() {
         let runtime = frame_once(scene::state_for("empty"));
         assert_eq!(
-            element(&runtime, "report-header").text.as_deref(),
-            Some("REPORT · NO VESSEL SELECTED")
+            element(&runtime, "report-name").text.as_deref(),
+            Some("No vessel selected")
+        );
+        assert_eq!(
+            element(&runtime, "no-selection").text.as_deref(),
+            Some("Select a vessel to report.")
         );
         assert_eq!(
             element(&runtime, "tray-foot").text.as_deref(),
