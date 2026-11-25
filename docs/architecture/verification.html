@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arcons CC architecture — scenes, captures, and the gate</title>
+<meta name="description" content="How the wall proves a picture: fixtures, scenes, captures, goldens, pixel assertions, budgets, and scripts/verify.sh. ASD-STE100 wording. Mermaid diagrams rendered with Pele.">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/pele@1/dist/pele.global.js" defer></script>
+<script src="diagram.js" defer></script>
+</head>
+<body>
+
+<header class="page-header">
+  <div class="wrap">
+    <p class="eyebrow">Arcons Command Center · architecture documentation</p>
+    <h1>Architecture V: scenes, captures, and the gate</h1>
+    <p class="lede">
+      The wall is a picture. A picture needs a witness. This page shows how the repository turns a
+      named state into pixels, compares the pixels, asks geometry questions, and decides that a ticket
+      is done with one command.
+    </p>
+    <p class="meta">
+      Code: <code>src/scene.rs</code>, <code>src/verify.rs</code>, <code>scripts/verify.sh</code>,
+      <code>scripts/capture.sh</code>, <code>scripts/assert.sh</code>. Diagrams rendered with
+      <a href="https://github.com/obsidianmd/pele">Pele</a>.
+    </p>
+    <nav class="doc-nav" aria-label="Architecture pages">
+      <a href="index.html">Overview</a>
+      <a href="runtime.html">Runtime</a>
+      <a href="picture.html">Picture</a>
+      <a href="control.html">Control</a>
+      <a href="verification.html" aria-current="page">Verification</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+<section id="gate">
+  <h2>The gate</h2>
+  <p>
+    The gate is one command. It is <code>scripts/verify.sh</code>. CI runs the same command. A human
+    runs the same command. CI and a human cannot run different checks.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>scripts/verify.sh</strong> · the steps, in order</figcaption>
+    <pre><code>scripts/verify.sh          # fmt, clippy, tests, captures, assertions, budgets
+scripts/verify.sh --fast   # the inner loop: no captures, no budgets
+scripts/verify.sh --scenes a,b   # only these capture scenes</code></pre>
+  </figure>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>step</th><th>command</th><th>what it proves</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>format</td><td><code>cargo fmt --all -- --check</code></td><td>the tree is formatted</td></tr>
+        <tr><td>lints</td><td><code>cargo clippy --all-targets -- -D warnings</code></td><td>no warning is left to rot</td></tr>
+        <tr><td>tests</td><td><code>cargo test --all-targets</code></td><td>the invariants and the unit properties</td></tr>
+        <tr><td>map feature, optional</td><td><code>VERIFY_WITH_MAP=1</code></td><td>the map-gated code compiles with no warnings</td></tr>
+        <tr><td>wall captures</td><td><code>scripts/capture.sh</code></td><td>every scene renders, twice the same, and matches its golden</td></tr>
+        <tr><td>wall assertions</td><td><code>scripts/assert.sh</code></td><td>markers, cards, panels, and tokens are where the numbers say</td></tr>
+        <tr><td>desk captures</td><td><code>scripts/capture-desk.sh</code></td><td>the desk's scenes render and match</td></tr>
+        <tr><td>budgets</td><td><code>cargo test -p arcons-cc --all-targets -- --include-ignored --nocapture budget</code></td><td>frame CPU and memory stay under the limit, with the measured value printed</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    The gate needs no network, no display, and no GPU beyond a software Vulkan driver. A check that
+    needs one of those does not belong in the gate. It belongs in a ticket that says so.
+  </p>
+
+  <div class="callout warn">
+    <span class="label">The one hole, named</span>
+    <p>
+      The gate does not build the <code>map</code> feature. MapLibre's C++ needs a compiler and a
+      network download. CI's <code>map</code> jobs compile the map-gated code on macOS and Windows.
+      Set <code>VERIFY_WITH_MAP=1</code> to close the hole on a local machine. A red map job is a red
+      pull request.
+    </p>
+  </div>
+</section>
+
+<section id="scene">
+  <h2>A scene is a named state</h2>
+  <p>
+    A scene is a function that changes a <code>State</code>. Rune owns the scene list and the virtual
+    clock. The wall supplies the fixture and the functions. A scene has no network, no credential, and
+    no wall clock.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/scene.rs</strong> · a scene loads a wire fixture and sets a camera</figcaption>
+    <pre><code>fn load(state: &amp;mut State) {
+    match fixture() {
+        Ok(entries) =&gt; state.load_fixture(&amp;entries),
+        Err(error) =&gt; eprintln!("arcons-cc: scene: {error}"),
+    }
+    state.set_camera(CAMERA);
+}
+
+fn picture(state: &amp;mut State) {
+    load(state);
+}
+
+fn stale(state: &amp;mut State) {
+    load(state);
+    // Centre on the stale hull, so the dim marker is the thing the picture is about.
+    if let Some(view) = state.picture.units().iter().find(|unit| unit.unit.id_unit == STALE_UNIT)
+        &amp;&amp; let Some(drawn) = view.drawn(state.now())
+    {
+        state.set_camera(Camera::new((drawn.lat, drawn.lon), CAMERA.zoom));
+    }
+}</code></pre>
+  </figure>
+
+  <p>
+    The fixture is wire-shaped. <code>fixtures/scenes/feed.json</code> is the
+    <code>GET /live-feed/positions</code> envelope. A scene parses it with the same
+    <code>FeedPosition</code> type that the REST client uses. A fixture written from the wall's own
+    types would prove only that the wall agrees with itself.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/scene.rs</strong> · the fixture is parsed as the wire type</figcaption>
+    <pre><code>pub fn fixture() -&gt; Result&lt;Vec&lt;FeedPosition&gt;, String&gt; {
+    let text = std::fs::read_to_string(fixture_path())?;
+    let envelope: Envelope&lt;Vec&lt;FeedPosition&gt;&gt; = serde_json::from_str(&amp;text)?;
+    Ok(envelope.data)
+}</code></pre>
+  </figure>
+
+  <p>
+    Rune starts a scene at logical time zero. <code>poll</code> receives that virtual clock, not the
+    system clock. Two runs of the same scene therefore draw the same ages, the same travel positions,
+    and the same text. This is <span class="badge">INV-11</span>.
+  </p>
+</section>
+
+<section id="capture">
+  <h2>A capture is a witness</h2>
+  <p>
+    A capture renders one scene to a PNG with no window. The flags are written in
+    <code>scripts/capture.sh</code> and nowhere else. CI and a human use the same flags.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>scripts/capture.sh</strong> · the exact render command</figcaption>
+    <pre><code>"$WALL" \
+  --scene "$scene" \
+  --at 2 \
+  --fps 60 \
+  --size 1280x720 \
+  --scale 1 \
+  --snap "out/$scene.png"</code></pre>
+  </figure>
+
+  <p>
+    <code>--at 2</code> is two seconds of virtual time. A scene with a travel animation has settled by
+    then. A capture at zero could be right for the wrong reason.
+  </p>
+
+  <p>
+    The script renders the scene two times. It compares the bytes. If the two PNGs differ, the gate
+    fails before it compares a golden. Nondeterminism is a defect in the renderer, and no golden can
+    repair it.
+  </p>
+
+  <figure class="diagram-card">
+    <div class="diagram-head">
+      <h3>The verification path</h3>
+      <span>Rendered with Pele</span>
+    </div>
+    <div class="diagram" id="verify-path" role="img" aria-label="Verification: a wire fixture becomes a scene, a headless render becomes a PNG, two renders must match, and the PNG is compared with a golden and with pixel assertions."></div>
+    <figcaption>
+      A golden answers “did this change?”. An assertion answers “what is wrong?”. The gate runs both.
+    </figcaption>
+    <details class="source">
+      <summary>Diagram source</summary>
+      <pre id="verify-path-source">flowchart LR
+  FIX["Wire fixture&lt;br/&gt;feed.json"] --&gt; SCENE["Scene function&lt;br/&gt;State at time zero"]
+  SCENE --&gt; RENDER["Headless render&lt;br/&gt;--scene --snap"]
+  RENDER --&gt; PNG["out/scene.png"]
+  RENDER --&gt; AGAIN["Second render"]
+  PNG --&gt; SAME{"Same bytes?"}
+  AGAIN --&gt; SAME
+  SAME --&gt;|"no"| NONDET["INV-11 failure"]
+  SAME --&gt;|"yes"| GOLDEN["Compare with golden&lt;br/&gt;tolerance and pixel bounds"]
+  PNG --&gt; ASSERT["Pixel and structure assertions&lt;br/&gt;geometry from project, colours from tokens"]
+  GOLDEN --&gt; PASS["gate step ok"]
+  ASSERT --&gt; PASS</pre>
+    </details>
+  </figure>
+
+  <p>
+    A golden is a reference PNG in <code>fixtures/golden/</code>. A human updates a golden with
+    <code>scripts/capture.sh --update-goldens</code>. The gate never updates a golden. A change to a
+    golden is a visible commit that a reviewer can inspect.
+  </p>
+</section>
+
+<section id="bounds">
+  <h2>Golden comparison has numbers</h2>
+  <p>
+    Two rasterisers do not produce identical pixels. The golden comparison therefore has bounds. The
+    bounds are measured, then given a margin. Each run prints the numbers.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/verify.rs</strong> · the default bounds</figcaption>
+    <pre><code>pub struct Bounds {
+    /// The farthest one channel may differ, in 255ths.
+    pub tolerance: u8,
+    /// Pixels that differ by more than one step: a moved glyph, a shifted edge, a new colour.
+    pub changed: usize,
+    /// Pixels that differ by exactly one step: a rasteriser's text.
+    pub rounding: usize,
+}
+
+pub const DEFAULT_BOUNDS: Bounds = Bounds::new(2, 200, 600);</code></pre>
+  </figure>
+
+  <p>
+    A scene with scaled text can need a larger rounding allowance. The exception stays in
+    <code>golden_bounds(scene)</code>, beside the measurement that caused it. The change budget stays
+    at 200. A panel that moved must fail, even when its pixels are only one step different.
+  </p>
+
+  <div class="callout">
+    <span class="label">Why two checks</span>
+    <p>
+      A golden says that the picture changed. It does not say what changed. The assertion says
+      “no marker within 8 px of this projection” or “the stale marker is dimmer than the live one”.
+      The two checks answer different questions.
+    </p>
+  </div>
+</section>
+
+<section id="assert">
+  <h2>Pixel and structure assertions</h2>
+  <p>
+    An assertion reads a PNG and asks a question with a number. The colours come from
+    <code>ui::tokens</code>. The geometry comes from <code>map::geometry::project</code>. An assertion
+    cannot outlive the palette or the projection that it describes.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/verify.rs</strong> · a marker's centre is a centroid, not “some ink nearby”</figcaption>
+    <pre><code>pub fn blob_centre(
+    &amp;self,
+    x: f64,
+    y: f64,
+    colour: [u8; 3],
+    radius: i32,
+) -&gt; Option&lt;((f64, f64), usize)&gt; {
+    let mut sum = (0.0f64, 0.0f64);
+    let mut count = 0usize;
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            let px = x.round() as i32 + dx;
+            let py = y.round() as i32 + dy;
+            if px &lt; 0 || py &lt; 0 || px as u32 &gt;= self.width || py as u32 &gt;= self.height {
+                continue;
+            }
+            if near(self.at(px as u32, py as u32), colour, 24) {
+                sum.0 += f64::from(px);
+                sum.1 += f64::from(py);
+                count += 1;
+            }
+        }
+    }
+    (count &gt; 0).then(|| ((sum.0 / count as f64, sum.1 / count as f64), count))
+}</code></pre>
+  </figure>
+
+  <p>
+    A centroid moves with the marker. A check for “any matching ink near the point” would pass when a
+    marker moved five pixels. The tolerance is 8 pixels. Eight is measured: the panel border and Rune's
+    layout put a correct marker about four pixels from the raw projection. Eight is smaller than the
+    grid spacing and much smaller than a wrong camera.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/verify.rs</strong> · the two halves of one check</figcaption>
+    <pre><code>pub fn check(scene: &amp;str, png: &amp;Path) -&gt; Result&lt;Vec&lt;String&gt;, Vec&lt;String&gt;&gt; {
+    let image = Image::read(png)?;
+    let mut lines = assert_scene(&amp;image, scene)?;
+    lines.extend(assert_structure(scene)?);
+    Ok(lines)
+}</code></pre>
+  </figure>
+
+  <p>
+    <code>assert_scene</code> asks about the picture: ink, colours, positions, and panel edges.
+    <code>assert_structure</code> asks about the element tree: a pane exists, a card is inside the
+    window, a menu row is reachable. A capture can be right in its pixels and wrong in its structure.
+  </p>
+
+  <div class="callout ok">
+    <span class="label">The command a human runs</span>
+    <p>
+      <code>scripts/assert.sh out/picture.png</code> prints one line for each question and exits
+      non-zero on the first wrong answer. It runs the same <code>--assert</code> path that the gate
+      runs.
+    </p>
+  </div>
+</section>
+
+<section id="adding">
+  <h2>How to add a scene</h2>
+  <ol class="steps">
+    <li>Add a fixture in <code>fixtures/scenes/</code>. Use the wire envelope, not a wall type.</li>
+    <li>Add a function in <code>src/scene.rs</code>. Load the fixture. Set the camera. Set no clock.</li>
+    <li>Add the name to <code>SCENES</code>. A scene that exists is a scene the gate renders.</li>
+    <li>Run <code>scripts/capture.sh NAME</code>. The first run has no golden, so the gate fails here.</li>
+    <li>Look at <code>out/NAME.png</code>. If the picture is correct, a human runs <code>scripts/capture.sh --update-goldens NAME</code>.</li>
+    <li>Add the pixel and structure questions to <code>src/verify.rs</code>. A golden alone does not say what is wrong.</li>
+    <li>Run <code>scripts/verify.sh</code>. Paste its last lines in the pull request.</li>
+  </ol>
+
+  <p>
+    The order matters. A golden generated before a human looks at the picture makes the defect the
+    reference. The repository has one example: a scene drew a NATO symbol over a golden for ten days
+    (<code>#54</code>).
+  </p>
+</section>
+
+<section id="ci">
+  <h2>CI, and the two map jobs</h2>
+  <p>
+    CI runs <code>scripts/verify.sh</code> in one Linux job. It also runs three platform checks:
+  </p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>job</th><th>command</th><th>state</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>check (ubuntu, macos, windows)</code></td><td><code>cargo check --all-targets</code>, <code>fmt</code>, <code>clippy</code></td><td>blocks</td></tr>
+        <tr><td><code>map (macos-latest)</code></td><td><code>cargo clippy -p arcons-cc -p desk --features map -D warnings</code></td><td>blocks</td></tr>
+        <tr><td><code>map (windows-latest)</code></td><td>the same command</td><td>advisory; the vendored engine refuses the Windows target</td></tr>
+        <tr><td><code>verify</code></td><td><code>scripts/verify.sh</code></td><td>blocks</td></tr>
+        <tr><td><code>phone</code>, <code>phone-android</code>, <code>phone-ios</code></td><td>Dart tests, Flutter tests, APK, iOS build</td><td>separate jobs</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    The map exception is real. The gate cannot build MapLibre's C++ on every machine, so the
+    <code>map</code> jobs are the only proof that the map-gated code compiles. A red
+    <code>map (macos-latest)</code> is a red pull request. <code>#152</code> is the reason: a field
+    became a method, four map-gated sites were left behind, and the feature did not compile for five
+    merges while the gate was green.
+  </p>
+
+  <p>
+    CI uploads every capture when it fails. A pixel difference is the one failure that a log line
+    cannot explain. The next person diffs the images instead of guessing.
+  </p>
+</section>
+
+<section id="proof">
+  <h2>What a failure tells you</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>failure</th><th>what it means</th><th>where to look</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>two runs differ</td><td>the renderer is nondeterministic</td><td><code>out/NAME.first.png</code> and <code>out/NAME.png</code></td></tr>
+        <tr><td>golden bounds fail</td><td>a real picture change, or a new rasteriser</td><td><code>fixtures/golden/NAME.png</code> and the diff count</td></tr>
+        <tr><td>assertion fails with a projection</td><td>a marker is not where the camera says</td><td><code>map::geometry::project</code> and the pane's frame</td></tr>
+        <tr><td>assertion fails with a token</td><td>a colour or size left <code>ui::tokens</code></td><td><code>src/ui/tokens.rs</code></td></tr>
+        <tr><td><code>invariant_coverage</code></td><td>an invariant has no test, or an IOU is stale</td><td><code>tests/invariant_coverage.rs</code> and <code>docs/invariants.md</code></td></tr>
+        <tr><td><code>doc_claims</code></td><td>a document and the code disagree</td><td>the message names the claim and the file</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    <span class="label">The rule</span>
+    <p>
+      A ticket is done when the gate is green. A screenshot is not proof. A compile is not proof. The
+      last lines of <code>scripts/verify.sh</code> are proof.
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <p>
+      This page uses ASD-STE100 wording. The sentences are short. The verbs are active. The terms are
+      the project's terms.
+    </p>
+    <p>
+      The diagrams are rendered with <a href="https://github.com/obsidianmd/pele">Pele</a> (MIT), loaded
+      from jsDelivr. If Pele does not load, open “Diagram source” below each diagram.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arcons CC architecture — control, fleet, and files</title>
+<meta name="description" content="How intents reach the wall, how carriers share one queue, how a viewer draws an authority's scene, how the relay carries a phone, and what the wall writes. ASD-STE100 wording. Mermaid diagrams rendered with Pele.">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/pele@1/dist/pele.global.js" defer></script>
+<script src="diagram.js" defer></script>
+</head>
+<body>
+
+<header class="page-header">
+  <div class="wrap">
+    <p class="eyebrow">Arcons Command Center · architecture documentation</p>
+    <h1>Architecture IV: control, fleet, and files</h1>
+    <p class="lede">
+      The wall has one door for every input. Local clients and remote clients use the same vocabulary.
+      One queue holds their requests. The view loop applies them in arrival order. This page shows the
+      door, the carriers, the viewer, the relay, and the files the wall writes.
+    </p>
+    <p class="meta">
+      Code: <code>src/control/</code>, <code>src/control/sessions.rs</code>,
+      <code>src/control/authority.rs</code>, <code>src/config/layout.rs</code>,
+      <code>crates/desk</code>. Diagrams rendered with
+      <a href="https://github.com/obsidianmd/pele">Pele</a>.
+    </p>
+    <nav class="doc-nav" aria-label="Architecture pages">
+      <a href="index.html">Overview</a>
+      <a href="runtime.html">Runtime</a>
+      <a href="picture.html">Picture</a>
+      <a href="control.html" aria-current="page">Control</a>
+      <a href="verification.html">Verification</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+<section id="door">
+  <h2>One door for every input</h2>
+  <p>
+    A pointer event, a key, a command-line client, a phone, and a scene script all end at the same
+    function. The function is <code>control::apply</code>. It takes an <code>Intent</code> and a
+    <code>State</code>. It returns one of three results: a change, a pairing, or a refusal.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/control.rs</strong> · the intent vocabulary, shortened</figcaption>
+    <pre><code>pub enum Intent {
+    FocusPane(ViewId),
+    ClosePane(ViewId),
+    SplitPane { pane: ViewId, content: PaneContent },
+    Drop { pane: ViewId, onto: ViewId, edge: Edge },
+    Resize { pane: ViewId, other: ViewId, ratio: f32 },
+    MovePane { pane: ViewId, workspace: usize },
+    FocusWorkspace(usize),
+    NewWorkspace,
+    Camera { pane: ViewId, camera: Camera },
+    Select { pane: ViewId, unit: Option&lt;i64&gt; },
+    Follow { pane: ViewId, unit: Option&lt;i64&gt;, zoom: Option&lt;f64&gt; },
+    Rename { target: RenameTarget, name: Option&lt;String&gt; },
+    // ... menus, cursor, pairing, settings
+}</code></pre>
+  </figure>
+
+  <p>
+    An intent is a settled change. A pan is not sixty intents. The client computes the final camera and
+    sends one <code>Camera</code> value when the hand stops. A wall that applied sixty intents a second
+    would make its state equal to its input rate.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/control.rs</strong> · <code>apply_by</code>, the one door</figcaption>
+    <pre><code>pub fn apply_by(
+    state: &amp;mut State,
+    intent: Intent,
+    hand: Option&lt;crate::ui::Origin&gt;,
+) -&gt; Result&lt;Applied, Refused&gt; {
+    // A viewer does not change the authority's wall. It asks, and reports changed: false.
+    if asked_the_authority(state, &amp;intent) {
+        return Ok(Applied::Changed(Changed(false)));
+    }
+    let changed = match intent {
+        Intent::FocusPane(pane) =&gt; {
+            if state.pane(pane).is_none() {
+                return Err(Refused("no such pane"));
+            }
+            state.focus_pane(pane)
+        }
+        Intent::ClosePane(pane) =&gt; {
+            if state.pane(pane).is_none() {
+                return Err(Refused("no such pane"));
+            }
+            // The same predicate the menu row is built from. The control and the action cannot disagree.
+            if !state.can_close(pane) {
+                return Err(Refused(LAST_PANE));
+            }
+            ui::close_from_menu(state, pane)
+        }
+        // ... every other verb
+    };
+    Ok(Applied::Changed(Changed(changed)))
+}</code></pre>
+  </figure>
+
+  <p>
+    A refusal is a name. It is not silence, and it is not a default. The name comes from the same rule
+    that the visible control uses. For example, <code>ClosePane</code> asks <code>State::can_close</code>.
+    The menu row is built from that same predicate. The two cannot disagree.
+  </p>
+
+  <div class="callout">
+    <span class="label">Refusal categories</span>
+    <p>
+      A refusal carries a category: <code>rule</code>, <code>version</code>, <code>input</code>, or
+      <code>busy</code>. A client chooses between retry, fix the call, or update the app. It does not
+      read a sentence to decide (<span class="badge">INV-07</span>).
+    </p>
+  </div>
+</section>
+
+<section id="queue">
+  <h2>Carriers and one queue</h2>
+  <p>
+    A carrier is a transport that carries JSON lines. The unix socket is one carrier. The relay is
+    another. A carrier parses a line and makes a <code>Job</code>. It does not change the wall. The job
+    goes into the wall's one queue. The view loop drains that queue between frames.
+  </p>
+
+  <figure class="diagram-card">
+    <div class="diagram-head">
+      <h3>From a client's line to a changed pixel</h3>
+      <span>Rendered with Pele</span>
+    </div>
+    <div class="diagram" id="control-path" role="img" aria-label="Control path: ctl and phone lines enter carriers, become Jobs in one queue, are served by the view loop through apply, and change State."></div>
+    <figcaption>
+      The queue is the wall's. A socket request and a relay request wait in one line, so arrival order
+      is the order that the wall applies.
+    </figcaption>
+    <details class="source">
+      <summary>Diagram source</summary>
+      <pre id="control-path-source">flowchart TB
+  CTL["arcons-cc ctl"]
+  PHONE["phone"]
+  RELAY["relay service"]
+
+  subgraph Wall["wall process"]
+    SOCK["Unix listener&lt;br/&gt;mode 0600 socket"]
+    CARRIER["Relay carrier&lt;br/&gt;outbound"]
+    SESSION["Session loop&lt;br/&gt;parse and answer"]
+    QUEUE["Queue&lt;br/&gt;one channel"]
+    POLL["poll&lt;br/&gt;between frames"]
+    SERVE["authority::serve"]
+    APPLY["control::apply"]
+    STATE["State"]
+  end
+
+  CTL --&gt;|"JSON line"| SOCK
+  PHONE --&gt;|"JSON line"| RELAY
+  RELAY --&gt;|"JSON line"| CARRIER
+  SOCK --&gt; SESSION
+  CARRIER --&gt; SESSION
+  SESSION --&gt;|"Job::Request"| QUEUE
+  QUEUE --&gt;|"try_recv"| POLL
+  POLL --&gt; SERVE
+  SERVE --&gt; APPLY
+  APPLY --&gt; STATE
+  STATE --&gt;|"Answer"| POLL
+  POLL --&gt;|"Job::answer"| SESSION</pre>
+    </details>
+  </figure>
+
+  <figure class="code">
+    <figcaption><strong>src/control/sessions.rs</strong> · the wall's queue</figcaption>
+    <pre><code>pub struct Queue {
+    to: Sender&lt;Job&gt;,
+    from: Receiver&lt;Job&gt;,
+}
+
+impl Queue {
+    pub fn new() -&gt; Queue {
+        let (to, from) = mpsc::channel();
+        Queue { to, from }
+    }
+
+    /// The end one carrier holds. Cloned per carrier; every clone feeds the same channel.
+    pub fn sender(&amp;self) -&gt; Sender&lt;Job&gt; {
+        self.to.clone()
+    }
+
+    /// The next thing a carrier has left for the wall. Never blocks.
+    pub fn next(&amp;self) -&gt; Option&lt;Job&gt; {
+        self.from.try_recv().ok()
+    }
+}</code></pre>
+  </figure>
+
+  <p>
+    A <code>Job</code> is a request or a departure. A request has a reply channel, so the carrier can
+    answer the client without touching <code>State</code>. A departure says that a hand is gone. Its
+    cursor goes with it.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/control/server.rs</strong> · one job</figcaption>
+    <pre><code>pub enum Job {
+    Request {
+        request: super::wire::Request,
+        /// Whose hand asked: the socket's ctl, or a relay device name.
+        hand: Option&lt;Origin&gt;,
+        answer: Sender&lt;super::wire::Answer&gt;,
+    },
+    Departed { origin: Origin },
+}
+
+impl Job {
+    pub fn answer(self, answer: super::wire::Answer) {
+        // A client that hung up is not an error: the wall already changed.
+        if let Job::Request { answer: to, .. } = self {
+            let _ = to.send(answer);
+        }
+    }
+}</code></pre>
+  </figure>
+
+  <p>
+    The listener binds the socket before it starts its thread. The socket is mode <code>0600</code>,
+    inside a directory that is mode <code>0700</code>. The directory closes the time between
+    <code>bind</code> and <code>set_permissions</code>. The socket is the credential. There is no token
+    and no handshake (<span class="badge">INV-08</span>).
+  </p>
+</section>
+
+<section id="wire">
+  <h2>The line format</h2>
+  <p>
+    The protocol is one JSON object on one line, in both directions. The version is compared, not
+    negotiated. A different version is a named refusal.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>docs/control.md</strong> · one request and two answers</figcaption>
+    <pre><code>{"v": 1, "intent": {"verb": "pane.focus", "pane": 2}}
+{"v": 1, "ok": true, "changed": true}
+{"v": 1, "ok": false, "why": "the last pane on the wall", "kind": "rule"}</code></pre>
+  </figure>
+
+  <p>
+    A request carries exactly one of <code>intent</code>, <code>read</code>, or <code>watch</code>.
+    Two at once is a refusal. A read is <code>wall</code> or <code>scene</code>. A watch is the
+    projection, then one line for each change.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/control/wire.rs</strong> · the version and the one-of-three rule</figcaption>
+    <pre><code>match object.get("v").and_then(Value::as_u64) {
+    Some(v) if v == u64::from(PROTOCOL) =&gt; {}
+    Some(_) =&gt; return Err(Refused("unsupported protocol version")),
+    None =&gt; return Err(Refused("a request carries \"v\"")),
+}
+
+match (
+    object.get("intent"),
+    object.get("read"),
+    object.get("watch"),
+) {
+    (Some(intent), None, None) =&gt; from_wire(intent).map(Request::Intent),
+    (None, Some(read), None) =&gt; match read.as_str() {
+        Some("wall") =&gt; Ok(Request::Wall),
+        Some("scene") =&gt; Ok(Request::Scene),
+        _ =&gt; Err(Refused("unknown read")),
+    },
+    // ...
+    (Some(_), _, _) | (_, Some(_), _) =&gt; Err(Refused(
+        "a request carries \"intent\", \"read\" or \"watch\", not two",
+    )),
+}</code></pre>
+  </figure>
+
+  <p>
+    The round trip is the identity: <code>from_wire(&amp;to_wire(intent)) == intent</code> for every
+    variant. A test holds that rule. The CLI builds the same JSON. Without the rule, the two halves of
+    the wire could drift apart.
+  </p>
+</section>
+
+<section id="authority">
+  <h2>The authority and the viewer</h2>
+  <p>
+    A fleet has one authority. A viewer asks the authority for a <code>Scene</code> and draws it. The
+    role is a value: <code>Role::Local</code> is the wall, and <code>Role::Remote(path)</code> is a
+    viewer. The code path is the same for both. The difference is which process applies a change.
+  </p>
+
+  <figure class="diagram-card">
+    <div class="diagram-head">
+      <h3>One authority, several viewers</h3>
+      <span>Rendered with Pele</span>
+    </div>
+    <div class="diagram" id="fleet" role="img" aria-label="Fleet: the authority wall reads Minos and owns State; viewers read scenes; the phone reaches the authority through the relay."></div>
+    <figcaption>
+      A viewer holds no Minos credential and opens no socket to Minos. The authority is the only reader
+      of the fleet.
+    </figcaption>
+    <details class="source">
+      <summary>Diagram source</summary>
+      <pre id="fleet-source">flowchart TB
+  MINOS["Minos"]
+
+  subgraph Authority["Authority wall - local role"]
+    ASTATE["State"]
+    ASCENE["Scene&lt;br/&gt;arrangement, fleet, seq"]
+  end
+
+  subgraph Viewer["Viewer wall - remote role"]
+    VSTATE["State"]
+    VPOLL["poll: read scene"]
+  end
+
+  PHONE["phone"]
+  RELAY["relay service"]
+
+  MINOS --&gt;|"REST and socket"| Authority
+  Authority --&gt;|"Scene with seq"| VPOLL
+  VPOLL --&gt; VSTATE
+  VPOLL --&gt;|"read: scene"| Authority
+  PHONE --&gt;|"intent"| RELAY
+  RELAY --&gt;|"Job"| Authority</pre>
+    </details>
+  </figure>
+
+  <p>
+    The viewer uses pull, not push. It sends <code>read: "scene"</code> when its session is not busy.
+    The answer carries a <code>seq</code>. If the <code>seq</code> has not moved, the viewer does one
+    comparison and rebuilds nothing. A push channel is not needed here. A relay already holds a
+    connection open for the phone.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/control/authority.rs</strong> · the four requests, and one answer</figcaption>
+    <pre><code>pub fn answer(
+    state: &amp;mut State,
+    request: &amp;Request,
+    hand: Option&lt;crate::ui::Origin&gt;,
+) -&gt; (Answer, bool) {
+    match request {
+        Request::Intent(intent) =&gt; match crate::control::apply_by(state, intent.clone(), hand) {
+            Ok(Applied::Changed(changed)) =&gt; {
+                let moved = changed.0;
+                (Answer::Changed(Ok(changed)), moved)
+            }
+            Ok(Applied::Paired(paired)) =&gt; (Answer::Paired(paired), true),
+            Err(why) =&gt; (Answer::Changed(Err(why)), false),
+        },
+        Request::Wall =&gt; (Answer::Wall(crate::control::projection::versioned(state)), false),
+        Request::Watch(watch) =&gt; (Answer::Watching(*watch), false),
+        Request::Scene =&gt; (Answer::Scene(Box::new(state.scene())), false),
+    }
+}</code></pre>
+  </figure>
+
+  <p>
+    The scene is the arrangement, not the pixels. It carries the workspaces, the panes, their cameras,
+    their filters, and the fleet values. It does not carry a PNG. A viewer computes the picture from
+    the same values that the authority used.
+  </p>
+
+  <div class="callout warn">
+    <span class="label">A viewer is not a second wall</span>
+    <p>
+      If a viewer cannot reach its authority, it says so in one line and draws its own default wall. It
+      does not invent the authority's state. A screen that refuses to draw because a socket is absent is
+      worse than a screen that draws and says why.
+    </p>
+  </div>
+</section>
+
+<section id="relay">
+  <h2>The relay and the phone</h2>
+  <p>
+    The wall does not listen on TCP. A phone in another room cannot use the unix socket. The wall dials
+    out to a relay. The phone also talks to the relay. The relay joins the two connections.
+  </p>
+
+  <p>
+    The relay frames have five names. The wall sends <code>hello</code> first, with its own Minos
+    credential. The relay answers <code>welcome</code>. A request from a phone carries
+    <code>device</code>: the device key. An answer back to a phone carries <code>to</code>.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/control/relay.rs</strong> · the five frame names, in one place</figcaption>
+    <pre><code>pub mod frame {
+    pub const HELLO: &amp;str = "hello";
+    pub const CREDENTIAL: &amp;str = "credential";
+    pub const WELCOME: &amp;str = "welcome";
+    pub const DEVICE: &amp;str = "device";
+    pub const TO: &amp;str = "to";
+
+    pub const NAMES: &amp;[&amp;str] = &amp;[HELLO, CREDENTIAL, WELCOME, DEVICE, TO];
+}</code></pre>
+  </figure>
+
+  <p>
+    A device key is 32 fresh bytes. The wall stores only the SHA-256 hash in <code>devices.toml</code>.
+    A revoked device stops at its next frame. A frame from a key that no row holds gets one answer:
+    <code>that device is not paired</code>. The one exception is <code>pair.claim</code>. A phone that
+    has never paired has no key to send, so that one verb can come before a name.
+  </p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>state</th><th>what the wall says</th><th>what the operator does</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>no <code>ARCONS_RELAY_URL</code></td><td><code>no relay is configured</code></td><td>nothing; a wall in a cupboard works</td></tr>
+        <tr><td>relay does not answer</td><td><code>the relay is not answering</code></td><td>wait; the wall retries</td></tr>
+        <tr><td>relay refuses the wall</td><td><code>the relay refused the wall</code></td><td>fix the wall's credential</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    The development relay is <code>tools/dev-relay</code>. It is a development tool, not the contract.
+    The contract is <code>docs/control.md</code> and <code>fixtures/control/</code>.
+  </p>
+</section>
+
+<section id="files">
+  <h2>What the wall remembers</h2>
+  <p>
+    The wall writes four files. Each file has one owner and one job. No file holds a secret except the
+    credential file, and that file is mode <code>0600</code>.
+  </p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>file</th><th>owner</th><th>holds</th><th>written</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>config.toml</code></td><td>the deployment</td><td>Minos URLs, camera start, stale threshold, credential path</td><td>by a human</td></tr>
+        <tr><td><code>credentials.toml</code></td><td>the deployment</td><td>one refresh token, or an identifier and password</td><td>by a human; mode <code>0600</code></td></tr>
+        <tr><td><code>layout.toml</code></td><td>the operator</td><td>workspaces, panes, cameras, names, filters, tree and newsroom positions</td><td>by the wall, 1.5 s after the arrangement stops</td></tr>
+        <tr><td><code>settings.toml</code></td><td>the operator</td><td>display preferences</td><td>by the wall</td></tr>
+        <tr><td><code>devices.toml</code></td><td>the wall</td><td>paired device names and key hashes</td><td>on pair and on forget</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    <code>layout.toml</code> holds the arrangement and nothing else. <code>deny_unknown_fields</code>
+    is what keeps it that way. A hand-written key that the wall does not know is refused, not ignored.
+    A camera is written with six decimals. A split ratio is clamped to 0.05 through 0.95. A file that
+    the wall cannot read is a log line and the default wall, not a failed start.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/ui/saved.rs</strong> · the write is off the view loop</figcaption>
+    <pre><code>pub fn save_layout(&amp;mut self) {
+    if self.headless {
+        return;
+    }
+    self.arranged_at = None;
+    let saved = self.snapshot();
+    let path = saved_layout_path();
+    let text = match toml::to_string_pretty(&amp;saved) {
+        Ok(text) =&gt; text,
+        Err(error) =&gt; {
+            tracing::warn!("layout: the wall cannot describe itself ({error})");
+            return;
+        }
+    };
+
+    // A camera gesture is a hundred changes a second. The syscall goes to a thread.
+    std::thread::spawn(move || {
+        match crate::config::write_atomically(&amp;path, &amp;text) {
+            Ok(()) =&gt; tracing::debug!("layout: wrote {}", path.display()),
+            Err(error) =&gt; tracing::warn!("layout: {error}"),
+        }
+    });
+}
+
+pub fn flush_layout_at(&amp;mut self, path: &amp;std::path::Path) -&gt; bool {
+    if self.headless || self.arranged_at.take().is_none() {
+        return false;
+    }
+    let saved = self.snapshot();
+    match toml::to_string_pretty(&amp;saved) {
+        Ok(text) =&gt; crate::config::write_atomically(path, &amp;text).is_ok(),
+        Err(error) =&gt; { tracing::warn!("layout: {error}"); false }
+    }
+}</code></pre>
+  </figure>
+
+  <p>
+    Nothing is saved that is not an arrangement. The selected hull, the open card, and the headlines are
+    answers the wall has read. A wall that came back showing yesterday's answer as if it were today's
+    would be lying. The filter is the exception, and it is deliberate. A filter is a question, and a
+    pane that hid the bases yesterday asked to hide them until told otherwise.
+  </p>
+
+  <div class="callout">
+    <span class="label">A capture writes nothing</span>
+    <p>
+      <code>State.headless</code> guards every writer. A scene never reads or writes
+      <code>layout.toml</code>, <code>settings.toml</code>, or <code>devices.toml</code>. A golden must
+      not depend on the machine that rendered it (<span class="badge">INV-11</span>).
+    </p>
+  </div>
+</section>
+
+<section id="desk">
+  <h2>The desk, and the one write to Minos</h2>
+  <p>
+    The desk is a second binary in the same workspace. It reads the picture. It writes relayed fixes
+    for a batch of units. The route is <code>POST /live-feed/fixes/relayed</code>.
+  </p>
+
+  <p>
+    The desk has two parts that need no window. <code>identity</code> mints and keeps this
+    installation's device id. <code>time</code> answers what a typed time will do. The screen is built
+    from <code>field</code>, <code>batch</code>, <code>report</code>, and <code>ui</code>. A scene
+    fixes the clock and the samples, so a desk capture is reproducible in the same way as a wall
+    capture.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>crates/desk/src/lib.rs</strong> · the desk's parts</figcaption>
+    <pre><code>pub mod batch;
+pub mod chart;
+pub mod deployment;
+pub mod field;
+pub mod http;
+pub mod identity;
+pub mod picker;
+pub mod picture;
+pub mod report;
+pub mod scene;
+pub mod send;
+pub mod time;
+pub mod ui;</code></pre>
+  </figure>
+
+  <p>
+    The desk uses the wall's projection and the wall's comparison function. It does not own a second
+    map projection or a second golden comparison. A named scene in the desk is a desk scene. The wall
+    does not know its name.
+  </p>
+
+  <div class="callout warn">
+    <span class="label">The desk writes. The wall does not.</span>
+    <p>
+      A wall account has <code>read</code> actions and nothing else. The desk account has the action
+      for the relayed route. Do not give the wall a write action to make a demo easier.
+    </p>
+  </div>
+</section>
+
+<section id="check">
+  <h2>How to check this page</h2>
+  <ul>
+    <li>Read <code>src/control.rs</code>: <code>Intent</code>, <code>RefusalKind</code>, <code>apply_by</code>.</li>
+    <li>Read <code>src/control/sessions.rs</code>: <code>Queue</code>.</li>
+    <li>Read <code>src/control/server.rs</code>: <code>Job</code> and <code>serve_session</code>.</li>
+    <li>Read <code>src/control/authority.rs</code>: <code>Role</code> and <code>answer</code>.</li>
+    <li>Run <code>cargo test control::</code> and <code>cargo test config::layout</code>.</li>
+    <li>Run <code>scripts/conformance.sh fixtures/control/session.jsonl</code>.</li>
+  </ul>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <p>
+      This page uses ASD-STE100 wording. The sentences are short. The verbs are active. The terms are
+      the project's terms.
+    </p>
+    <p>
+      The diagrams are rendered with <a href="https://github.com/obsidianmd/pele">Pele</a> (MIT), loaded
+      from jsDelivr. If Pele does not load, open “Diagram source” below each diagram.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

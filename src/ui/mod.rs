@@ -36,7 +36,10 @@ pub mod view;
 mod viewpoint;
 
 pub use filter::Filter;
-pub use view::{Dir, Layout, Rect, ViewId};
+pub use view::{Dir, Layout, Rect, TreeCamera};
+
+/// What a pane is called. Small numbers, unique for the life of the layout.
+pub type ViewId = u32;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -119,7 +122,7 @@ pub struct Pane {
     /// pane, like the map thread above — a pane holds the camera its content has, and two tree panes
     /// hold two. It is a value on the pane rather than in the drawing, so a gesture, a fit and a capture
     /// all read the same camera.
-    pub tree: Option<crate::ui::tree::TreeCamera>,
+    pub tree: Option<crate::ui::TreeCamera>,
     /// **The newsroom pane's view** (#136): the tab, the page, the rows and the query whose reply may
     /// still land. `None` on every other kind of pane, like the tree camera above: a pane holds the state
     /// its content has, and two newsroom panes hold two.
@@ -186,7 +189,7 @@ impl Pane {
             content: PaneContent::Tree { organisation },
             // A tree pane is a canvas (#127): it starts unfitted, and the first layout fits the whole
             // forest into it. A map pane has no tree camera at all, which is why this is `Some` here only.
-            tree: Some(crate::ui::tree::TreeCamera::default()),
+            tree: Some(crate::ui::TreeCamera::default()),
             ..Self::new(id, camera)
         }
     }
@@ -1014,6 +1017,18 @@ impl State {
             .push(Workspace::empty(default_workspace_name(index)));
         self.switch_to(index);
         index
+    }
+
+    /// **Something about the arrangement changed.** Cheap on purpose: it records the frame at which the
+    /// change happened, and the save waits for the changes to stop.
+    pub fn arranged(&mut self) {
+        if !self.headless {
+            self.arranged_at = Some(self.logical);
+        }
+        // **The scene counter** (#201): every settled change is one number further on, so a viewer can order two
+        // scenes and notice a gap. Counted for a capture too — a scene's `seq` costs nothing and a test that a
+        // round trip preserves it would otherwise only hold on a wall.
+        self.scene_seq += 1;
     }
 
     /// The pane a menu is open on, and where — `None` when no menu is open.

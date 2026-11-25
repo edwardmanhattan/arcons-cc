@@ -467,11 +467,11 @@ fn pane_from_scene(saved: &ScenePane, clock: f64) -> Pane {
     pane.view.filter.hidden_domains = saved.filter.hidden_domains.iter().copied().collect();
     pane.view.filter.hidden_categories = saved.filter.hidden_categories.iter().copied().collect();
     if let Some(tree) = saved.tree {
-        pane.tree = Some(crate::ui::tree::TreeCamera {
+        pane.tree = Some(crate::ui::TreeCamera {
             pan: (tree.pan_x, tree.pan_y),
             zoom: tree.zoom,
             touched: tree.touched,
-            ..crate::ui::tree::TreeCamera::default()
+            ..crate::ui::TreeCamera::default()
         });
     }
     if let Some(news) = &saved.news {

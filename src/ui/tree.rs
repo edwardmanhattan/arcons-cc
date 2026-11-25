@@ -32,6 +32,7 @@ use rune::{El, col, el, row, shape::Shape, text};
 use crate::data::types::{TniCommandPost, UnitOrganisationNode};
 use crate::ui::icons;
 use crate::ui::tokens;
+use crate::ui::view::TreeCamera;
 use crate::ui::{PaneContent, Rect, State, ViewId};
 
 /// One post, as the wire described it, before it is placed.
@@ -114,60 +115,6 @@ pub struct Tree {
     pub links: Vec<Link>,
     pub width: f32,
     pub height: f32,
-}
-
-/// **A tree pane's camera** (#127): where the tree's own points sit in the pane.
-///
-/// The transform is one function (`view::tree_point`): `pane = tree * zoom + pan`. It is a value on the
-/// pane, like the map's [`crate::map::geometry::Camera`], so two tree panes keep two views — and it is
-/// applied with Rune's `El::scale`/`El::offset` over the already-laid-out tree, never by recomputing
-/// every node's rectangle and font size. Layout keeps the unscaled size, so a zoom does not re-flow the
-/// tree, text rasterizes at the scaled size once it rests, and hit testing follows the scaled rect.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TreeCamera {
-    /// The pane-space point the tree's own origin is drawn at.
-    pub pan: (f32, f32),
-    pub zoom: f32,
-    /// **Has a hand taken the camera?** Until it has, a resize re-fits — which is the sentence #127
-    /// exists to make true: narrowing a pane shows the whole forest instead of cutting it.
-    pub touched: bool,
-    /// The pane's own size, as the last layout pass measured it. The fit is a function of this and the
-    /// tree, and a gesture needs it before it may recompute one.
-    pub(crate) size: (f32, f32),
-    /// The pan a drag started on, so a pan is absolute rather than a sum of deltas.
-    pub(crate) drag_origin: Option<(f32, f32)>,
-}
-
-impl Default for TreeCamera {
-    fn default() -> Self {
-        Self {
-            pan: (0.0, 0.0),
-            zoom: 1.0,
-            touched: false,
-            size: (0.0, 0.0),
-            drag_origin: None,
-        }
-    }
-}
-
-impl TreeCamera {
-    /// This camera moved by a travel in pane points: a drag, where the tree follows the hand.
-    pub fn panned(mut self, by: (f32, f32)) -> Self {
-        self.pan = (self.pan.0 + by.0, self.pan.1 + by.1);
-        self.touched = true;
-        self
-    }
-
-    /// A camera a hand has moved to a place and a zoom. Scenes and tests set one directly; a gesture
-    /// goes through the handlers below, which are the only code that changes a camera on a wall.
-    pub fn moved_to(pan: (f32, f32), zoom: f32) -> Self {
-        Self {
-            pan,
-            zoom: zoom.clamp(tokens::TREE_ZOOM_MIN, tokens::TREE_ZOOM_MAX),
-            touched: true,
-            ..Self::default()
-        }
-    }
 }
 
 /// **The fit**: the whole tree inside the pane, centred under the pane's chrome, at the largest zoom

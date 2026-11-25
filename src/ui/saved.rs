@@ -57,18 +57,6 @@ impl State {
         self
     }
 
-    /// **Something about the arrangement changed.** Cheap on purpose: it records the frame at which the
-    /// change happened, and the save waits for the changes to stop.
-    pub fn arranged(&mut self) {
-        if !self.headless {
-            self.arranged_at = Some(self.logical);
-        }
-        // **The scene counter** (#201): every settled change is one number further on, so a viewer can order two
-        // scenes and notice a gap. Counted for a capture too — a scene's `seq` costs nothing and a test that a
-        // round trip preserves it would otherwise only hold on a wall.
-        self.scene_seq += 1;
-    }
-
     /// Whether the arrangement has held still long enough to write.
     pub fn save_due(&self) -> bool {
         !self.headless
@@ -392,11 +380,11 @@ fn load_pane(saved: &SavedPane, id: ViewId) -> Pane {
     };
     pane.name = saved.name.clone();
     if let Some(tree) = saved.tree {
-        pane.tree = Some(crate::ui::tree::TreeCamera {
+        pane.tree = Some(crate::ui::TreeCamera {
             pan: (tree.pan_x, tree.pan_y),
             zoom: tree.zoom,
             touched: tree.touched,
-            ..crate::ui::tree::TreeCamera::default()
+            ..crate::ui::TreeCamera::default()
         });
     }
     if let Some(news) = &saved.news {
