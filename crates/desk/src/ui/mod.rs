@@ -1008,6 +1008,9 @@ pub fn view(state: &State, _cx: &mut Cx<State>) -> El {
                     col()
                         .grow(1.0)
                         .h_full()
+                        // A long send result must wrap inside the tray, not widen the column and push
+                        // the report off the window (#294 review).
+                        .min_w(tokens::DESK_SCROLL_MIN_W)
                         .gap(tokens::DESK_ZONE_GAP)
                         .child(crate::ui::chart::view(state, _cx.env().scale))
                         .child(desk::tray(state)),
@@ -1167,6 +1170,7 @@ fn form(state: &State) -> El {
                 .role("alert")
                 .font(tokens::LABEL)
                 .color(tokens::ink())
+                .wrap()
                 .pt(tokens::GAP),
         );
     }
@@ -1176,6 +1180,7 @@ fn form(state: &State) -> El {
                 .key("field-notice")
                 .font(tokens::LABEL)
                 .color(tokens::ink_dim())
+                .wrap()
                 .pt(tokens::GAP),
         );
     }
@@ -1522,6 +1527,7 @@ fn readiness_line(state: &State) -> El {
         .role("status")
         .font(tokens::LABEL)
         .color(tokens::ink_dim())
+        .wrap()
 }
 
 /// Decision 6's note is the desk's own record: kept here, never sent, and empty until the operator types
@@ -2764,6 +2770,65 @@ mod tests {
         for card in &cards {
             assert_eq!(card.rect[3], tokens::DESK_CARD_H, "a card changed height");
         }
+    }
+
+    #[test]
+    fn the_chart_pans_with_a_drag_and_zooms_with_the_wheel() {
+        let mut runtime = frame_once(scene::state_for("batch"));
+        let before = runtime.state.chart.camera();
+        runtime.pointer_down(500.0, 300.0);
+        runtime.pointer_move(560.0, 300.0);
+        runtime.pointer_up(560.0, 300.0);
+        runtime.frame(0.0);
+        let after = runtime.state.chart.camera();
+        assert_ne!(before, after, "a drag on the chart must pan the camera");
+
+        let zoom_before = after.zoom;
+        runtime.wheel_event(rune::WheelEvent::new(0.0, -100.0).at(500.0, 300.0));
+        runtime.frame(0.0);
+        let zoom_after = runtime.state.chart.camera().zoom;
+        assert!(
+            (zoom_after - zoom_before).abs() > 0.1,
+            "a wheel on the chart must zoom: {zoom_before} -> {zoom_after}"
+        );
+    }
+
+    #[test]
+    fn a_long_send_result_wraps_in_the_tray_and_keeps_the_report_on_screen() {
+        let mut state = scene::state_for("batch");
+        state.send_failure = Some(
+            "KRI ABDUL HALIM PERDANAKUSUMA: the route refused the row and named the field; \
+             KRI SULTAN HASANUDDIN: the vessel has no commander appointed, so there is no report \
+             to attribute. "
+                .repeat(3),
+        );
+        let runtime = frame_once(state);
+        let window_right = tokens::DESK_WINDOW.0 - tokens::DESK_WINDOW_PAD;
+        let inspector = element(&runtime, "inspector");
+        let tray = element(&runtime, "batch-tray");
+        let foot = element(&runtime, "tray-foot");
+        assert!(
+            right(&inspector) <= window_right + 0.5,
+            "the long send result pushed the report off the window: {:?}",
+            inspector.rect
+        );
+        assert!(
+            right(&tray) <= window_right + 0.5,
+            "the long send result widened the tray past the window: {:?}",
+            tray.rect
+        );
+        assert!(
+            foot.rect[3] > tokens::DESK_QUIET_H,
+            "the long send result did not wrap: {:?}",
+            foot.rect
+        );
+        let send = element(&runtime, "send-reports");
+        assert!(
+            bottom(&send) <= bottom(&tray) + 0.5,
+            "Send is outside the tray after the wrap: {:?} vs {:?}",
+            send.rect,
+            tray.rect
+        );
     }
 
     #[test]

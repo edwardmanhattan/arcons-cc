@@ -442,6 +442,9 @@ fn search_field(state: &State) -> El {
         .single_line()
         .w_full()
         .h(tokens::DESK_FIELD_H)
+        // Rune's text input draws its line from the top of the content box. The padding is what centers
+        // the placeholder and the typed text in the 36 pt field (#294 review).
+        .py(tokens::DESK_CONTROL_PAD)
         .px(tokens::DESK_CONTROL_PAD)
         .fill(tokens::bg())
         .radius(tokens::GAP)
@@ -938,16 +941,28 @@ fn footer(state: &State) -> El {
     };
     let enabled = ready > 0 && !state.sending();
     // "One request each" is a claim about the wire, and with nothing in the draft there is no each.
+    //
+    // The status is the part that grows. A send result names every vessel and its answer, so it is
+    // allowed to wrap; a single unwrapped line would set the center column's minimum width and push the
+    // report off the window, which is what the review caught.
     let mut row = el()
         .key("tray-footer")
         .w_full()
         .items_center()
         .gap(tokens::GAP)
-        .child(caption(words).key("tray-foot"));
+        .child(
+            text(words)
+                .key("tray-foot")
+                .font(tokens::LABEL)
+                .color(tokens::ink_dim())
+                .wrap()
+                .grow(1.0)
+                .min_w(tokens::DESK_SCROLL_MIN_W),
+        );
     if vessels > 0 && !state.sending() && state.sent.is_none() {
         row = row.child(caption("one request each"));
     }
-    row.child(spacer()).child(
+    row.child(
         el().key("send-reports")
             .role("button")
             .label(send.clone())

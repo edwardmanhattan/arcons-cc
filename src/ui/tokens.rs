@@ -400,6 +400,13 @@ pub fn accent() -> Color {
     oklch(0.78, 0.11, 220.0)
 }
 
+/// **The desk's map scrim** (#294 review): the basemap is a bright daylight page inside a night
+/// console. It stays legible, but it is the one surface that must recede, so the hulls and the report
+/// keep their contrast. Drawn between the water and the markers, never over either.
+pub fn map_scrim() -> Color {
+    bg().alpha(0.35)
+}
+
 /// The handle's ink: a neutral, a shade below the focus edge so the mark reads as something to grab
 /// rather than as a border.
 pub fn handle_ink() -> Color {

@@ -13,7 +13,7 @@
 //! distance, not a mode. The drop is a **claim about now** — it fills the selected hull's one row and
 //! stops there; sending is #278's.
 
-use arcons_cc::map::geometry::Camera;
+use arcons_cc::map::geometry::{Camera, WHEEL_ZOOM_PER_PX};
 use arcons_cc::ui::tokens;
 use rune::{El, el, row, spacer, text};
 
@@ -44,6 +44,7 @@ pub(super) fn view(state: &State, scale: f32) -> El {
         .on_layout(|state: &mut State, [_, _, width, height]| {
             state.chart.resize(f64::from(width), f64::from(height));
         })
+        .on_wheel(|state: &mut State, event, _tx| wheel(state, &event))
         .on_drag(|state: &mut State, drag, _tx| {
             match drag.phase {
                 rune::Phase::Down => state.chart_origin = Some(state.chart.camera()),
@@ -113,7 +114,13 @@ pub(super) fn view(state: &State, scale: f32) -> El {
     }
 
     if let Some(frame) = water {
-        layer = layer.child(frame);
+        layer = layer.child(frame).child(
+            el().key("chart-scrim")
+                .absolute(0.0, 0.0)
+                .w_full()
+                .h_full()
+                .fill(tokens::map_scrim()),
+        );
     } else {
         // No picture: a degree grid is the smallest honest structure, and the step follows the zoom, so a
         // one-degree line at z14 is a wall and a one-degree line at z5 is a dot. Over real water it would
@@ -268,6 +275,22 @@ fn ring(point: (f64, f64), size: f32, colour: rune::Color) -> El {
         .size(size, size)
         .radius(half)
         .border(tokens::HAIRLINE, colour)
+}
+
+/// A wheel step zooms about the pointer, so the ground under the cursor stays under it.
+///
+/// The wall's map uses the same constant and the same direction; the desk's chart had only the two
+/// buttons, which made an operator reach for a control for the gesture a map is expected to answer.
+fn wheel(state: &mut State, event: &rune::WheelEvent) -> bool {
+    if event.dy == 0.0 {
+        return false;
+    }
+    let before = state.chart.camera();
+    state.chart.zoom_at(
+        (f64::from(event.x), f64::from(event.y)),
+        f64::from(event.dy) * WHEEL_ZOOM_PER_PX,
+    );
+    state.chart.camera() != before
 }
 
 /// The corner controls: zoom, and the keyboard's way into a placement.
