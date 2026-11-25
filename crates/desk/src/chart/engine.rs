@@ -10,7 +10,7 @@
 //! drawn with the state's camera, and the thread coalesces the requests it does not need.
 //!
 //! A process-global rather than a field on `State`: a `MapThread` owns a thread and a GL context, and
-//! `State` is rebuilt for every scene, test and capture. Spawning one per `State::sample` would leave
+//! `State` is rebuilt for every scene, test and capture. Spawning one per `scene::sample` would leave
 //! several Vulkan contexts open after a gate run. One process, one chart, one engine — and one **explicit
 //! shutdown**, because a static is never dropped: MapLibre aborts when its context is torn down under a
 //! thread that is still rendering (`Failed to set thread-specific storage`, then `SIGABRT`), which is what

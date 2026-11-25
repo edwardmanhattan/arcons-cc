@@ -2,7 +2,6 @@
 
 use desk::chart::Chart;
 use desk::scene;
-use desk::ui::State;
 
 const SIZE: (f64, f64) = (720.0, 520.0);
 
@@ -139,7 +138,7 @@ fn placing_with_nothing_selected_says_so_instead_of_inventing_a_hull() {
 fn a_state_exposes_the_chart_it_draws_with() {
     // The panel and the projection must agree about the rectangle, or a press lands somewhere else than
     // the water under the pointer.
-    let state = State::sample();
+    let state = scene::sample();
     let (w, h) = (state.chart.viewport().w, state.chart.viewport().h);
     assert!(
         w > 1.0 && h > 1.0,

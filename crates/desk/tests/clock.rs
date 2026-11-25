@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use desk::batch::{Readiness, Reason};
 use desk::picture::{ServerClock, load_from, path_in};
+use desk::scene;
 use desk::time::Regime;
 use desk::ui::{ClockSource, State};
 
@@ -232,7 +233,7 @@ fn the_clock_carries_forward_and_the_sample_does_not_tick() {
     assert_eq!(state.today.minute, 4);
     assert_eq!(state.today.second, 45);
 
-    let mut sample = State::sample();
+    let mut sample = scene::sample();
     let before = sample.server_now_ms;
     assert!(
         !sample.tick_clock_at(READ_AT + 60_000),
@@ -244,7 +245,7 @@ fn the_clock_carries_forward_and_the_sample_does_not_tick() {
 #[test]
 fn the_clock_line_says_the_sample_the_estimate_or_nothing() {
     assert_eq!(
-        State::sample().clock_line(),
+        scene::sample().clock_line(),
         "sample clock — a scene's fixed time"
     );
 

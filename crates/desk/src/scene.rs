@@ -34,18 +34,29 @@ pub const SCENES: &[Scene] = &[
     ("no-picture", no_picture),
 ];
 
+/// **The wireframe's sample.** 14:03:22 WIB read on a clock the server's is three seconds behind:
+/// 07:03:22Z, three seconds ahead of the server, which is inside the five-second tolerance and therefore
+/// live, and near the future line, so the hedge shows.
+///
+/// Every value is a value, not a reading: the capture is the same picture on every machine.
+pub fn sample() -> State {
+    let mut state = State::base();
+    state.desk = sample_desk(state.epoch_ms);
+    state
+}
+
 /// The sample ADR-0009's wireframe names: 20 November 2026, 14:03:22 WIB, the calendar closed, and the
 /// server's clock three seconds behind the wall clock. Closed, so the regime line and the UTC readout
 /// are in the picture: they are what this ticket's proof is about.
 fn time_field(state: &mut State) {
-    *state = State::sample();
+    *state = sample();
     state.calendar_open = false;
 }
 
 /// The same panel with the calendar open, to witness the anchoring: it covers what is behind it and
 /// moves nothing.
 fn time_calendar(state: &mut State) {
-    *state = State::sample();
+    *state = sample();
 }
 
 /// **The draft in use.** Two hulls are in the batch — Diponegoro, which reported 23 seconds ago and is
@@ -53,7 +64,7 @@ fn time_calendar(state: &mut State) {
 /// selection is on Halasan, a third hull, so the tray's `+ Add vessel` is on screen and the inspector is
 /// showing a hull that is not in the draft.
 fn desk_batch(state: &mut State) {
-    *state = State::sample();
+    *state = sample();
     state.calendar_open = false;
     let base_ms = state.epoch_ms;
     let mut desk = Desk::new(picture(base_ms));
@@ -79,7 +90,7 @@ fn desk_batch(state: &mut State) {
 /// **Nothing chosen yet.** The picture is there and the batch is empty: the empty inspector, the disabled
 /// send, and a list with no selected row are the states this scene exists to show.
 fn desk_empty(state: &mut State) {
-    *state = State::sample();
+    *state = sample();
     state.calendar_open = false;
     let base_ms = state.epoch_ms;
     state.desk = Desk::new(picture(base_ms));
@@ -89,7 +100,7 @@ fn desk_empty(state: &mut State) {
 /// been read, and the inspector has no subject; the refresh control is what asks for one. A corrupt cache
 /// lands here too, with one line in the log rather than an empty state dressed up as a picture.
 fn no_picture(state: &mut State) {
-    *state = State::sample();
+    *state = sample();
     state.calendar_open = false;
     state.desk = Desk::new(Picker::new(Vec::new()));
     state.picture_status = crate::picture::Status::None;
@@ -229,7 +240,7 @@ fn row_for(vessel: &Vessel, recorded_at_ms: i64) -> Row {
     }
 }
 
-/// **The sample picture with a hull selected**, for `State::sample` and therefore for `--snap` with no
+/// **The sample picture with a hull selected**, for `sample` and therefore for `--snap` with no
 /// scene: the panel always has a subject, and the field's six segments are never drawn about nobody.
 ///
 /// The selection is KRI SULTAN HASANUDDIN, the hull ADR-0009's wireframe panel is about. Scenes that want
@@ -250,7 +261,7 @@ pub fn find(name: &str) -> Option<fn(&mut State)> {
 
 /// Build a scene's state without a window, for a test that wants what a capture renders.
 pub fn state_for(name: &str) -> State {
-    let mut state = State::sample();
+    let mut state = sample();
     match find(name) {
         Some(scene) => scene(&mut state),
         None => eprintln!("desk: no scene {name:?}; scenes: {}", names().join(", ")),

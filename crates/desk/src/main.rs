@@ -64,13 +64,18 @@ fn run() -> ExitCode {
         // Rune's own flags, and anything else, go through untouched: `--snap` and `--scene` are
         // how a capture happens, and swallowing them would make `--snap` succeed at producing
         // nothing. With no arguments the desk opens its window, like the wall's `cargo run`.
-        Some(flag) if flag.starts_with('-') => desk::ui::run(args),
+        Some(flag) if flag.starts_with('-') => open_desk(args),
         Some(flag) => {
             eprintln!("desk: unknown argument {flag}\n\n{USAGE}");
             ExitCode::from(64)
         }
-        None => desk::ui::run(args),
+        None => open_desk(args),
     }
+}
+
+/// Open the desk's window. The capture state and the scene catalog are the desk's, not the screen's.
+fn open_desk(args: Vec<String>) -> ExitCode {
+    desk::ui::run(args, desk::scene::sample, desk::scene::SCENES)
 }
 
 fn self_check() -> ExitCode {
