@@ -13,7 +13,7 @@ lockfile unnamed.
 
 | component | licence | what it is |
 | --- | --- | --- |
-| **Rune** (`rune`, `rune-kit`, and the crates it is built from: `rune-core`, `rune-text`, `rune-edit`, `rune-gpu`, `rune-image`, `rune-media`, `rune-spell`) | MIT, © 2026 Anomaly | The UI framework. <https://github.com/anomalyco/rune>, pinned to rev `2899b3d3a41b6c9d00e52884cddfdd66ab71374b`. Vendored before release; the full licence text then lives at `vendor/rune/LICENSE`. The seven crate names arrived with the `#247` rev bump: Rune's sources are split into them, all still MIT and all still part of Rune. The `#280` bump renamed the fork of `tiny-skia-path` below; the rest of the split is unchanged. |
+| **Rune** (`rune`, `rune-kit`, and the crates it is built from: `rune-core`, `rune-text`, `rune-edit`, `rune-gpu`, `rune-image`, `rune-media`, `rune-spell`) | MIT, © 2026 Anomaly | The UI framework. <https://github.com/anomalyco/rune>, pinned to rev `1f1d68c4f07f9f814e86b065cffe685f9a694606`. Vendored before release; the full licence text then lives at `vendor/rune/LICENSE`. The seven crate names arrived with the `#247` rev bump: Rune's sources are split into them, all still MIT and all still part of Rune. The `#280` bump renamed the fork of `tiny-skia-path` below; the rest of the split is unchanged. |
 | **rune-tiny-skia-path** 0.11.4 | BSD-3-Clause, © 2011 Google Inc. and © 2020 Yevhenii Reizner | Rune's fork of `tiny-skia-path`, renamed from `tiny-skia-path` by the `#280` rev bump. It ships inside Rune's tree (not in `vendor/`), and its licence text is `rune-tiny-skia-path/LICENSE` there. |
 | **winit** 0.30.13 (vendored) | Apache-2.0 OR MIT | Window, input and the event loop. Not the wall's dependency: it is Rune's, copied so Rune's macOS input-method path compiles — `vendor/README.md`. Licence text at `vendor/winit/LICENSE`. |
 | **wgpu-hal** 30.0.1 (vendored) | Apache-2.0 OR MIT | The GPU backend under `wgpu`. Not the wall's dependency either: Rune's DX12 partial presents live in its patched copy, and Rune does not compile on Windows without it — `vendor/README.md`. |
@@ -75,6 +75,7 @@ brings CameraX/ML Kit on Android and AVFoundation/Vision on iOS — all in the a
 | `toml` 0.8 | MIT OR Apache-2.0 | `config.toml`, `credentials.toml` and `settings.toml`: the operator's format, refused on an unknown key rather than silently defaulted. |
 | `libc` 0.2 | MIT OR Apache-2.0 | One `signal(2)` call, so `SIGTERM` from systemd quits through the runtime and drops the GL context in order. |
 | `png` 0.18 | MIT OR Apache-2.0 | `--probe-map` writes one frame to a PNG, headless, for CI. |
+| `moxcms` 0.8.1 | BSD-3-Clause OR Apache-2.0 | Colour management under `rune-image` from the `1f1d68c4` rev: an embedded RGB ICC profile is converted to sRGB. The wall's own code never calls it. |
 
 ## Crates with a licence that asks to be named
 

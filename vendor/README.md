@@ -5,9 +5,9 @@ wrong, what we changed, and when to drop it**. If the reason stops being true, d
 
 Nothing in this directory is re-exported as our API: the code is upstream's, the patch is ours.
 
-**The six Rune copies are the rev's list, not ours.** `scripts/vendor-patches.sh` reads `[patch.crates-io]` from the
+**The Rune copies are the rev's list, not ours.** `scripts/vendor-patches.sh` reads `[patch.crates-io]` from the
 manifest at the pinned rev and copies every crate it names — two when `#185` started this, six at `d0eaf332`, six at
-`2899b3d3`. A crate
+`2899b3d3`, **eight at `1f1d68c4`** (`naga` and `accesskit_atspi_common` joined). A crate
 listed there that this file does not have a `[patch.crates-io]` line for is a run that fails with the lines to add; a
 crate we carry that the rev has stopped patching is a run that fails with the three things to delete. The alternative,
 a `CRATES` array in the script, is what let the `#185` bump carry two of that rev's four patches without anything going
@@ -78,8 +78,8 @@ not draw on Windows yet.
 
 ## `winit` — Rune's copy, because a dependency's patch cannot reach us (#185)
 
-Copied from Rune's own `vendor/winit` at the rev `Cargo.toml` pins (`2899b3d3`): winit 0.30.13 as published, plus
-Rune's `vendor/winit.patch` — twenty files, 1,611 lines (sixteen files, 617 lines at `d0eaf332`). It is applied through
+Copied from Rune's own `vendor/winit` at the rev `Cargo.toml` pins (`1f1d68c4`): winit 0.30.13 as published, plus
+Rune's `vendor/winit.patch` — 29 files, 2,122 lines (sixteen files, 617 lines at `d0eaf332`). It is applied through
 `[patch.crates-io]` in **our** root `Cargo.toml`, and re-made by `scripts/vendor-patches.sh`, which takes the copy and
 the patch from the pinned rev.
 
@@ -106,7 +106,7 @@ together.
 ## `wgpu-hal` — Rune's copy, for the same reason as `winit` (#185)
 
 Copied from Rune's `vendor/wgpu-hal` at the rev `Cargo.toml` pins: wgpu-hal 30.0.1 as published, plus Rune's
-`vendor/wgpu-hal.patch` — twelve files, 1,405 lines (eight files, 440 lines at `d0eaf332`). Applied through our own
+`vendor/wgpu-hal.patch` — 18 files, 2,690 lines (eight files, 440 lines at `d0eaf332`). Applied through our own
 `[patch.crates-io]`, re-made by `scripts/vendor-patches.sh`.
 
 **Why.** Rune's DX12 backend calls `Surface::set_present_rects` — `Present1`'s dirty rectangles on a sequential
@@ -132,10 +132,34 @@ gate's pictures are unaffected (`scripts/verify.sh` proves that per bump, since 
 `vendor/wgpu-hal.patch` and the `[patch.crates-io]` line together; `scripts/vendor-patches.sh` fails loudly, naming all
 three, when the rev stops listing a crate it carries.
 
+## `naga` — Rune's copy, for constant-folded emit ranges (`#296`)
+
+Copied from Rune's `vendor/naga` at the rev `Cargo.toml` pins: naga 30.0.1 as published, plus Rune's
+`vendor/naga.patch` — one file, 157 lines. Applied through our own `[patch.crates-io]`, re-made by
+`scripts/vendor-patches.sh`. New in the `1f1d68c4` rev's patch list.
+
+**Why.** naga's pipeline-constants pass rewrites each WGSL function's expressions and then remaps every
+`Statement::Emit` range by looking up its first and last handle in `new_pos`. When a constant expression folds onto a
+handle that already exists, several old handles map to one new one, and the Emit range stretches across expressions
+the original did not emit — or inverts. Rune compiles its interface shaders through naga at runtime with
+pipeline-overridable constants, so a malformed range is a shader that fails validation rather than a picture. The
+patch records the range of expressions each old handle produced and rebuilds the Emit as the contiguous span from
+the first old handle's start to the last one's end, which is exact even when a fold appends nothing.
+
+**What we changed.** Nothing — the copy and the patch are Rune's, byte for byte.
+
+**What it costs.** 4.9 MB, 162 files, by far the largest copy here, and it is in the gate's Linux build through
+`wgpu` → `naga`. The patch is in the shader compiler, not in its output: a shader that compiled before compiles to
+the same program, and one that would have failed now compiles. The gate's pictures are the proof it did not alter
+valid shaders.
+
+**Drop it when** naga publishes the fix and Rune stops patching it. Delete `vendor/naga`, `vendor/naga.patch` and the
+`[patch.crates-io]` line together.
+
 ## `sctk-adwaita` — Rune's copy, for the Wayland frame's rounded corners (#247)
 
 Copied from Rune's `vendor/sctk-adwaita` at the rev `Cargo.toml` pins: sctk-adwaita 0.10.1 as published, plus Rune's
-`vendor/sctk-adwaita.patch` — four files, 917 lines. Applied through our own `[patch.crates-io]`, re-made by
+`vendor/sctk-adwaita.patch` — 5 files, 1,033 lines. Applied through our own `[patch.crates-io]`, re-made by
 `scripts/vendor-patches.sh`.
 
 **Why.** From `#1188` on, Rune draws a decorated Wayland window's content rounding its bottom two corners under the
@@ -188,7 +212,7 @@ stops asking for the feature. Then delete `vendor/parley_engine`, `vendor/parley
 ## `accesskit_windows` — Rune's copy, because UI Automation is Windows' own (#247)
 
 Copied from Rune's `vendor/accesskit_windows` at the rev `Cargo.toml` pins: accesskit_windows 0.35.2 as published, plus
-Rune's `vendor/accesskit_windows.patch` — six files, 1,785 lines. Applied through our own `[patch.crates-io]`, re-made by
+Rune's `vendor/accesskit_windows.patch` — six files, 1,893 lines. Applied through our own `[patch.crates-io]`, re-made by
 `scripts/vendor-patches.sh`.
 
 **Why.** Rune's Windows accessibility adapter reports headings and landmarks with `HeadingLevel`, `LandmarkType` and
@@ -206,6 +230,27 @@ not carry it then: nothing on Linux or macOS noticed, because the crate is not i
 
 **Drop it when** upstream `accesskit_windows` reports headings and landmarks itself, or Rune stops patching it. Delete
 `vendor/accesskit_windows`, `vendor/accesskit_windows.patch` and the `[patch.crates-io]` line together.
+
+## `accesskit_atspi_common` — Rune's copy, for a levelled item's own set size (`#296`)
+
+Copied from Rune's `vendor/accesskit_atspi_common` at the rev `Cargo.toml` pins: accesskit_atspi_common 0.21.1 as
+published, plus Rune's `vendor/accesskit_atspi_common.patch` — one file, 115 lines. Applied through our own
+`[patch.crates-io]`, re-made by `scripts/vendor-patches.sh`. New in the `1f1d68c4` rev's patch list.
+
+**Why.** AT-SPI exposes `setsize`/`posinset` for a list row or a tree item. A levelled item in a flat tree carries
+its own level's set size, but the published crate asks the container first: a container then reports its number of
+children as its own sibling set size, and a second-level tree item answers with the root's count instead of its
+level's. Rune's patch reads an item-like node's (and a `Row`'s) own `size_of_set` before falling back to the
+container, so a screen reader says "3 of 7" about the right seven. It is **Linux only** and is in the gate's build
+through `accesskit_unix` → `accesskit_atspi_common`, which means the gate compiles it on every run.
+
+**What we changed.** Nothing — the copy and the patch are Rune's, byte for byte, with its own test.
+
+**What it costs.** 240 KB, 19 files, re-made on every AccessKit bump. It cannot move the pictures: it changes what a
+Linux screen reader hears, not what the window draws.
+
+**Drop it when** upstream reports a levelled item's own set size and Rune stops patching it. Delete
+`vendor/accesskit_atspi_common`, `vendor/accesskit_atspi_common.patch` and the `[patch.crates-io]` line together.
 
 ## `accesskit_macos` — Rune's copy, for headings VoiceOver can find (#247)
 
