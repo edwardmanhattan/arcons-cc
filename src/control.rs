@@ -72,7 +72,9 @@ pub mod ctl;
 pub mod server;
 
 #[cfg(unix)]
-pub use server::{Job, Server};
+pub use server::Server;
+#[cfg(unix)]
+pub use sessions::Job;
 
 /// **The protocol's version**, on every message in both directions (`{"v": 1, …}`).
 ///

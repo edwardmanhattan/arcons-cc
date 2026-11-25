@@ -10,7 +10,7 @@
 //! filesystem ([`Loopback`]). A relay and a TCP session are the same six methods (#196, #202).
 //!
 //! **The UI thread is not in here** (`INV-05`): a carrier blocks its *own* thread, and the session hands the wall a
-//! [`super::server::Job`] and waits — which is the rule this seam must not tempt anyone to break.
+//! [`super::sessions::Job`] and waits — which is the rule this seam must not tempt anyone to break.
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;

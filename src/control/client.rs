@@ -431,7 +431,7 @@ mod tests {
     use super::*;
     use crate::control::carrier::{Loopback, Peer};
     use crate::control::projection::{PaneView, Tiling, Wall as Projection};
-    use crate::control::server::{self, Job};
+    use crate::control::{Job, server};
     use crate::ui::{PaneContent, State};
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
