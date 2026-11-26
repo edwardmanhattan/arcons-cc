@@ -33,7 +33,7 @@ use crate::data::types::{TniCommandPost, UnitOrganisationNode};
 use crate::tokens;
 use crate::ui::icons;
 use crate::ui::view::TreeCamera;
-use crate::ui::{Rect, State};
+use crate::ui::{Local, Rect, State};
 use crate::verb::{PaneContent, ViewId};
 
 /// One post, as the wire described it, before it is placed.
@@ -684,7 +684,7 @@ fn node_element(state: &State, pane: ViewId, node: &Placed, zoom: f32) -> El {
                 tokens::card_edge()
             },
         )
-        .on_press(move |state: &mut State| press_post(state, pane, id_unit))
+        .on_press(move |state: &mut State| state.local(Local::TreePost { pane, id_unit }))
         // A drag that starts **on a post** still pans the canvas (#127): Rune routes a gesture to the
         // nearest element under the pointer that handles one, so the handler has to be here as well as
         // on the canvas, or dragging a plate would do nothing.

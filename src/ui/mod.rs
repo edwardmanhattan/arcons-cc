@@ -766,6 +766,52 @@ impl Default for State {
     }
 }
 
+/// **A change only this wall's own glass can ask for** (#326).
+///
+/// The newsroom's six controls, a tree post and a facility press are settled changes with no wire verb yet.
+/// [`State::local`] runs the same functions the handlers used to call, so the change has one implementation;
+/// `control::wire` cannot name one of these, because it is not an [`crate::verb::Intent`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Local {
+    /// The newsroom's `back`: the list, exactly as it was left.
+    NewsBack { pane: ViewId },
+    /// `retry` after a story's detail failed to read.
+    NewsRetryDetail { pane: ViewId },
+    /// A scope tab; asks page 1 of the new scope.
+    NewsScope {
+        pane: ViewId,
+        scope: crate::data::types::NewsScope,
+    },
+    /// A story row; opens its detail.
+    NewsSelect { pane: ViewId, story: i64 },
+    /// The pager; `step` pages, always ±1.
+    NewsPage { pane: ViewId, step: i32 },
+    /// `retry` after the list failed to read.
+    NewsRetry { pane: ViewId },
+    /// A tree post: the pane takes the keys, and a hull post selects or clears it.
+    TreePost { pane: ViewId, id_unit: Option<i64> },
+    /// A facility mark: the pane takes the keys, and the facility card opens or closes.
+    Facility { pane: ViewId, id: i64 },
+}
+
+impl State {
+    /// **The glass-only door** (#326). The eight presses above enter here; the implementation is the same
+    /// function the handler used to call, so the change is not a second copy. These are settled changes, so
+    /// they set `layout_dirty` through their own functions, exactly as they did before.
+    pub(crate) fn local(&mut self, local: Local) {
+        match local {
+            Local::NewsBack { pane } => newsroom::press_back(self, pane),
+            Local::NewsRetryDetail { pane } => newsroom::press_retry_detail(self, pane),
+            Local::NewsScope { pane, scope } => newsroom::press_scope(self, pane, scope),
+            Local::NewsSelect { pane, story } => newsroom::select(self, pane, story),
+            Local::NewsPage { pane, step } => newsroom::press_page(self, pane, step),
+            Local::NewsRetry { pane } => newsroom::press_retry(self, pane),
+            Local::TreePost { pane, id_unit } => tree::press_post(self, pane, id_unit),
+            Local::Facility { pane, id } => installations::press(self, pane, id),
+        }
+    }
+}
+
 impl State {
     /// The clock every age in the view is measured against. The *only* source of "now" in the view,
     /// which is what makes a capture reproducible: `--scene` drives `logical` from Rune's virtual
