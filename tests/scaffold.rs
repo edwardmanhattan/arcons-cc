@@ -195,7 +195,7 @@ fn the_walls_failures_are_logged_and_not_printed_to_a_console_nobody_reads() {
     }
 }
 
-/// **A handler may not change the wall except through the control plane** (#173, epic #162).
+/// **A handler may not change the wall except through the door** (#173, epic #162).
 ///
 /// `ADR-0005` says a client sends intents and the wall renders them; `#170` made that one door
 /// (`State::apply`). The day a closure in the view assigns a field "just this once", there are two dialects of
@@ -259,6 +259,9 @@ fn no_handler_changes_the_wall_except_through_the_door() {
         "commit_rename",
         // A menu row, which builds its intent and applies it (#170).
         "run",
+        // A pointer's row press: the same conversion, through the public door. The keyboard's path is the
+        // door's own private `settle`, so neither re-enters `apply`.
+        "menu_press",
     ];
 
     let source = read("src/ui/mod.rs");
@@ -306,7 +309,7 @@ fn no_handler_changes_the_wall_except_through_the_door() {
     );
     assert!(
         offenders.is_empty(),
-        "handlers that go around the control plane (#173):\n  {}",
+        "handlers that go around the door (#173):\n  {}",
         offenders.join("\n  ")
     );
 }
