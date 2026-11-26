@@ -8,8 +8,8 @@
 //! vocabulary and no host.
 
 use super::relay::Relay;
-use super::server::{Job, Server};
-use super::sessions::Queue;
+use super::server::Server;
+use super::sessions::{Job, Queue};
 
 /// The carriers this process owns.
 pub struct Host {

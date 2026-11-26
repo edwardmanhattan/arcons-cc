@@ -25,7 +25,7 @@ use super::watch::Watch;
 use super::watch::{Publish, Session};
 use super::wire::{self, Answer, Refusal, Request, Unreadable};
 use super::{Changed, Intent, PROTOCOL, RefusalKind};
-use crate::ui::ViewId;
+use crate::verb::ViewId;
 
 /// **What a client may do about a refusal** (#198): the four categories of "no", as the four actions
 /// `docs/control.md` names beside them.
@@ -432,7 +432,8 @@ mod tests {
     use crate::control::carrier::{Loopback, Peer};
     use crate::control::projection::{PaneView, Tiling, Wall as Projection};
     use crate::control::{Job, server};
-    use crate::ui::{PaneContent, State};
+    use crate::ui::State;
+    use crate::verb::PaneContent;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use std::sync::mpsc::{self, Receiver, Sender};
