@@ -634,7 +634,7 @@ fn panes_named(state: &mut State) {
 /// a capture of a look the display cannot produce would be a lie about the wall.
 fn panes_gaps(state: &mut State) {
     panes(state);
-    state.settings.pane_gap = crate::ui::tokens::GAP;
+    state.settings.pane_gap = crate::tokens::GAP;
 }
 
 /// The `panes-gap-resize` scene (#114): the gapped wall left at **half**, and the border dragged to
@@ -648,7 +648,7 @@ fn panes_gaps(state: &mut State) {
 fn panes_gap_resize(state: &mut State) {
     // **No border drag in code**: the pointer is the only thing that may move the split here.
     panes_wall(state, false);
-    state.settings.pane_gap = crate::ui::tokens::GAP;
+    state.settings.pane_gap = crate::tokens::GAP;
 }
 
 /// The `settings` scene (#82): a wall with its **settings sheet open**, which is the only picture of the
@@ -1430,8 +1430,8 @@ fn cursor_point(state: &State, id_unit: i64) -> Option<(f32, f32)> {
     let pane = state.pane(state.focused())?;
     let frame = crate::map::geometry::Rendered {
         camera: pane.camera,
-        width: crate::ui::tokens::WINDOW_SIZE.0 as u32,
-        height: crate::ui::tokens::WINDOW_SIZE.1 as u32,
+        width: crate::tokens::WINDOW_SIZE.0 as u32,
+        height: crate::tokens::WINDOW_SIZE.1 as u32,
     };
     let marker = crate::ui::markers::place(
         &state.picture,
@@ -1627,41 +1627,6 @@ pub fn load_intents(name: &str) -> Vec<(f64, crate::verb::Intent)> {
     out
 }
 
-/// **Apply the script's due steps**, in order, and say whether anything changed (#172).
-///
-/// Called from `poll` with the frame clock: a virtual clock in a capture, the real one on a wall. The steps go
-/// through `State::apply` — the same door the pointer and a socket use — so a scene driven this way is a
-/// client, not a second implementation of one.
-pub fn apply_due_intents(state: &mut State, now: f64) -> bool {
-    let mut changed = false;
-    while let Some((at, _)) = state.pending_intents.get(state.intents_applied) {
-        if *at > now {
-            break;
-        }
-        let Some((_, intent)) = state.pending_intents.get(state.intents_applied) else {
-            break;
-        };
-        let intent = intent.clone();
-        state.intents_applied += 1;
-        // **The step happens at its own frame** (#172, #167): a cursor's fade, an age or a clock read in the step
-        // must see the time the file says, not the end of the script. The clock is restored after each one.
-        let clock = state.frame_clock();
-        state.set_frame_clock(*at);
-        let result = state.apply(intent);
-        state.set_frame_clock(clock);
-        match result {
-            Ok(applied) => changed |= applied.changed(),
-            // A refused step is printed and the script goes on: a capture whose wall did not reach the state the
-            // script meant differs from its golden, and the log says which step refused and why.
-            Err(why) => eprintln!(
-                "arcons-cc: intent step {} refused: {}",
-                state.intents_applied, why.0
-            ),
-        }
-    }
-    changed
-}
-
 /// The `close-all` scene: **everything but the focused pane, and every workspace but this one** (#166).
 ///
 /// A wall of three panes in workspace 1 and a pane in each of the other two, then two intents: `pane.close_others`
@@ -1838,7 +1803,7 @@ pub fn state_for(name: &str) -> State {
     // **A scene with an intent script is the state its whole script reaches** (#172): a capture at `--at 2` is
     // after every step, so a test that asks a scene for its state asks for the end of the script — otherwise the
     // assertions would be about a wall the capture never shows.
-    apply_due_intents(&mut state, f64::INFINITY);
+    state.apply_due_intents(f64::INFINITY);
     state
 }
 
@@ -2030,7 +1995,7 @@ mod tests {
             entries.iter().any(|hull| hull
                 .position
                 .as_ref()
-                .is_some_and(|fix| fix.age_seconds > crate::units::STALE_AFTER.as_secs_f64())),
+                .is_some_and(|fix| fix.age_seconds > crate::config::STALE_AFTER.as_secs_f64())),
             "one fix is older than the stale threshold"
         );
         assert!(
@@ -2506,8 +2471,8 @@ mod tests {
             rows.len()
         );
         assert_eq!(
-            crate::ui::tokens::filter_size(rows.len()).1,
-            crate::ui::tokens::FILTER_MAX_H,
+            crate::tokens::filter_size(rows.len()).1,
+            crate::tokens::FILTER_MAX_H,
             "this vocabulary is taller than the panel, so it scrolls inside its maximum"
         );
         for pane in filtered.panes() {
@@ -2654,7 +2619,7 @@ mod tests {
             narrow_camera.zoom
         );
         assert!(
-            (narrow_camera.zoom - crate::ui::tokens::TREE_ZOOM_MIN).abs() > 1e-6,
+            (narrow_camera.zoom - crate::tokens::TREE_ZOOM_MIN).abs() > 1e-6,
             "the fit is inside the token range, not clamped at its floor: {narrow_camera:?}"
         );
         for node in &narrow_drawn.nodes {

@@ -77,7 +77,7 @@ scripts/conformance.sh fixtures/control/session.jsonl   # replay the recorded ex
   token rides in the connect frame's `data`**, and **no history exists on `live-feed`** — the five
   traps. They are spelled out in `README.md` and `CONTEXT.md`; INV-01/02/03/09 are the same claims as
   tests.
-- **Colours and sizes live in `src/ui/tokens.rs`.** Nothing outside it names one; `tests/scaffold.rs`
+- **Colours and sizes live in `src/tokens.rs`.** Nothing outside it names one; `tests/scaffold.rs`
   fails when something does. Assert against tokens, never literals.
 - **An icon comes from Rune's catalogue** (`rune::Icon` / `El::icon`), and its meaning is also in words
   where there is room. A glyph nobody can name is a button nobody presses (#111).
@@ -105,19 +105,23 @@ Comment on the issue rather than choosing silently, especially for: the wall's c
 
 ```
 src/main.rs      flags, startup, exit codes
-src/config.rs    the command line, the resolved Config, Secret (redacting by construction)
-src/config/      file.rs (config.toml) · credential.rs (mode 0600) · settings.rs (settings.toml, written by the display) · layout.rs (layout.toml: the wall as the operator arranged it) · devices.rs (devices.toml: the paired phones, a hash and a name) · check.rs (--self-check, 0–6)
-src/ui/          the view, view.rs (the pane tree), tree.rs (the chain of command), markers.rs, objects.rs (the operational layer), installations.rs (the places), filter.rs (per-pane visibility and the panel's vocabulary), devices.rs (pairing's file, written on a thread), unitcard.rs, tokens.rs (the only file that names a colour or a size)
+src/config.rs    the command line, the resolved Config, the defaults
+src/minos.rs     the Minos endpoint and the credential (Secret redacts itself)
+src/config/      file.rs (config.toml) · credential.rs (mode 0600) · settings.rs (settings.toml, written by the display) · layout.rs (layout.toml: the wall as the operator arranged it) · devices.rs (devices.toml: the paired phones, a hash and a name)
+src/ui/          the view, view.rs (the pane tree), tree.rs (the chain of command), markers.rs, objects.rs (the operational layer), installations.rs (the places), filter.rs (per-pane visibility and the panel's vocabulary), devices.rs (pairing's file, written on a thread), unitcard.rs
+src/tokens.rs    the palette and metrics — the only file that names a colour or a size
 src/units/       the vocabulary and the view model: Unit, UnitView, Glyph, Picture, motion, card
 src/data.rs      the Minos REST client            (#3)
 src/control.rs   the control plane: the intent vocabulary, the socket's wire   (#162)
 src/control/     server.rs (the listener) · relay.rs (the outbound carrier) · wire.rs (JSON) · ctl.rs (the CLI client)
+src/corpus.rs    the control corpus: record (--record) and replay (--conformance) (#224)
 src/live.rs      the Centrifugo socket actor      (#4)
 src/map/         geometry (no engine, in the gate) + the MapLibre thread (#5)
 vendor/          dependencies patched for reasons recorded in vendor/README.md
 fixtures/        recorded wire data the tests read (see fixtures/README.md)
 docs/spec/       the pinned Minos contract — read-only
 src/platform.rs  the log, SIGTERM, the start clock
+src/selfcheck.rs --self-check: config, credential, login, REST, socket, seed (0–6)
 src/scene.rs     the named states a capture renders: fixture feed, no network, virtual clock
 src/verify.rs    --assert: pixel and structure questions with numbers
 scripts/         verify.sh (the gate), capture.sh <scene>, assert.sh <png>, capture-desk.sh <scene>

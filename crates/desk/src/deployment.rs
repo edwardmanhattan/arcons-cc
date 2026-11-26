@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use arcons_cc::config::credential::Refused as CredentialRefused;
-use arcons_cc::config::{Credential, Minos, Secret};
+use arcons_cc::minos::{Credential, Minos, Secret};
 
 use crate::identity;
 

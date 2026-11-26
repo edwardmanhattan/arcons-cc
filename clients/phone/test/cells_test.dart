@@ -109,7 +109,7 @@ void main() {
       expect(
         lifted,
         isNotEmpty,
-        reason: 'no recorded case has a pane the minimum lifted: MIN_PANE_PT (src/ui/tokens.rs) would be untested',
+        reason: 'no recorded case has a pane the minimum lifted: MIN_PANE_PT (src/tokens.rs) would be untested',
       );
       final halved = cases.where((one) => one.into.w < one.numbers.minPane * 2 || one.into.h < one.numbers.minPane * 2);
       expect(
@@ -127,7 +127,7 @@ void main() {
           Numbers.wall,
           reason:
               '${one.name}.json records ${one.numbers}, and the phone holds ${Numbers.wall}: the numbers are the '
-              'wall\'s (src/ui/tokens.rs: MIN_PANE_PT, PANE_EDGE_BAND, GAP; src/config/layout.rs: RATIO_RANGE), so the '
+              'wall\'s (src/tokens.rs: MIN_PANE_PT, PANE_EDGE_BAND, GAP; src/config/layout.rs: RATIO_RANGE), so the '
               'phone\'s copy is stale — re-record and ask what else moved before trusting a client in another '
               'language (#220)',
         );
@@ -171,7 +171,7 @@ void main() {
           one.rects,
           reason:
               '${one.name}.json records these rectangles as `view::panes_on` at the wall\'s gap: the drawn card is '
-              'the cell it is hit-tested in, pulled in by half the gap — GAP is the wall\'s (src/ui/tokens.rs), never '
+              'the cell it is hit-tested in, pulled in by half the gap — GAP is the wall\'s (src/tokens.rs), never '
               'the phone\'s guess',
         );
       }
@@ -224,7 +224,7 @@ void main() {
             probe.drop,
             reason:
                 '${one.name}.json: a release of pane ${probe.dragged} at (${probe.x}, ${probe.y}) means ${probe.drop} '
-                'to the wall and $landed to the phone. PANE_EDGE_BAND (src/ui/tokens.rs, in the recording) decides '
+                'to the wall and $landed to the phone. PANE_EDGE_BAND (src/tokens.rs, in the recording) decides '
                 'an edge from a swap, and it is the pane\'s own span: a band measured against the canvas, or guessed, '
                 'is the phone and the wall disagreeing about what the operator did (#220)',
           );
@@ -420,7 +420,7 @@ void main() {
       expect(
         drawn[1].rect.x - drawn[0].rect.right,
         wide.gap,
-        reason: 'the gutter between two cards is GAP (src/ui/tokens.rs), taken out of both cells — the number the '
+        reason: 'the gutter between two cards is GAP (src/tokens.rs), taken out of both cells — the number the '
             'caller gives, never one the phone keeps: a half-gap baked in here draws a gap the recording does not '
             'have, and the recording is what a client is held to (#220)',
       );

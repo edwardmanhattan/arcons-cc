@@ -18,7 +18,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use arcons_cc::{config, platform, ui};
+use arcons_cc::{config, platform, scene, selfcheck, ui};
 
 /// Render one map frame with no window. Needs `--features map`: without the engine there is nothing
 /// to render, and saying so is better than writing a black PNG.
@@ -67,8 +67,8 @@ fn record_tiling() -> bool {
 /// **`--record`'s corpus half** (#224): the exchange stream, from the wall's own session loop.
 #[cfg(unix)]
 fn record_corpus() -> bool {
-    let dir = arcons_cc::ui::corpus::directory();
-    match arcons_cc::ui::corpus::record(&dir) {
+    let dir = arcons_cc::corpus::directory();
+    match arcons_cc::corpus::record(&dir) {
         Ok(path) => {
             println!("recorded {}", path.display());
             true
@@ -85,13 +85,13 @@ fn record_corpus() -> bool {
 /// that has gone stale is a client reading a contract the wall no longer keeps.
 #[cfg(unix)]
 fn conformance(path: &std::path::Path) -> ExitCode {
-    match arcons_cc::ui::corpus::replay(path) {
+    match arcons_cc::corpus::replay(path) {
         Ok(answered) => {
             for (number, (exchange, answer)) in answered.iter().enumerate() {
                 println!(
                     "ok    {:>3}  {}\n            {}",
                     number + 1,
-                    arcons_cc::ui::corpus::line_of(&exchange.send),
+                    arcons_cc::corpus::line_of(&exchange.send),
                     answer
                 );
             }
@@ -188,10 +188,10 @@ fn compare_captures(args: &config::Args) -> ExitCode {
 
 fn self_check(args: &config::Args) -> ExitCode {
     let mut out = String::new();
-    let outcome = config::check::run(
+    let outcome = selfcheck::run(
         args,
         &config::Env::from_process(),
-        &config::check::Live::new(),
+        &selfcheck::Live::new(),
         &mut out,
     );
     print!("{out}");
@@ -274,7 +274,7 @@ fn main() -> ExitCode {
         // A headless scene renders a fixture: it has no server to talk to and must not need one.
         // `--scene`/`--snap`/`--tree` are Rune's own flags, so this asks Rune rather than guessing.
         config::Command::Run if arcons_cc_headless() => {
-            ui::run(args.window, args.passthrough.clone())
+            ui::run(args.window, args.passthrough.clone(), scene::SCENES)
         }
         config::Command::Run => match config::Config::load(&args, &config::Env::from_process()) {
             Ok(config) => {
@@ -290,7 +290,7 @@ fn main() -> ExitCode {
                 // The flag is read by the view loop's poll hook; installing it before the window
                 // opens means a `SIGTERM` during startup is not lost.
                 platform::watch_for_termination();
-                ui::run(args.window, args.passthrough.clone())
+                ui::run(args.window, args.passthrough.clone(), scene::SCENES)
             }
             Err(problem) => {
                 // The same codes `--self-check` uses, so a unit file that reports `status=2` says

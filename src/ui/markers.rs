@@ -22,7 +22,7 @@ use std::time::Instant;
 use rune::{El, el};
 
 use crate::map::geometry::Rendered;
-use crate::ui::tokens;
+use crate::tokens;
 use crate::units::{Glyph, Pos, UnitView};
 
 /// The symbol's side, in points. In `tokens` with every other size, not here.
@@ -359,7 +359,7 @@ mod tests {
             &frame(),
             &crate::ui::filter::Filter::default(),
             Instant::now(),
-            crate::units::STALE_AFTER,
+            crate::config::STALE_AFTER,
             crate::units::mark::Range::Symbol,
             &|_| None,
         );
@@ -390,7 +390,7 @@ mod tests {
             &frame(),
             &filter,
             Instant::now(),
-            crate::units::STALE_AFTER,
+            crate::config::STALE_AFTER,
             crate::units::mark::Range::Symbol,
             &|_| None,
         );
@@ -412,7 +412,7 @@ mod tests {
             &frame,
             &crate::ui::filter::Filter::default(),
             Instant::now(),
-            crate::units::STALE_AFTER,
+            crate::config::STALE_AFTER,
             crate::units::mark::Range::Symbol,
             &|_| None,
         );
@@ -443,7 +443,7 @@ mod tests {
             &frame(),
             &crate::ui::filter::Filter::default(),
             Instant::now(),
-            crate::units::STALE_AFTER,
+            crate::config::STALE_AFTER,
             crate::units::mark::Range::Symbol,
             &|_| None,
         );
@@ -476,7 +476,7 @@ mod tests {
             &frame(),
             &crate::ui::filter::Filter::default(),
             Instant::now(),
-            crate::units::STALE_AFTER,
+            crate::config::STALE_AFTER,
             crate::units::mark::Range::Symbol,
             &|_| None,
         );
@@ -509,7 +509,7 @@ mod tests {
             &frame(),
             &crate::ui::filter::Filter::default(),
             Instant::now(),
-            crate::units::STALE_AFTER,
+            crate::config::STALE_AFTER,
             crate::units::mark::Range::Symbol,
             &|_| None,
         );

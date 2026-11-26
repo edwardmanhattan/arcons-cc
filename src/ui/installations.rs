@@ -26,8 +26,8 @@ use rune::{El, col, el, row, spacer, text};
 
 use crate::data::types::{Installation, InstallationType, TacticalObjectManifestEntry};
 use crate::map::geometry::Rendered;
+use crate::tokens;
 use crate::ui::filter::Filter;
-use crate::ui::tokens;
 use crate::units::card::{self, Placement, WIDTH};
 
 /// An installation's mark, in points — its artwork, or the generic facility shape.

@@ -172,7 +172,7 @@ impl Dial {
 
 /// **What a carrier needs to dial** (#196): where, as whom, and who may speak.
 ///
-/// The credential is the wall's **own** Minos credential (`config::Minos::relay_credential`): no wall-side secret is
+/// The credential is the wall's **own** Minos credential (`minos::Minos::relay_credential`): no wall-side secret is
 /// invented, and `Debug` redacts it so a line about a relay cannot carry one (`INV-08`).
 #[derive(Clone)]
 pub struct Settings {
@@ -244,7 +244,7 @@ impl Settings {
     }
 }
 
-/// The credential is redacted by construction, the same decision [`crate::config::Secret`] makes: a log line about a
+/// The credential is redacted by construction, the same decision [`crate::minos::Secret`] makes: a log line about a
 /// relay is safe to write (`INV-08`).
 impl std::fmt::Debug for Settings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

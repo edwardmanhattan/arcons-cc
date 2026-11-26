@@ -12,7 +12,7 @@
 /// same reason: `Layout::rects` is a second name for `Layout::cells`, and `view::panes_on` is the one place the gap
 /// becomes a look.
 ///
-/// **The numbers are the wall's, cited rather than guessed.** [Numbers.wall] is `src/ui/tokens.rs`'s `MIN_PANE_PT`,
+/// **The numbers are the wall's, cited rather than guessed.** [Numbers.wall] is `src/tokens.rs`'s `MIN_PANE_PT`,
 /// `PANE_EDGE_BAND` and `GAP` and `src/config/layout.rs`'s `RATIO_RANGE`, and a test holds it to the numbers every
 /// recorded case carries — so a token that moves is a red test here, which is the moment to ask whether a client in
 /// another language is still right. This file also cannot *derive* them: a Dart package does not read a Rust crate's
@@ -137,11 +137,11 @@ final class Numbers {
   /// **The wall's numbers**, each citing the line it comes from. The recording is the check: a token that moved is a
   /// red test in `cells_test.dart` rather than a phone drawing a share the wall refuses.
   static final Numbers wall = Numbers(
-    // src/ui/tokens.rs: "the smallest a pane may be dragged to".
+    // src/tokens.rs: "the smallest a pane may be dragged to".
     minPane: 160.0,
-    // src/ui/tokens.rs: `PANE_EDGE_BAND`, the share of an edge that reads as "drop against this edge".
+    // src/tokens.rs: `PANE_EDGE_BAND`, the share of an edge that reads as "drop against this edge".
     edgeBand: 0.3,
-    // src/ui/tokens.rs: `GAP`, the space between two drawn panes.
+    // src/tokens.rs: `GAP`, the space between two drawn panes.
     gap: 8.0,
     // src/config/layout.rs: `RATIO_RANGE`, the share a split may take.
     ratioMin: 0.05,

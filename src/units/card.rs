@@ -289,8 +289,8 @@ fn clamp(value: f64, low: f64, high: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::STALE_AFTER;
     use crate::units::Pos;
-    use crate::units::STALE_AFTER;
     use chrono::TimeZone;
 
     fn view(speed: Option<f64>, fresh: bool) -> UnitView {

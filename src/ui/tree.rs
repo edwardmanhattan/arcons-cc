@@ -30,8 +30,8 @@
 use rune::{El, col, el, row, shape::Shape, text};
 
 use crate::data::types::{TniCommandPost, UnitOrganisationNode};
+use crate::tokens;
 use crate::ui::icons;
-use crate::ui::tokens;
 use crate::ui::view::TreeCamera;
 use crate::ui::{Rect, State};
 use crate::verb::{PaneContent, ViewId};
@@ -1004,10 +1004,10 @@ mod tests {
         let (x, y) = crate::ui::view::tree_point(&camera, (0.0, 0.0));
         let (right, bottom) = crate::ui::view::tree_point(&camera, (tree.width, tree.height));
         assert!(
-            x >= crate::ui::tokens::TREE_PAD - 0.5
-                && y >= crate::ui::tokens::TREE_TOP - 0.5
-                && right <= pane.0 - crate::ui::tokens::TREE_PAD + 0.5
-                && bottom <= pane.1 - crate::ui::tokens::TREE_PAD + 0.5,
+            x >= crate::tokens::TREE_PAD - 0.5
+                && y >= crate::tokens::TREE_TOP - 0.5
+                && right <= pane.0 - crate::tokens::TREE_PAD + 0.5
+                && bottom <= pane.1 - crate::tokens::TREE_PAD + 0.5,
             "the whole tree is inside the pane: ({x}, {y})..({right}, {bottom}) of {pane:?}"
         );
     }
@@ -1029,7 +1029,7 @@ mod tests {
         );
         // The zoom is clamped into the token range, and a clamp still pivots on the pointer.
         let floor = zoom_about(camera, at, 0.0001);
-        assert_eq!(floor.zoom, crate::ui::tokens::TREE_ZOOM_MIN);
+        assert_eq!(floor.zoom, crate::tokens::TREE_ZOOM_MIN);
         let under_floor = crate::ui::view::tree_from_pane(&camera, at);
         let after_floor = crate::ui::view::tree_point(&floor, under_floor);
         assert!(

@@ -19,7 +19,6 @@
 //! so the gate stays free of C++ and of a network. `--probe-map` is the headless witness.
 
 #[cfg(unix)]
-pub mod corpus;
 pub mod devices;
 mod door;
 pub mod filter;
@@ -35,7 +34,6 @@ pub mod saved;
 pub mod snapshot;
 pub mod symbol;
 pub mod tiling;
-pub mod tokens;
 pub mod tree;
 pub mod unitcard;
 pub mod view;
@@ -52,6 +50,7 @@ use rune::{AppSpec, Cx, El, col, el, row, spacer, text};
 use crate::config;
 use crate::live::LiveThread;
 use crate::map::geometry::Camera;
+use crate::tokens;
 use crate::units::Picture;
 use crate::verb::{Intent, Origin, PaneContent, RenameTarget, ViewId};
 
@@ -725,7 +724,7 @@ impl Default for State {
             last_poll_logical: None,
             stale_after: config
                 .map(|config| config.stale_after)
-                .unwrap_or(crate::units::STALE_AFTER),
+                .unwrap_or(crate::config::STALE_AFTER),
             origin: std::time::Instant::now(),
             logical: 0.0,
             headless: false,
@@ -1391,6 +1390,18 @@ impl State {
     /// **Never for a scene**: a capture that read this machine's environment would make its golden depend on
     /// who is logged in — the same rule [`State::with_saved_settings`] keeps, for the same reason (`INV-11`). A
     /// scene that wants a relay sets its own string.
+    /// **A wall with no window and no socket** (#224): the corpus recorder and the conformance replay.
+    ///
+    /// Headless means no listener, no `devices.toml`, and a pairing code drawn from the frame clock, so a
+    /// recording's answers are the same bytes on every machine (`INV-11`). The fields stay private; this is
+    /// the one constructor that is allowed to set the flag.
+    pub fn headless() -> State {
+        State {
+            headless: true,
+            ..State::default()
+        }
+    }
+
     pub fn with_relay(mut self) -> State {
         if rune::is_headless() {
             return self;
@@ -1796,6 +1807,40 @@ impl State {
     /// `poll` owns this clock; the only other writer is the script runner, and it restores it after each step.
     pub fn set_frame_clock(&mut self, at: f64) {
         self.logical = at;
+    }
+
+    /// **Apply the script's due steps**, in order, and say whether anything changed (#172).
+    ///
+    /// Called from `poll` with the frame clock: a virtual clock in a capture, the real one on a wall. The steps go
+    /// through [`State::apply`] — the same door the pointer and a socket use — so a scene driven this way is a
+    /// client, not a second implementation of one.
+    pub fn apply_due_intents(&mut self, now: f64) -> bool {
+        let mut changed = false;
+        while let Some((at, _)) = self.pending_intents.get(self.intents_applied) {
+            if *at > now {
+                break;
+            }
+            let Some((_, intent)) = self.pending_intents.get(self.intents_applied) else {
+                break;
+            };
+            let intent = intent.clone();
+            self.intents_applied += 1;
+            // **The step happens at its own frame** (#172, #167): a cursor's fade, an age or a clock read in the
+            // step must see the time the file says, not the end of the script. The clock is restored after each one.
+            let clock = self.frame_clock();
+            self.set_frame_clock(*at);
+            let result = self.apply(intent);
+            self.set_frame_clock(clock);
+            match result {
+                Ok(applied) => changed |= applied.changed(),
+                // A refused step is logged and the script goes on: a capture whose wall did not reach the state the
+                // script meant differs from its golden, and the log says which step refused and why.
+                Err(why) => {
+                    tracing::error!("intent step {} refused: {}", self.intents_applied, why.0)
+                }
+            }
+        }
+        changed
     }
 
     /// **Move a client's cursor** (#167), in the picture panel's points.
@@ -6581,7 +6626,7 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     // **A scene can drive the wall through the control plane** (#172): the steps it carries are applied here, in
     // order, when their frame comes. This is the same `apply` the pointer and the socket use — a capture is not a
     // second kind of client, it is a client whose clock is virtual.
-    let scripted = crate::scene::apply_due_intents(state, elapsed);
+    let scripted = state.apply_due_intents(elapsed);
     // **A capture can rebuild its own wall** (#201): with `ARCONS_REPLAY=1` the scene's state is turned into a
     // `Scene` and applied straight back, on the first frame. The golden rendered that way is the proof that the
     // `Scene` is the whole arrangement — if a pane's camera, name, filter, selection or surface is missing from it,
@@ -7021,13 +7066,18 @@ pub const ASSETS_PER_FRAME: usize = 4;
 const REPORT_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Open the display and run until the compositor closes it.
-pub fn run(window: config::Window, passthrough: Vec<String>) -> ExitCode {
+/// One scene: a name and the function that builds its state.
+///
+/// The binary supplies the catalog, so the view loop does not name the capture harness.
+pub type Scene = (&'static str, fn(&mut State));
+
+pub fn run(window: config::Window, passthrough: Vec<String>, scenes: &'static [Scene]) -> ExitCode {
     let spec = AppSpec::<State> {
         min_size: Some(tokens::MIN_WINDOW),
         setup: Some(setup),
         poll: Some(poll),
         on_key: Some(on_key),
-        scenes: crate::scene::SCENES,
+        scenes,
         ..AppSpec::new(
             TITLE,
             window.size,

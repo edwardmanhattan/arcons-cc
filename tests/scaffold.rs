@@ -69,7 +69,7 @@ fn only_tokens_names_a_colour_or_a_size() {
     // contact with six more tickets is that the palette lives in exactly one file.
     let mut offenders: Vec<String> = Vec::new();
     for (path, text) in rust_sources() {
-        if path == "src/ui/tokens.rs" {
+        if path == "src/tokens.rs" {
             continue;
         }
         for (number, line) in text.lines().enumerate() {
@@ -101,7 +101,7 @@ fn only_tokens_names_a_colour_or_a_size() {
     }
     assert!(
         offenders.is_empty(),
-        "only src/ui/tokens.rs may name a colour or a size; these lines do not go through a token:\n  {}",
+        "only src/tokens.rs may name a colour or a size; these lines do not go through a token:\n  {}",
         offenders.join("\n  ")
     );
 }

@@ -13,11 +13,15 @@
 
 pub mod config;
 pub mod control;
+pub mod corpus;
 pub mod data;
 pub mod live;
 pub mod map;
+pub mod minos;
 pub mod platform;
 pub mod scene;
+pub mod selfcheck;
+pub mod tokens;
 pub mod ui;
 pub mod units;
 pub mod verb;

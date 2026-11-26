@@ -14,7 +14,7 @@
 //! here, because Minos publishes none for a shore account (decision 4). The chips filter what the operator
 //! asked to see; they never filter what the operator may report.
 
-use arcons_cc::ui::tokens;
+use arcons_cc::tokens;
 use rune::{El, col, el, row, spacer, text};
 
 use crate::batch::{Batch, Row};
@@ -65,8 +65,8 @@ impl Filter {
     pub fn matches(self, vessel: &Vessel, batch: &Batch) -> bool {
         match self {
             Self::All => true,
-            // The wall's one threshold, not a second opinion: `units::STALE_AFTER` is 120 s.
-            Self::Stale => vessel.is_stale(arcons_cc::units::STALE_AFTER.as_secs_f64()),
+            // The wall's one threshold, not a second opinion: `config::STALE_AFTER` is 120 s.
+            Self::Stale => vessel.is_stale(arcons_cc::config::STALE_AFTER.as_secs_f64()),
             Self::Never => vessel.last.is_none(),
             Self::InBatch => batch.get(vessel.id_unit).is_some(),
         }
@@ -235,7 +235,7 @@ impl Desk {
         let mut counts = Counts::default();
         for vessel in self.picker.vessels() {
             counts.all += 1;
-            if vessel.is_stale(arcons_cc::units::STALE_AFTER.as_secs_f64()) {
+            if vessel.is_stale(arcons_cc::config::STALE_AFTER.as_secs_f64()) {
                 counts.stale += 1;
             }
             if vessel.last.is_none() {

@@ -198,5 +198,5 @@ verification is a golden capture of the wall itself (`INV-11`).
   (`frame_icon_radius`, `canonical_extent`, `STROKE_RATIO`), `icons.rs` (`BOX_PX = 32`), `generate.rs`
   (the invariants), and `assets/symbology/FINDINGS.md` (the port's measured findings).
 - `spatialillusions/milsymbol` — MIT, © 2017 Mans Beckman, pinned by TFG at `f5134380…`, v3.0.5.
-- Our own: `src/ui/tokens.rs` (`MARKER = 12`, `MARKER_TARGET = 24`, `LABEL = 12 pt`),
+- Our own: `src/tokens.rs` (`MARKER = 12`, `MARKER_TARGET = 24`, `LABEL = 12 pt`),
   `src/ui/markers.rs` (`INV-01`, `INV-02`, `INV-03` in the drawing rules), `docs/invariants.md`.

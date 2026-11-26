@@ -60,7 +60,7 @@ and the `panes[]` row for that id says what the card says:
 | --- | --- |
 | its title | `title` — the operator's name, or the pane's own number. **Every pane has one** (#83) |
 | its kind, as a glyph **and a word** | `kind` — `map`, `chain of command`, `newsroom` |
-| a ring | `focused`: the pane with the keys. Drawn in the wall's **`focus_edge`** role — the one colour that means "this one has the keys" (`src/ui/tokens.rs`), named once in the phone's palette rather than repeated per screen |
+| a ring | `focused`: the pane with the keys. Drawn in the wall's **`focus_edge`** role — the one colour that means "this one has the keys" (`src/tokens.rs`), named once in the phone's palette rather than repeated per screen |
 | a mark | `maximised`: the pane the wall is drawing over the others |
 
 The active workspace's name is the **title of the screen**, as it is the title of the wall (#139), and the chips are

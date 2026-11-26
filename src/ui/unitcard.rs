@@ -2,7 +2,7 @@
 //!
 //! Everything about *what* it says and *where* it goes is in [`crate::units::card`], which is pure and
 //! tested. This file turns that into elements, and follows the rule the rest of the UI keeps: every
-//! colour and size comes from [`crate::ui::tokens`].
+//! colour and size comes from [`crate::tokens`].
 //!
 //! The card is a display with exactly **one** control (#240): `Follow` / `Stop following`, because locking a
 //! pane's camera onto a hull was a verb only a remote could send — a reading nobody at the glass could act on,
@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use rune::{El, col, el, row, spacer, text};
 
-use crate::ui::tokens;
+use crate::tokens;
 use crate::units::card::{Card, Placement, WIDTH};
 use crate::verb::Intent;
 use crate::verb::ViewId;

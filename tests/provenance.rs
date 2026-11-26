@@ -9,9 +9,10 @@
 
 use std::time::Instant;
 
+use arcons_cc::config::STALE_AFTER;
 use arcons_cc::data::types::{Envelope, FeedActor, FeedPosition};
+use arcons_cc::units::Picture;
 use arcons_cc::units::card::Card;
-use arcons_cc::units::{Picture, STALE_AFTER};
 
 fn manual_feed() -> Vec<FeedPosition> {
     let envelope: Envelope<Vec<FeedPosition>> =

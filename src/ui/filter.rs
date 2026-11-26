@@ -522,17 +522,16 @@ mod tests {
     /// backend with more domains than the panel has room for is the ordinary case, not an error.
     #[test]
     fn the_panel_stops_growing_at_its_maximum() {
-        let (width, short) = crate::ui::tokens::filter_size(3);
-        assert_eq!(width, crate::ui::tokens::FILTER_WIDTH);
+        let (width, short) = crate::tokens::filter_size(3);
+        assert_eq!(width, crate::tokens::FILTER_WIDTH);
         assert!(
-            (short - (crate::ui::tokens::FILTER_HEAD + 3.0 * crate::ui::tokens::FILTER_ROW)).abs()
-                < 0.001,
+            (short - (crate::tokens::FILTER_HEAD + 3.0 * crate::tokens::FILTER_ROW)).abs() < 0.001,
             "three layer rows are three rows tall, got {short}"
         );
-        let (_, tall) = crate::ui::tokens::filter_size(17);
+        let (_, tall) = crate::tokens::filter_size(17);
         assert_eq!(
             tall,
-            crate::ui::tokens::FILTER_MAX_H,
+            crate::tokens::FILTER_MAX_H,
             "a taller vocabulary scrolls instead of growing over the picture"
         );
         let total = rows(

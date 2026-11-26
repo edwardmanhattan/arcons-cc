@@ -98,7 +98,7 @@ says so.
 ### Windows x64 — the map engine is the wall, and it is not there
 
 - **The crate builds** (`check (windows-latest)`), and the first CI run found a real Windows-only defect
-  that no Linux toolchain could have: `src/config/check.rs`'s test helper took a file `mode` that only
+  that no Linux toolchain could have: `src/selfcheck.rs`'s test helper took a file `mode` that only
   the `cfg(unix)` branch used, so `cargo clippy -D warnings` failed with `unused variable: mode`. That is
   the matrix earning its keep on the first push.
 - **The map does not build — and the reason changed once we looked properly.** Upstream *does* publish

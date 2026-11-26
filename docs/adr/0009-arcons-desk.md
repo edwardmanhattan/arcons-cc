@@ -60,7 +60,7 @@ What that costs, stated plainly:
   form.
 - The shared client grows a write path that the wall must never call. That is enforced by a test on the wall's
   account and by the client's own type, not by a comment in a module.
-- **The desk depends on the wall's crate, never the reverse.** `src/ui/tokens.rs` is the only file that names a
+- **The desk depends on the wall's crate, never the reverse.** `src/tokens.rs` is the only file that names a
   colour or a size, and the scene harness is how a frame is rendered without a window; both are re-used through a
   library edge from `desk` to `arcons-cc` rather than copied, so two windows cannot drift into two themes. Nothing
   in the wall names the desk, and nothing in the wall's build can reach the desk's write path.

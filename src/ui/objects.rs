@@ -27,7 +27,7 @@ use rune::{El, el, row, text};
 
 use crate::data::types::{TacticalObjectManifestEntry, TacticalObjectPlacement};
 use crate::map::geometry::Rendered;
-use crate::ui::tokens;
+use crate::tokens;
 
 /// A tactical object's mark, in points: the box its artwork is drawn in and the generic mark's size.
 /// The same 24 pt a hull's symbol uses, because it is read from the same distance across the room.

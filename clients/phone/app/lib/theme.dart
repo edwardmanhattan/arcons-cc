@@ -1,7 +1,7 @@
 /// **The phone's own tokens** — the colours and sizes this screen names, in one file.
 ///
 /// The wall's rule, one program over: nothing outside this file names a colour or a size (`AGENTS.md`,
-/// `src/ui/tokens.rs`). They are the phone's and not the wall's, because a phone in a dark room and a wall on a
+/// `src/tokens.rs`). They are the phone's and not the wall's, because a phone in a dark room and a wall on a
 /// projector are two different surfaces — and copying the wall's numbers would make one of them wrong.
 library;
 
