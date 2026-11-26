@@ -29,7 +29,7 @@ that quietly draws the wrong ocean. The same for a `centrifugo_url` that is not 
 
 `stale_after_s` is in the file because the threshold is a **deployment fact**: a feed that reports
 every ten minutes and a feed that reports every ten seconds cannot share one number for "old". It
-reaches the glyph through `UnitView::glyph_with`, and `units::STALE_AFTER` is only the default.
+reaches the glyph through `UnitView::glyph_with`, and `config::STALE_AFTER` is only the default.
 
 ### Credentials: a file, mode `0600`, checked before it is read
 

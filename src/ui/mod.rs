@@ -725,7 +725,7 @@ impl Default for State {
             last_poll_logical: None,
             stale_after: config
                 .map(|config| config.stale_after)
-                .unwrap_or(crate::units::STALE_AFTER),
+                .unwrap_or(crate::config::STALE_AFTER),
             origin: std::time::Instant::now(),
             logical: 0.0,
             headless: false,

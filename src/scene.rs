@@ -2030,7 +2030,7 @@ mod tests {
             entries.iter().any(|hull| hull
                 .position
                 .as_ref()
-                .is_some_and(|fix| fix.age_seconds > crate::units::STALE_AFTER.as_secs_f64())),
+                .is_some_and(|fix| fix.age_seconds > crate::config::STALE_AFTER.as_secs_f64())),
             "one fix is older than the stale threshold"
         );
         assert!(

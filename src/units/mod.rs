@@ -35,16 +35,9 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
+use crate::config::STALE_AFTER;
 use crate::data::types::{FeedActor, FeedFix, FeedPosition};
 use crate::live::wire::LiveFix;
-
-/// How old a fix may be before the wall stops calling it fresh.
-///
-/// A **client decision**, deliberately: the server sends `age_seconds` and refuses to decide, because
-/// "stale" is a judgement about what the operator is looking at, not a property of the fix. Two
-/// minutes is longer than a beacon gap and short enough that a hull that stopped reporting is visibly
-/// different before an operator has to wonder.
-pub const STALE_AFTER: Duration = Duration::from_secs(120);
 
 /// A position on the globe, in degrees.
 #[derive(Clone, Copy, Debug, PartialEq)]

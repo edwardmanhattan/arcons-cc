@@ -498,6 +498,15 @@ impl Source {
     }
 }
 
+/// How old a fix may be before the wall stops calling it fresh — the default.
+///
+/// A **client decision**, deliberately: the server sends `age_seconds` and refuses to decide,
+/// because "stale" is a judgement about what the operator is looking at, not a property of the
+/// fix. Two minutes is longer than a beacon gap and short enough that a hull that stopped
+/// reporting is visibly different before an operator has to wonder. `stale_after_s` in
+/// `config.toml` overrides it for one wall.
+pub const STALE_AFTER: Duration = Duration::from_secs(120);
+
 /// The resolved configuration: what the wall actually uses, and where each part came from.
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -566,7 +575,7 @@ impl Config {
             map_zoom: file.map_zoom.unwrap_or(start.zoom),
             stale_after: Duration::from_secs_f64(
                 file.stale_after_s
-                    .unwrap_or_else(|| crate::units::STALE_AFTER.as_secs_f64()),
+                    .unwrap_or_else(|| STALE_AFTER.as_secs_f64()),
             ),
             config_path,
             credentials_path: credential_path,
