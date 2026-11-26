@@ -479,7 +479,7 @@ mod tests {
         let state = State::default();
         let job = wait_job(&queue);
         assert_eq!(job.request(), Some(&super::super::wire::Request::Wall));
-        let answer = Answer::Wall(crate::control::projection::of(&state));
+        let answer = Answer::Wall(crate::ui::projection::of(&state));
         job.answer(answer);
         let mut reply = String::new();
         BufReader::new(client)

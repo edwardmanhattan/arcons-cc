@@ -926,7 +926,7 @@ mod tests {
             "the grant says which stream is open and carries no projection: the client has just read one"
         );
 
-        let wall = crate::control::projection::of(&crate::ui::State::default());
+        let wall = crate::ui::projection::of(&crate::ui::State::default());
         let published = reply(Answer::Published(Watch::Wall, wall.clone()));
         assert_eq!(
             answer(&published),

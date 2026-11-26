@@ -1800,11 +1800,7 @@ mod tests {
             .recv_timeout(PATIENCE)
             .expect("the socket still answers requests after refusing a watch");
         assert_eq!(job.request(), Some(&Request::Wall));
-        let (answer, _) = crate::control::authority::answer(
-            &mut crate::ui::State::default(),
-            &Request::Wall,
-            None,
-        );
+        let (answer, _) = crate::ui::State::default().answer_request(&Request::Wall, None);
         job.answer(answer);
         line.clear();
         reader.read_line(&mut line).expect("the read is answered");

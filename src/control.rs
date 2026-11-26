@@ -28,6 +28,7 @@
 //! predicate the menu row is built from (#141), so the control and the action cannot disagree.
 
 #[cfg(test)]
+#[cfg(test)]
 use crate::ui::State;
 use crate::verb::{Edge, Intent};
 #[cfg(test)]
