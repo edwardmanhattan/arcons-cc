@@ -39,6 +39,26 @@ impl State {
     }
 }
 
+#[cfg(unix)]
+impl State {
+    /// **One job, settled on the thread that owns the state** (#222).
+    ///
+    /// A carrier's request is answered here, and a carrier that hung up takes its origin with it here. `poll`
+    /// calls this between frames and a test calls it directly, so "what a job means" is one function rather
+    /// than a habit repeated wherever a queue is drained. `true` when a pixel moved.
+    pub fn answer(&mut self, job: crate::control::Job) -> bool {
+        match &job {
+            crate::control::Job::Request { request, hand, .. } => {
+                let (reply, changed) =
+                    crate::control::authority::answer(self, request, hand.clone());
+                job.answer(reply);
+                changed
+            }
+            crate::control::Job::Departed { origin } => self.let_go(origin),
+        }
+    }
+}
+
 /// Whether this process handed `intent` to its authority instead of applying it (#204).
 ///
 /// A viewer has a session and no authority of its own; everything else — a wall, a capture, the authority process

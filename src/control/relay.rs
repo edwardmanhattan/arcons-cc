@@ -1618,10 +1618,7 @@ mod tests {
         );
         // The UI thread, played by this test: apply, then answer, through the one door.
         let mut state = crate::ui::State::default();
-        assert!(
-            crate::control::authority::serve(&mut state, job),
-            "a new workspace is a change"
-        );
+        assert!(state.answer(job), "a new workspace is a change");
         assert_eq!(
             state.workspaces.len(),
             4,
@@ -1692,7 +1689,7 @@ mod tests {
             if let Some(job) = queue.next() {
                 // The wall is asked between frames, exactly as a poll answers it (INV-05): the beat's read and the
                 // client's frames are the same door.
-                let _ = crate::control::authority::serve(&mut state, job);
+                let _ = state.answer(job);
                 // **The change, once the grant has been based on the wall as it was**: a phone that has just read is
                 // watching a wall somebody else may move.
                 if !changed {
@@ -1714,7 +1711,7 @@ mod tests {
         // **The last job is answered before the carrier stops** (INV-05): a session blocked in `ask_the_wall`
         // outlives the wall by its own deadline, and a test that left one would spend five seconds saying nothing.
         while let Some(job) = queue.next() {
-            let _ = crate::control::authority::serve(&mut state, job);
+            let _ = state.answer(job);
         }
         drop(relay);
 
@@ -1866,7 +1863,7 @@ mod tests {
         while served.len() < wanted {
             if let Some(job) = queue.next() {
                 let request = job.request().cloned();
-                let _ = crate::control::authority::serve(state, job);
+                let _ = state.answer(job);
                 if let Some(request) = request {
                     served.push(request);
                 }

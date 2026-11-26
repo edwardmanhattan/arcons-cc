@@ -113,25 +113,6 @@ pub fn answer(
     }
 }
 
-/// **One job, settled on the thread that owns the state** (#222).
-///
-/// A carrier's request is answered here, and a carrier that hung up takes its origin with it here; the wall's `poll`
-/// calls this between frames and a test calls it directly, so "what a job means" is one function rather than a habit
-/// repeated wherever a queue is drained. `true` when a pixel moved — the caller's cue to redraw.
-#[cfg(unix)]
-pub fn serve(state: &mut State, job: crate::control::Job) -> bool {
-    match &job {
-        crate::control::Job::Request { request, hand, .. } => {
-            let (reply, changed) = answer(state, request, hand.clone());
-            job.answer(reply);
-            changed
-        }
-        // **A cursor with no client is dropped** (#222): the ring is gone, so the frame it was drawn on is redrawn —
-        // the lesson of the fade (#167) is that a cursor vanishing changes nothing else.
-        crate::control::Job::Departed { origin } => state.let_go(origin),
-    }
-}
-
 /// **A viewer's session** (#202): one carrier, one thread, one request at a time.
 ///
 /// The thread owns the carrier and does the blocking, because the UI thread never waits for a client (`INV-05`). The
@@ -696,13 +677,10 @@ mod tests {
         peer.send(r#"{"v":1,"intent":{"verb":"cursor.move","at":[420.0,180.0]}}"#);
         let placed = handed_over(&queue, "the cursor move never reached the wall's queue");
         let mut state = State::default();
-        assert!(serve(&mut state, placed), "a cursor appearing is a change");
+        assert!(state.answer(placed), "a cursor appearing is a change");
         peer.send(r#"{"v":1,"intent":{"verb":"cursor.press"}}"#);
         let pressed = handed_over(&queue, "the press never reached the wall's queue");
-        assert!(
-            serve(&mut state, pressed),
-            "a pressed cursor is drawn filled"
-        );
+        assert!(state.answer(pressed), "a pressed cursor is drawn filled");
         assert_eq!(
             state.cursors.keys().map(Origin::as_str).collect::<Vec<_>>(),
             ["phone"],
@@ -723,7 +701,7 @@ mod tests {
             "a hanging-up carrier sends no request: it sends the origin it is letting go"
         );
         assert!(
-            serve(&mut state, departed),
+            state.answer(departed),
             "the ring vanished, so the wall must redraw the frame it went on (#167)"
         );
         assert!(

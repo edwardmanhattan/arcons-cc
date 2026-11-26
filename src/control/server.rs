@@ -408,10 +408,7 @@ mod tests {
         // The UI answers between frames: here that is this thread, applying to a wall of its own.
         let mut state = State::default();
         let job = wait_job(&queue);
-        assert!(
-            crate::control::authority::serve(&mut state, job),
-            "a new workspace is a change"
-        );
+        assert!(state.answer(job), "a new workspace is a change");
 
         let mut reply = String::new();
         BufReader::new(client)
@@ -559,10 +556,7 @@ mod tests {
 
         // The UI thread, played by this test: apply, then answer.
         let mut state = State::default();
-        assert!(
-            crate::control::authority::serve(&mut state, job),
-            "a new workspace is a change"
-        );
+        assert!(state.answer(job), "a new workspace is a change");
         let line = peer
             .recv_within(Duration::from_secs(2))
             .expect("the answer came back through the carrier");
