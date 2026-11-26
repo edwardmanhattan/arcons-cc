@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::carrier::Carrier;
-use super::sessions::Queue;
+use super::sessions::{Job, Queue};
 use super::{Refused, SOCKET_MODE};
 use crate::ui::Origin;
 
@@ -32,48 +32,6 @@ use crate::ui::Origin;
 /// A wall mid-frame is a wall that will answer in a frame; a wall that took five seconds is a wall with a
 /// problem, and a client hanging on a socket for ever cannot tell that from a slow one.
 pub(super) const ANSWER_WITHIN: Duration = Duration::from_secs(5);
-
-/// **One thing a carrier has left for the wall** (#222): a request to answer, or a hand that has let go.
-///
-/// The queue is one channel, so the two are one type: a carrier's session says what happened to it — a line to answer,
-/// or the end of it — and the thread that owns the state settles both. A second channel for "the client went away"
-/// would be a second way to reach the wall.
-pub enum Job {
-    /// **A parsed request**, waiting for the UI thread. The reply channel is how the listener says the answer back to
-    /// the client without ever touching the wall itself.
-    Request {
-        /// What the client asked for: a change, a look at the wall, or the arrangement (#181, #201).
-        request: super::wire::Request,
-        /// **Whose hand asked** (#222): the origin the carrier knows its client by — the socket's `ctl`, a relay's
-        /// device name — or `None` for a carrier that carries anybody. The door prefers it over an origin a frame typed.
-        hand: Option<Origin>,
-        answer: Sender<super::wire::Answer>,
-    },
-    /// **A carrier that hung up** (#222): the hand this origin was is gone, and its cursor goes with it. A carrier
-    /// serves several hands over its life (a relay connection carries every paired phone), so the session reports each
-    /// of them once, at the end.
-    Departed { origin: Origin },
-}
-
-impl Job {
-    /// The request this job carries, if it carries one. A driver that has a job and wants to know what it is asks this
-    /// rather than matching twice.
-    pub fn request(&self) -> Option<&super::wire::Request> {
-        match self {
-            Job::Request { request, .. } => Some(request),
-            Job::Departed { .. } => None,
-        }
-    }
-
-    /// Answer the client. Called by the UI thread after `control::apply` (or after reading the projection), and once
-    /// per job — a departed hand has nobody to answer, and says nothing about it.
-    pub fn answer(self, answer: super::wire::Answer) {
-        // A client that hung up is not an error: the reply has nowhere to go, and the wall already changed.
-        if let Job::Request { answer: to, .. } = self {
-            let _ = to.send(answer);
-        }
-    }
-}
 
 /// The listening socket and the thread that accepts on it.
 ///

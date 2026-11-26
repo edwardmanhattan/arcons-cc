@@ -961,8 +961,8 @@ pub fn row(_config: Option<&Config>, _env: &crate::config::Env) -> String {
 mod tests {
     use super::*;
     use crate::config::devices::{Device, Devices, Key, VERSION};
+    use crate::control::Job;
     use crate::control::pair::PAIR_ATTEMPTS;
-    use crate::control::server::Job;
     use crate::control::wire::{self, Answer, Request};
     use crate::control::{Changed, Intent, RefusalKind, refusal_kind};
     use std::io::{BufRead, BufReader, Write};
