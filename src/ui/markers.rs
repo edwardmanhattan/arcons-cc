@@ -127,7 +127,7 @@ pub fn layer(
     frame: &Rendered,
     scale: f32,
     pictures: &Pictures,
-    pane: crate::ui::ViewId,
+    pane: crate::verb::ViewId,
 ) -> El {
     let scale = if scale > 0.0 { f64::from(scale) } else { 1.0 };
     let mut layer = el()
@@ -169,7 +169,7 @@ impl Pictures<'_> {
 }
 
 /// The mark a hull earns: its picture when the range is close enough and one is ready, else its symbol.
-fn glyph(marker: &Placed, scale: f64, pictures: &Pictures, pane: crate::ui::ViewId) -> El {
+fn glyph(marker: &Placed, scale: f64, pictures: &Pictures, pane: crate::verb::ViewId) -> El {
     let accuracy = accuracy_ring(marker);
     let mark = match marker.mark {
         crate::units::mark::Mark::Picture {

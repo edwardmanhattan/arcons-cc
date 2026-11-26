@@ -610,7 +610,7 @@ fn panes_chrome(state: &mut State) {
 /// pane's id rather than its position: it draws `pane-03` after the two named panes before it.
 fn panes_named(state: &mut State) {
     panes(state);
-    let ids: Vec<crate::ui::ViewId> = state.pane_rects().into_iter().map(|(id, _)| id).collect();
+    let ids: Vec<crate::verb::ViewId> = state.pane_rects().into_iter().map(|(id, _)| id).collect();
     if let Some(id) = ids.first().copied()
         && let Some(pane) = state.pane_mut(id)
     {
@@ -691,7 +691,7 @@ fn pairing(state: &mut State) {
     // drawing it, so the flag is the scene's to carry — otherwise the golden and the structure assertion would
     // be looking at two different codes, one of them a lottery.
     state.headless = true;
-    crate::control::apply(state, crate::control::Intent::PairBegin).ok();
+    crate::control::apply(state, crate::verb::Intent::PairBegin).ok();
 }
 
 /// The `panes-menu` scene (#81): **a tiled wall with its menu open**, which is the only wall that offers
@@ -819,7 +819,7 @@ fn pane_tree(state: &mut State) {
     let Some(tree) = state.split_pane_as(
         map,
         camera,
-        crate::ui::PaneContent::Tree {
+        crate::verb::PaneContent::Tree {
             organisation: Some(TREE_ORGANISATION),
         },
     ) else {
@@ -1028,7 +1028,7 @@ pub fn newsroom_page_fixture(name: &str) -> Result<StoryPage, String> {
 ///
 /// A scene has no reads thread, so it plays that part — but through the pane's own functions, so the
 /// query the reply is checked against is the query the view would have sent.
-fn waiting(state: &mut State, pane: crate::ui::ViewId) -> Option<NewsQuery> {
+fn waiting(state: &mut State, pane: crate::verb::ViewId) -> Option<NewsQuery> {
     let view = state.pane_mut(pane)?.news.as_mut()?;
     Some(match view.asked {
         Some(query) => query,
@@ -1037,7 +1037,7 @@ fn waiting(state: &mut State, pane: crate::ui::ViewId) -> Option<NewsQuery> {
 }
 
 /// Hand a pane the page the reads thread would have sent for the query it is waiting on.
-fn apply_page(state: &mut State, pane: crate::ui::ViewId, file: &str) -> bool {
+fn apply_page(state: &mut State, pane: crate::verb::ViewId, file: &str) -> bool {
     let page = match newsroom_page_fixture(file) {
         Ok(page) => page,
         Err(error) => {
@@ -1065,7 +1065,7 @@ fn split_ratio(state: &mut State, share: f32) {
 ///
 /// The pane comes from the header control's own function (`ui::open_newsroom_pane`), so a capture of a
 /// wall with a feed is a capture of the path a press takes. Returns the feed's id.
-fn newsroom_wall(state: &mut State) -> Option<crate::ui::ViewId> {
+fn newsroom_wall(state: &mut State) -> Option<crate::verb::ViewId> {
     load(state);
     crate::ui::open_newsroom_pane(state);
     split_ratio(state, NEWSROOM_MAP_SHARE);
@@ -1115,10 +1115,11 @@ fn newsroom_page_2(state: &mut State) {
 fn newsroom_scopes(state: &mut State) {
     let map = state.focused();
     let camera = state.camera_of(map);
-    let Some(first) = state.split_pane_as(map, camera, crate::ui::PaneContent::Newsroom) else {
+    let Some(first) = state.split_pane_as(map, camera, crate::verb::PaneContent::Newsroom) else {
         return;
     };
-    let Some(second) = state.split_pane_as(first, camera, crate::ui::PaneContent::Newsroom) else {
+    let Some(second) = state.split_pane_as(first, camera, crate::verb::PaneContent::Newsroom)
+    else {
         return;
     };
     // The feed is the wall: the map pane the wall opened with goes, and the two newsroom panes keep its
@@ -1173,7 +1174,7 @@ pub fn newsroom_story_fixture(name: &str) -> Result<NewsStoryDetail, String> {
 
 /// Press a row the way the wall does: the view's own `select`, then the detail arrives as the reply the
 /// reads thread would send for that story.
-fn select_story(state: &mut State, pane: crate::ui::ViewId, id: i64, file: &str) {
+fn select_story(state: &mut State, pane: crate::verb::ViewId, id: i64, file: &str) {
     let opened = state
         .pane_mut(pane)
         .and_then(|pane| pane.news.as_mut())
@@ -1366,7 +1367,8 @@ fn workspaces_moved(state: &mut State) {
     load(state);
     let map = state.focused();
     let camera = state.camera_of(map);
-    let Some(newsroom) = state.split_pane_as(map, camera, crate::ui::PaneContent::Newsroom) else {
+    let Some(newsroom) = state.split_pane_as(map, camera, crate::verb::PaneContent::Newsroom)
+    else {
         return;
     };
     split_ratio(state, NEWSROOM_MAP_SHARE);
@@ -1399,7 +1401,7 @@ fn workspaces_close(state: &mut State) {
     let Some(newsroom) = state.split_pane_as(
         remembered,
         state.camera_of(remembered),
-        crate::ui::PaneContent::Newsroom,
+        crate::verb::PaneContent::Newsroom,
     ) else {
         return;
     };
@@ -1463,17 +1465,14 @@ fn cursor_hull(state: &mut State) {
         return;
     };
     state.pending_intents = vec![
-        (
-            1.90,
-            crate::control::Intent::CursorMove { at, origin: None },
-        ),
-        (1.92, crate::control::Intent::CursorPress { origin: None }),
-        (1.94, crate::control::Intent::CursorRelease { origin: None }),
+        (1.90, crate::verb::Intent::CursorMove { at, origin: None }),
+        (1.92, crate::verb::Intent::CursorPress { origin: None }),
+        (1.94, crate::verb::Intent::CursorRelease { origin: None }),
         // A press, a release, and the point moves off the hull: the capture shows a cursor that is not hiding the
         // hull it just pressed, and the ring is drawn over water where an assertion can see it.
         (
             1.96,
-            crate::control::Intent::CursorMove {
+            crate::verb::Intent::CursorMove {
                 at: beside(at),
                 origin: None,
             },
@@ -1492,15 +1491,12 @@ fn cursor_idle(state: &mut State) {
         return;
     };
     state.pending_intents = vec![
-        (
-            0.20,
-            crate::control::Intent::CursorMove { at, origin: None },
-        ),
-        (0.22, crate::control::Intent::CursorPress { origin: None }),
-        (0.24, crate::control::Intent::CursorRelease { origin: None }),
+        (0.20, crate::verb::Intent::CursorMove { at, origin: None }),
+        (0.22, crate::verb::Intent::CursorPress { origin: None }),
+        (0.24, crate::verb::Intent::CursorRelease { origin: None }),
         (
             0.26,
-            crate::control::Intent::CursorMove {
+            crate::verb::Intent::CursorMove {
                 at: beside(at),
                 origin: None,
             },
@@ -1535,36 +1531,36 @@ fn cursor_two(state: &mut State) {
         // A phone, pointing at a hull and pressing it: the card is what its press opened.
         (
             1.90,
-            crate::control::Intent::CursorMove {
+            crate::verb::Intent::CursorMove {
                 at,
-                origin: Some(crate::ui::Origin::named("phone")),
+                origin: Some(crate::verb::Origin::named("phone")),
             },
         ),
         (
             1.92,
-            crate::control::Intent::CursorPress {
-                origin: Some(crate::ui::Origin::named("phone")),
+            crate::verb::Intent::CursorPress {
+                origin: Some(crate::verb::Origin::named("phone")),
             },
         ),
         (
             1.94,
-            crate::control::Intent::CursorRelease {
-                origin: Some(crate::ui::Origin::named("phone")),
+            crate::verb::Intent::CursorRelease {
+                origin: Some(crate::verb::Origin::named("phone")),
             },
         ),
         (
             1.96,
-            crate::control::Intent::CursorMove {
+            crate::verb::Intent::CursorMove {
                 at: beside(at),
-                origin: Some(crate::ui::Origin::named("phone")),
+                origin: Some(crate::verb::Origin::named("phone")),
             },
         ),
         // And a second client, pointing somewhere else — nowhere near the hull, so the picture has two rings.
         (
             1.98,
-            crate::control::Intent::CursorMove {
+            crate::verb::Intent::CursorMove {
                 at: CURSOR_TWO_AT,
-                origin: Some(crate::ui::Origin::named("tablet")),
+                origin: Some(crate::verb::Origin::named("tablet")),
             },
         ),
     ];
@@ -1592,7 +1588,7 @@ pub fn intents_path(name: &str) -> PathBuf {
 ///
 /// A script that does not parse renders the wall its scene built and says so: a capture whose file is broken
 /// then differs from its golden, which is the failure a human sees, and the message names the line.
-pub fn load_intents(name: &str) -> Vec<(f64, crate::control::Intent)> {
+pub fn load_intents(name: &str) -> Vec<(f64, crate::verb::Intent)> {
     let path = intents_path(name);
     let Ok(text) = std::fs::read_to_string(&path) else {
         eprintln!("arcons-cc: no intent script at {}", path.display());
@@ -1677,7 +1673,7 @@ fn close_all(state: &mut State) {
     let here = state.focused();
     let camera = state.camera_of(here);
     for workspace in [1, 2] {
-        let Some(id) = state.split_pane_as(here, camera, crate::ui::PaneContent::Map) else {
+        let Some(id) = state.split_pane_as(here, camera, crate::verb::PaneContent::Map) else {
             return;
         };
         if !crate::ui::move_pane_to(state, id, workspace) {
@@ -1690,8 +1686,8 @@ fn close_all(state: &mut State) {
     // On the pane the `panes` scene left focused, so the pane the reset keeps is that one.
     state.focus_pane(here);
     state.pending_intents = vec![
-        (0.3, crate::control::Intent::CloseOtherPanes),
-        (0.6, crate::control::Intent::CloseOtherWorkspaces),
+        (0.3, crate::verb::Intent::CloseOtherPanes),
+        (0.6, crate::verb::Intent::CloseOtherWorkspaces),
     ];
 }
 
@@ -1703,7 +1699,7 @@ fn menu_ring(state: &mut State) {
     panes_menu(state);
     state.pending_intents = vec![(
         0.3,
-        crate::control::Intent::MenuFocus {
+        crate::verb::Intent::MenuFocus {
             row: Some(MENU_RING_ROW),
         },
     )];
@@ -2592,7 +2588,7 @@ mod tests {
         assert!(
             matches!(
                 command.pane(tree).map(|pane| &pane.content),
-                Some(crate::ui::PaneContent::Tree {
+                Some(crate::verb::PaneContent::Tree {
                     organisation: Some(TREE_ORGANISATION)
                 })
             ),

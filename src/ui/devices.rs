@@ -71,7 +71,8 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control::{Intent, apply, pair};
+    use crate::control::{apply, pair};
+    use crate::verb::Intent;
 
     /// A directory this test owns, so no run touches the operator's config directory.
     fn temp_dir(name: &str) -> PathBuf {

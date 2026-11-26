@@ -273,7 +273,7 @@ use super::carrier::Carrier;
 #[cfg(unix)]
 use super::server::serve_session;
 #[cfg(unix)]
-use crate::ui::Origin;
+use crate::verb::Origin;
 
 /// One end of a dialled connection: a unix socket beside the wall, or a TCP relay on the network.
 #[cfg(unix)]
@@ -627,7 +627,7 @@ impl RelayCarrier {
             // `to`, because the wall has no name for the device until the claim writes one. Any other verb from the
             // same key is still a stranger, and `a_phone_with_no_row_may_claim_the_code_and_nothing_else` holds both
             // halves of that.
-            None if value.get("intent").and_then(verb_of) == Some(super::PAIR_CLAIM) => {
+            None if value.get("intent").and_then(verb_of) == Some(crate::verb::PAIR_CLAIM) => {
                 self.to = Some(Address::Unnamed);
                 Some(line.to_string())
             }
@@ -964,7 +964,8 @@ mod tests {
     use crate::control::Job;
     use crate::control::pair::PAIR_ATTEMPTS;
     use crate::control::wire::{self, Answer, Request};
-    use crate::control::{Changed, Intent, RefusalKind, refusal_kind};
+    use crate::control::{Changed, RefusalKind, refusal_kind};
+    use crate::verb::Intent;
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::Path;
@@ -1259,7 +1260,7 @@ mod tests {
         // relay's address (`INV-08`).
         assert_eq!(
             carrier.origin(),
-            Some(crate::ui::Origin::named("phone")),
+            Some(crate::verb::Origin::named("phone")),
             "a relay's carrier names its client by the device name in devices.toml (#222 rule 4)"
         );
         drop(relay.join().expect("the relay's half ends"));

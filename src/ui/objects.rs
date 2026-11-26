@@ -143,7 +143,7 @@ pub fn layer(
     frame: &Rendered,
     scale: f32,
     assets: &HashMap<String, rune::Image>,
-    pane: crate::ui::ViewId,
+    pane: crate::verb::ViewId,
 ) -> Option<El> {
     if placed.is_empty() {
         return None;
@@ -176,7 +176,7 @@ fn mark(
     object: &Placed,
     scale: f64,
     assets: &HashMap<String, rune::Image>,
-    pane: crate::ui::ViewId,
+    pane: crate::verb::ViewId,
 ) -> El {
     let x = (object.x / scale) as f32;
     let y = (object.y / scale) as f32;
@@ -202,7 +202,7 @@ fn mark(
 
 /// One object's label plate: the same surface and type a pane's name uses, because a label is a name
 /// somebody typed. Drawn only for a label that exists — an empty plate is worse than no plate.
-fn plate(object: &Placed, label: &str, scale: f64, pane: crate::ui::ViewId) -> El {
+fn plate(object: &Placed, label: &str, scale: f64, pane: crate::verb::ViewId) -> El {
     let rect = label_rect((object.x / scale, object.y / scale));
     row()
         .key(format!("object-label-{pane}-{}", object.id))

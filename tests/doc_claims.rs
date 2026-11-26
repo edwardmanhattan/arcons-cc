@@ -535,13 +535,13 @@ fn section<'a>(doc: &'a str, heading: &str) -> &'a str {
 /// `unknown verb` — the two failures a protocol document exists to prevent.
 #[test]
 fn the_control_document_names_exactly_the_vocabulary() {
-    use arcons_cc::control::Intent;
+    use arcons_cc::verb::Intent;
 
     let doc = read("docs/control.md");
     // The documented verbs are the backticked `noun.verb` names in the intents table.
     let documented = verbs_in_table(&doc);
 
-    let code: Vec<&'static str> = arcons_cc::control::vocabulary()
+    let code: Vec<&'static str> = arcons_cc::verb::vocabulary()
         .iter()
         .map(Intent::verb)
         .collect();
@@ -584,10 +584,10 @@ fn the_control_document_names_exactly_the_vocabulary() {
 /// wall refuses is worse than a note that is silent about it.
 #[test]
 fn the_mobile_note_names_only_verbs_the_wall_answers_to() {
-    use arcons_cc::control::Intent;
+    use arcons_cc::verb::Intent;
 
     let note = read("docs/mobile-remote.md");
-    let code: Vec<&'static str> = arcons_cc::control::vocabulary()
+    let code: Vec<&'static str> = arcons_cc::verb::vocabulary()
         .iter()
         .map(Intent::verb)
         .collect();
@@ -633,7 +633,7 @@ fn the_mobile_note_names_only_verbs_the_wall_answers_to() {
 /// a note that had to list two dozen verbs to say one thing would be a second reference to keep true.
 #[test]
 fn the_mobile_ui_note_names_only_verbs_the_wall_answers_to() {
-    use arcons_cc::control::Intent;
+    use arcons_cc::verb::Intent;
 
     let note = read("docs/mobile-ui.md");
     let named = verbs_in_table(section(&note, "## The verbs it uses"));
@@ -645,7 +645,7 @@ fn the_mobile_ui_note_names_only_verbs_the_wall_answers_to() {
     );
 
     let documented = verbs_in_table(&read("docs/control.md"));
-    let code: Vec<&'static str> = arcons_cc::control::vocabulary()
+    let code: Vec<&'static str> = arcons_cc::verb::vocabulary()
         .iter()
         .map(Intent::verb)
         .collect();

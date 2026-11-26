@@ -31,7 +31,7 @@ use crate::data::types::{
     TacticalObjectFacets, TacticalObjectManifestEntry, TacticalObjectPlacement, TniCommandPost,
     UnitCommander, UnitDetail, UnitOrganisation, UnitOrganisationDetail, UnitSpecification,
 };
-use crate::ui::ViewId;
+use crate::verb::ViewId;
 
 /// The version a client must speak. A viewer that cannot speak it says so instead of guessing at fields.
 pub const SCENE_VERSION: u32 = 1;

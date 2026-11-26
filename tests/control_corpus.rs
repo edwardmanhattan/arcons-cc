@@ -18,7 +18,8 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use arcons_cc::control::{self, Intent, REFUSALS, RefusalKind, corpus};
+use arcons_cc::control::{self, REFUSALS, RefusalKind, corpus};
+use arcons_cc::verb::{Intent, vocabulary};
 use serde_json::Value;
 use serde_json::value::RawValue;
 
@@ -133,7 +134,7 @@ fn every_verb_in_the_document_has_an_exchange() {
         .iter()
         .filter_map(|exchange| verb(&exchange.send))
         .collect();
-    for intent in control::vocabulary() {
+    for intent in vocabulary() {
         let name = intent.verb();
         assert!(
             sent.contains(name),
@@ -147,7 +148,7 @@ fn every_verb_in_the_document_has_an_exchange() {
 /// verb` itself — and it has to be the exception, or the corpus could not show what a retired verb earns.
 #[test]
 fn every_exchange_names_a_verb_the_wall_answers_to() {
-    let known: BTreeSet<&'static str> = control::vocabulary().iter().map(Intent::verb).collect();
+    let known: BTreeSet<&'static str> = vocabulary().iter().map(Intent::verb).collect();
     for (number, exchange) in recorded().iter().enumerate() {
         let Some(verb) = verb(&exchange.send) else {
             continue;

@@ -106,6 +106,26 @@ fn only_tokens_names_a_colour_or_a_size() {
     );
 }
 
+/// The vocabulary is a leaf: `ui` and `control` both name it, so it may not name either back. A type that
+/// moves here by habit and keeps a `crate::ui` path would recreate the cycle the slice removes.
+#[test]
+fn the_verb_leaf_names_no_ui_or_control() {
+    let source = read("src/verb.rs");
+    for (index, line) in source.lines().enumerate() {
+        let code = line.split("//").next().unwrap_or("").trim();
+        if code.is_empty() {
+            continue;
+        }
+        for banned in ["crate::ui", "crate::control"] {
+            assert!(
+                !code.contains(banned),
+                "src/verb.rs:{} names {banned}: {line}",
+                index + 1
+            );
+        }
+    }
+}
+
 /// The view reads one clock: [`crate::ui::State::now`]. Nothing in a drawing or change-detection path
 /// may read the wall clock, because `poll`'s answer decides when Rune rebuilds the element tree — a
 /// real-clock comparison there makes *when* something is drawn depend on the machine's speed, which is

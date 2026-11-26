@@ -345,7 +345,7 @@ impl State {
             .iter()
             .map(|cursor| {
                 (
-                    crate::ui::Origin::named(&cursor.origin),
+                    crate::verb::Origin::named(&cursor.origin),
                     crate::ui::Cursor {
                         at: cursor.at,
                         down: cursor.down,

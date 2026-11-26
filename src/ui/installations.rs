@@ -145,7 +145,7 @@ pub fn layer(
     scale: f32,
     assets: &HashMap<String, rune::Image>,
     selected: Option<i64>,
-    pane: crate::ui::ViewId,
+    pane: crate::verb::ViewId,
 ) -> Option<El> {
     if placed.is_empty() {
         return None;
@@ -172,7 +172,7 @@ fn mark(
     scale: f64,
     assets: &HashMap<String, rune::Image>,
     selected: Option<i64>,
-    pane: crate::ui::ViewId,
+    pane: crate::verb::ViewId,
 ) -> El {
     let x = (installation.x / scale) as f32;
     let y = (installation.y / scale) as f32;
@@ -228,7 +228,7 @@ fn facility_shape() -> Shape {
 ///
 /// A hull card and a facility card are both "this pane's card", so selecting one closes the other:
 /// one pane, one card (`INV-10` per pane). This is the only way a facility selection changes.
-pub fn press(state: &mut crate::ui::State, pane: crate::ui::ViewId, id: i64) {
+pub fn press(state: &mut crate::ui::State, pane: crate::verb::ViewId, id: i64) {
     state.focus_pane(pane);
     if state.installation_in(pane) == Some(id) {
         state.clear_selection(pane);

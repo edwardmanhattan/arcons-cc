@@ -33,7 +33,8 @@ use crate::data::types::{TniCommandPost, UnitOrganisationNode};
 use crate::ui::icons;
 use crate::ui::tokens;
 use crate::ui::view::TreeCamera;
-use crate::ui::{PaneContent, Rect, State, ViewId};
+use crate::ui::{Rect, State};
+use crate::verb::{PaneContent, ViewId};
 
 /// One post, as the wire described it, before it is placed.
 ///
@@ -1139,7 +1140,7 @@ mod tests {
         // The header's control builds this intent; a capture and a client send it (#170).
         crate::control::apply(
             &mut state,
-            crate::control::Intent::OpenPane(crate::ui::PaneContent::Tree { organisation: None }),
+            crate::verb::Intent::OpenPane(crate::verb::PaneContent::Tree { organisation: None }),
         )
         .expect("a tree pane opens beside the focused one");
         assert_eq!(state.pane_count(), before + 1, "the wall gained a pane");

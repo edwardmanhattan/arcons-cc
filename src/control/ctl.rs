@@ -291,14 +291,14 @@ pub fn parse(words: &[String]) -> Result<Intent, Failure> {
 }
 
 /// `pane 2` / `workspace 1` — the same two targets a rename can name.
-fn target(words: &[String]) -> Result<crate::ui::RenameTarget, Failure> {
+fn target(words: &[String]) -> Result<crate::verb::RenameTarget, Failure> {
     match (words.first().map(String::as_str), words.get(1)) {
         (Some("pane"), Some(id)) => {
-            Ok(crate::ui::RenameTarget::Pane(id.parse::<u32>().map_err(
+            Ok(crate::verb::RenameTarget::Pane(id.parse::<u32>().map_err(
                 |_| Failure::Usage(format!("rename: a pane id is a number, got {id:?}")),
             )?))
         }
-        (Some("workspace"), Some(index)) => Ok(crate::ui::RenameTarget::Workspace(
+        (Some("workspace"), Some(index)) => Ok(crate::verb::RenameTarget::Workspace(
             index.parse::<usize>().map_err(|_| {
                 Failure::Usage(format!(
                     "rename: a workspace index is a number, got {index:?}"
@@ -510,10 +510,8 @@ mod tests {
                 Ok(Command::Change(intent)) => intent,
                 other => panic!("{case}: {other:?}"),
             };
-            let known: Vec<&'static str> = crate::control::vocabulary()
-                .iter()
-                .map(Intent::verb)
-                .collect();
+            let known: Vec<&'static str> =
+                crate::verb::vocabulary().iter().map(Intent::verb).collect();
             assert!(
                 known.contains(&intent.verb()),
                 "{case} builds {}, which the vocabulary does not declare",
@@ -521,7 +519,7 @@ mod tests {
             );
             reached.push(intent.verb());
         }
-        for verb in crate::control::vocabulary().iter().map(Intent::verb) {
+        for verb in crate::verb::vocabulary().iter().map(Intent::verb) {
             if verb == "pane.split_at" {
                 // A point in a pane's frame is a pointer's, and a CLI has no pointer: the menu sends it, the
                 // CLI sends `pane.split`, which is the same change at the pane's own centre.
