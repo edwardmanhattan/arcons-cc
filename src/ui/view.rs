@@ -1887,7 +1887,7 @@ mod tests {
 #[cfg(test)]
 mod cells_tests {
     use super::*;
-    use crate::control::tiling;
+    use crate::ui::tiling;
 
     /// Every recorded case, by name, as the file says it.
     fn corpus() -> Vec<(String, tiling::Tiling)> {
@@ -2107,7 +2107,7 @@ mod cells_tests {
 mod tokens_tests {
     use super::*;
     use crate::config::layout::RATIO_RANGE;
-    use crate::control::tiling;
+    use crate::ui::tiling;
 
     #[test]
     fn the_numbers_in_every_recorded_tiling_are_the_tokens() {

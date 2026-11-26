@@ -3,7 +3,7 @@
 //!
 //! The corpus is **recorded**, not written. `fixtures/control/session.jsonl` is one request/answer pair per
 //! line, and it comes out of the wall's own session loop over a `Loopback` carrier — the door the unix
-//! socket uses (#195) — driven by the requests in `control::corpus`. `cargo run -- --record` rewrites it;
+//! socket uses (#195) — driven by the requests in `ui::corpus`. `cargo run -- --record` rewrites it;
 //! no one edits it by hand, because a corpus written from our structs proves only that we agree with
 //! ourselves.
 //!
@@ -18,7 +18,8 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use arcons_cc::control::{self, REFUSALS, RefusalKind, corpus};
+use arcons_cc::control::{self, REFUSALS, RefusalKind};
+use arcons_cc::ui::corpus;
 use arcons_cc::verb::{Intent, vocabulary};
 use serde_json::Value;
 use serde_json::value::RawValue;

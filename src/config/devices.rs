@@ -8,7 +8,7 @@
 //!
 //! This module is the **file and its arithmetic**: which keys exist, what a usable row is, the fresh key
 //! and its hash. It knows nothing about `State`: `ui::devices` is what turns a claim into a row, and
-//! `control::pair` is the rules a code has to pass.
+//! `ui::pairing` is the rules a code has to pass.
 //!
 //! Three rules, each of them `layout.toml`'s:
 //!

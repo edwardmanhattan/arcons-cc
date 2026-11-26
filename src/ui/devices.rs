@@ -71,7 +71,7 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control::pair;
+    use crate::ui::pairing as pair;
     use crate::verb::Intent;
 
     /// A directory this test owns, so no run touches the operator's config directory.

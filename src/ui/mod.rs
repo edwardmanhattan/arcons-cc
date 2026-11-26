@@ -18,6 +18,8 @@
 //! Without `--features map` the map element is absent and the panel says so: the engine is optional
 //! so the gate stays free of C++ and of a network. `--probe-map` is the headless witness.
 
+#[cfg(unix)]
+pub mod corpus;
 pub mod devices;
 mod door;
 pub mod filter;
@@ -26,10 +28,12 @@ pub mod installations;
 pub mod markers;
 pub mod newsroom;
 pub mod objects;
+pub mod pairing;
 pub mod qr;
 pub mod saved;
 pub mod snapshot;
 pub mod symbol;
+pub mod tiling;
 pub mod tokens;
 pub mod tree;
 pub mod unitcard;
@@ -416,7 +420,7 @@ pub struct State {
     /// **The code on the wall** (#194): six digits for two minutes, drawn and never sent. `None` when no
     /// pairing is open. Not an [`Interaction`]: a code holds neither the pointer nor the keyboard, and the
     /// wall keeps drawing the sea behind it while two people in the room read it.
-    pub pairing: Option<crate::control::pair::Pairing>,
+    pub pairing: Option<crate::ui::pairing::Pairing>,
     /// **Where this wall's relay is** (#270), as the operator wrote `ARCONS_RELAY_URL`: read once when the wall
     /// opens by [`State::with_relay`], and never from the view. It is what the pairing QR carries, so a phone
     /// needs no build-time address — a deployment address, not a secret.
@@ -978,7 +982,7 @@ impl State {
 
     /// **The pairing code, if one is open now** (#194): six digits drawn on the wall, and a code that has
     /// lived out its two minutes is not one any more.
-    pub fn pairing(&self) -> Option<&crate::control::pair::Pairing> {
+    pub fn pairing(&self) -> Option<&crate::ui::pairing::Pairing> {
         self.pairing
             .as_ref()
             .filter(|pairing| pairing.is_live(self.logical))
@@ -2594,7 +2598,7 @@ pub fn view(state: &State, cx: &mut Cx<State>) -> El {
 ///
 /// **The digits stay when the QR is drawn**, and they are the whole panel when there is no relay: a phone with no
 /// camera pairs by typing, and a QR carrying no address is a picture that fails on the phone.
-fn pairing_panel(state: &State, pairing: &crate::control::pair::Pairing) -> El {
+fn pairing_panel(state: &State, pairing: &crate::ui::pairing::Pairing) -> El {
     let (x, y, w, h) = pairing_box(state.panel);
     let mut beside = row().gap(tokens::GAP).items_center().child(
         col()
@@ -7169,7 +7173,7 @@ mod tests {
 
         let mut state = State::default();
         state.apply(Intent::PairBegin).expect("pairing opens");
-        state.set_frame_clock(crate::control::pair::PAIR_FOR);
+        state.set_frame_clock(crate::ui::pairing::PAIR_FOR);
         assert!(
             state.pairing().is_none(),
             "a code that survives its two minutes is the ticket's falsifier"

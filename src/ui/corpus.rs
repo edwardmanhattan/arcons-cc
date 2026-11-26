@@ -44,8 +44,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
 
-use super::carrier::Loopback;
-use super::{Job, server};
+use crate::control::carrier::Loopback;
+use crate::control::server::{self, Job};
 use crate::ui::State;
 
 /// Where the recordings live, relative to the crate root. `cargo run -- --record` writes here.
@@ -125,12 +125,14 @@ pub fn wall() -> Result<State, String> {
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     let steps: Vec<Value> = serde_json::from_str(&text)
         .map_err(|error| format!("{} is not a list of steps: {error}", path.display()))?;
-    let mut state = State::default();
     // **A recording is headless** (`INV-11`): it binds no socket, writes no `devices.toml`, and draws its
     // pairing code from the frame clock instead of the OS — so `pair.begin`'s answer, and a wrong code's,
     // are the same bytes on every machine (#194, #224). A random code would make the corpus flake one run
     // in a million, and the *right* guess would write a device key into the tree.
-    state.headless = true;
+    let mut state = State {
+        headless: true,
+        ..State::default()
+    };
     for (index, step) in steps.iter().enumerate() {
         if step.get("at").and_then(Value::as_f64).is_none() {
             return Err(format!(
@@ -143,7 +145,7 @@ pub fn wall() -> Result<State, String> {
             .get("intent")
             .ok_or_else(|| format!("{} step {index} has no \"intent\"", path.display()))
             .and_then(|intent| {
-                super::wire::from_wire(intent).map_err(|why| {
+                crate::control::wire::from_wire(intent).map_err(|why| {
                     format!(
                         "{} step {index} is not an intent: {}",
                         path.display(),

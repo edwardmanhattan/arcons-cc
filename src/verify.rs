@@ -4413,10 +4413,10 @@ pub fn assert_structure(scene: &str) -> Result<Vec<String>, Vec<String>> {
         // given, through the one function that makes both the words and the QR.
         let text = code
             .as_deref()
-            .and_then(|digits| crate::control::pair::payload(digits, relay.as_deref()));
+            .and_then(|digits| crate::ui::pairing::payload(digits, relay.as_deref()));
         match (text, state.pairing().and_then(|pairing| pairing.qr())) {
             (Some(text), Some(matrix)) => {
-                if crate::control::pair::Matrix::encode(&text).as_ref() != Some(matrix) {
+                if crate::ui::pairing::Matrix::encode(&text).as_ref() != Some(matrix) {
                     failures.push(format!(
                         "pairing: the matrix on the wall is not the encoder's for `{text}` — the drawing and the \
                          payload have drifted apart (#270)"
