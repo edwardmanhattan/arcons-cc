@@ -203,12 +203,14 @@ fn the_walls_failures_are_logged_and_not_printed_to_a_console_nobody_reads() {
 /// builds — `El::on_press`, `on_secondary_press`, the `_local` variants, `on_drag`, `on_wheel`, `on_submit`,
 /// `on_hover` — and fails when one of them calls a **settled** mutator directly.
 ///
-/// The exceptions are not hidden: they are the handlers' own helper functions, named below with the reason each
-/// one is allowed to touch the wall itself. A new helper is a deliberate line in this list, not a quiet bypass.
+/// The exceptions are not hidden: a helper is a line in `HELPERS` with its reason; a press that still changes the
+/// wall directly is a line in `BYPASSES` with its reason and the ticket that removes it (#310). A new one is a
+/// deliberate line, not a quiet call.
 #[test]
 fn no_handler_changes_the_wall_except_through_the_door() {
     // The wall's settled changes: the mutators `State::apply` calls. A handler calling one of these has gone
-    // around the door.
+    // around the door. The input helpers that end in `apply` (`press_marker`, `press_background`, `press_in`)
+    // are not here: they are the door's own callers, not mutators.
     const SETTLED: &[&str] = &[
         "focus_pane",
         "close_pane",
@@ -221,8 +223,6 @@ fn no_handler_changes_the_wall_except_through_the_door() {
         "set_camera_of",
         "select_in",
         "clear_selection",
-        "press_marker",
-        "press_background",
         "apply_drop",
         "set_ratio",
         "move_pane_to",
@@ -250,6 +250,11 @@ fn no_handler_changes_the_wall_except_through_the_door() {
         "drag_gutter",
         "drag_map",
         "wheel",
+        // The tree's own gestures: pan, zoom and the double press that re-fits the text canvas. They move the
+        // tree's camera, the way `drag_map`/`wheel` move the map's; the post press below is the settled one.
+        "tree_drag",
+        "tree_wheel",
+        "fit_now",
         // A press on the water or on a pane: three intents inside (`press_in`), and a menu anchored where the
         // pointer was (`open_menu`). A workspace chip's menu is the same kind of surface (#242).
         "press_in",
@@ -264,39 +269,86 @@ fn no_handler_changes_the_wall_except_through_the_door() {
         "menu_press",
     ];
 
-    let source = read("src/ui/mod.rs");
-    // Only the view: the tests below it are allowed to poke whatever they like.
-    let body = source
-        .split_once("\nmod tests {")
-        .map(|(body, _)| body)
-        .unwrap_or(&source);
+    // **The named bypasses** (#310): handlers that change the wall without the door, kept visible with the
+    // reason and the ticket that removes them. A new one is a new line here, not an invisible call. The local
+    // vocabulary in #326 is what moves these eight onto the door.
+    const BYPASSES: &[(&str, &str)] = &[
+        (
+            "press_back",
+            "the newsroom's back control; the glass-only vocabulary is #326",
+        ),
+        (
+            "press_retry_detail",
+            "the newsroom's detail retry; the glass-only vocabulary is #326",
+        ),
+        (
+            "press_scope",
+            "the newsroom's scope tab; the glass-only vocabulary is #326",
+        ),
+        (
+            "select",
+            "the newsroom's story row; the glass-only vocabulary is #326",
+        ),
+        (
+            "press_page",
+            "the newsroom's pager; the glass-only vocabulary is #326",
+        ),
+        (
+            "press_retry",
+            "the newsroom's list retry; the glass-only vocabulary is #326",
+        ),
+        (
+            "press_post",
+            "a tree post press; the glass-only vocabulary is #326",
+        ),
+        (
+            "press",
+            "a facility press; the glass-only vocabulary is #326",
+        ),
+    ];
 
     let mut handlers = 0;
+    let mut scanned = 0;
     let mut offenders: Vec<String> = Vec::new();
-    for handler in handler_closures(body) {
-        // **A layout pass is not an input** (#173): `on_layout` is where the wall learns its own geometry — the
-        // panel's size, each pane's rectangle, the frame markers project against (`INV-04`) — and the renderer
-        // runs it, not a hand or a socket. The rule is about what a *client* may do.
-        if handler.kind.contains("layout") {
+    let mut seen_bypasses: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (path, source) in rust_sources() {
+        let file = path.replace('\\', "/");
+        if !file.starts_with("src/ui/") || !file.ends_with(".rs") {
             continue;
         }
-        handlers += 1;
-        for settled in SETTLED {
-            let call = format!(".{settled}(");
-            if handler.body.contains(&call) {
-                offenders.push(format!(
-                    "line {}: `{}` calls `{settled}` — that is the door's job (#173); call \
-                     `State::apply` with the intent it means",
-                    handler.line, handler.kind
-                ));
+        scanned += 1;
+        // Only the view: the tests below the first `#[cfg(test)]` are allowed to poke whatever they like.
+        let body = source.split("#[cfg(test)]").next().unwrap_or(&source);
+        for handler in handler_closures(body) {
+            // **A layout pass is not an input** (#173): `on_layout` is where the wall learns its own geometry —
+            // the panel's size, each pane's rectangle, the frame markers project against (`INV-04`) — and the
+            // renderer runs it, not a hand or a socket. The rule is about what a *client* may do.
+            if handler.kind.contains("layout") {
+                continue;
             }
-        }
-        for called in direct_calls(&handler.body) {
-            if !HELPERS.contains(&called.as_str()) {
+            handlers += 1;
+            for settled in SETTLED {
+                let call = format!(".{settled}(");
+                if handler.body.contains(&call) {
+                    offenders.push(format!(
+                        "{file}:{}: `{}` calls `{settled}` — that is the door's job (#173); call \
+                         `State::apply` with the intent it means",
+                        handler.line, handler.kind
+                    ));
+                }
+            }
+            for called in direct_calls(&handler.body) {
+                if HELPERS.contains(&called.as_str()) {
+                    continue;
+                }
+                if BYPASSES.iter().any(|(name, _)| *name == called) {
+                    seen_bypasses.insert(called);
+                    continue;
+                }
                 offenders.push(format!(
-                    "line {}: `{}` calls `{called}(...)`, which is not one of the handlers' helpers. If it \
+                    "{file}:{}: `{}` calls `{called}(...)`, which is not one of the handlers' helpers. If it \
                      changes the wall, it is a bypass (#173); if it is a surface or a held gesture, add it to \
-                     HELPERS with the reason",
+                     HELPERS with the reason; if it is a named bypass, add it to BYPASSES with its ticket (#310)",
                     handler.line, handler.kind
                 ));
             }
@@ -304,8 +356,21 @@ fn no_handler_changes_the_wall_except_through_the_door() {
     }
     assert!(
         handlers > 20,
-        "only {handlers} handlers found — the scan is not reading `src/ui/mod.rs` as it is written, so it \
-         proves nothing (#173)"
+        "only {handlers} handlers found across {scanned} UI files — the scan is not reading the view as it is \
+         written, so it proves nothing (#173, #310)"
+    );
+    assert!(
+        scanned > 10,
+        "only {scanned} UI files scanned — `rust_sources` is not reaching every `src/ui/*.rs` (#310)"
+    );
+    let unused: Vec<&str> = BYPASSES
+        .iter()
+        .filter(|(name, _)| !seen_bypasses.contains(*name))
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(
+        unused.is_empty(),
+        "BYPASSES entries no handler calls: {unused:?} — remove them, or the table is not total (#310)"
     );
     assert!(
         offenders.is_empty(),
