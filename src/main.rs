@@ -18,7 +18,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use arcons_cc::{config, platform, ui};
+use arcons_cc::{config, platform, selfcheck, ui};
 
 /// Render one map frame with no window. Needs `--features map`: without the engine there is nothing
 /// to render, and saying so is better than writing a black PNG.
@@ -188,10 +188,10 @@ fn compare_captures(args: &config::Args) -> ExitCode {
 
 fn self_check(args: &config::Args) -> ExitCode {
     let mut out = String::new();
-    let outcome = config::check::run(
+    let outcome = selfcheck::run(
         args,
         &config::Env::from_process(),
-        &config::check::Live::new(),
+        &selfcheck::Live::new(),
         &mut out,
     );
     print!("{out}");

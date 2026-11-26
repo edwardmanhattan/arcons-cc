@@ -15,7 +15,6 @@ use std::time::Duration;
 use crate::minos::{Credential, Minos, Secret};
 use crate::tokens;
 
-pub mod check;
 pub mod credential;
 pub mod devices;
 pub mod file;

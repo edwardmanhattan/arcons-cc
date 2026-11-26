@@ -107,7 +107,7 @@ Comment on the issue rather than choosing silently, especially for: the wall's c
 src/main.rs      flags, startup, exit codes
 src/config.rs    the command line, the resolved Config, the defaults
 src/minos.rs     the Minos endpoint and the credential (Secret redacts itself)
-src/config/      file.rs (config.toml) · credential.rs (mode 0600) · settings.rs (settings.toml, written by the display) · layout.rs (layout.toml: the wall as the operator arranged it) · devices.rs (devices.toml: the paired phones, a hash and a name) · check.rs (--self-check, 0–6)
+src/config/      file.rs (config.toml) · credential.rs (mode 0600) · settings.rs (settings.toml, written by the display) · layout.rs (layout.toml: the wall as the operator arranged it) · devices.rs (devices.toml: the paired phones, a hash and a name)
 src/ui/          the view, view.rs (the pane tree), tree.rs (the chain of command), markers.rs, objects.rs (the operational layer), installations.rs (the places), filter.rs (per-pane visibility and the panel's vocabulary), devices.rs (pairing's file, written on a thread), unitcard.rs
 src/tokens.rs    the palette and metrics — the only file that names a colour or a size
 src/units/       the vocabulary and the view model: Unit, UnitView, Glyph, Picture, motion, card
@@ -120,6 +120,7 @@ vendor/          dependencies patched for reasons recorded in vendor/README.md
 fixtures/        recorded wire data the tests read (see fixtures/README.md)
 docs/spec/       the pinned Minos contract — read-only
 src/platform.rs  the log, SIGTERM, the start clock
+src/selfcheck.rs --self-check: config, credential, login, REST, socket, seed (0–6)
 src/scene.rs     the named states a capture renders: fixture feed, no network, virtual clock
 src/verify.rs    --assert: pixel and structure questions with numbers
 scripts/         verify.sh (the gate), capture.sh <scene>, assert.sh <png>, capture-desk.sh <scene>

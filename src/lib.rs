@@ -19,6 +19,7 @@ pub mod map;
 pub mod minos;
 pub mod platform;
 pub mod scene;
+pub mod selfcheck;
 pub mod tokens;
 pub mod ui;
 pub mod units;
