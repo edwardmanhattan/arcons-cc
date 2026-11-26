@@ -16,6 +16,7 @@ name = "arcons-cc"
 version = "0.1.0"
 edition = "2024"
 publish = false
+default-run = "arcons-cc"
 description = "Arcons Command Center — the live maritime picture on a wall"
 # Proprietary, and deliberately without a `license` field or a root `LICENSE`: see README.
 
