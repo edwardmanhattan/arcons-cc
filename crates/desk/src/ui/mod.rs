@@ -108,17 +108,16 @@ pub struct State {
     pub picture_inbox:
         Option<std::sync::mpsc::Receiver<Result<crate::picture::Picture, crate::send::Failure>>>,
     /// **The first frame paints the cache; the poll after it starts the read.** A capture is built by
-    /// [`State::sample`], which leaves this false, so a capture never starts a network thread.
+    /// [`crate::scene::sample`], which leaves this false, so a capture never starts a network thread.
     boot_refresh: bool,
 }
 
 impl State {
-    /// **The wireframe's sample.** 14:03:22 WIB read on a clock the server's is three seconds
-    /// behind: 07:03:22Z, three seconds ahead of the server, which is inside the five-second
-    /// tolerance and therefore live — and near the future line, so the hedge shows.
+    /// **The state every scene and window starts from**, without the sample picture.
     ///
-    /// Every value is a value, not a reading: the capture is the same picture on every machine.
-    pub fn sample() -> Self {
+    /// The values are fixed, never read: a capture is the same picture on every machine. The sample
+    /// itself is [`crate::scene::sample`], which fills the desk; a window uses [`State::open`].
+    pub fn base() -> Self {
         let recorded = at(2026, 11, 20, 14, 3, 22);
         let epoch_ms = zoned::epoch_ms_of(recorded, WIB_OFFSET_MS);
         let server_now_ms = epoch_ms - 3_000;
@@ -148,13 +147,13 @@ impl State {
             boot_refresh: false,
             error: None,
             notice: None,
-            desk: crate::scene::sample_desk(epoch_ms),
+            desk: Desk::new(Picker::new(Vec::new())),
         }
     }
 
     /// **The window's first state** (#284): the last picture this desk read, before the network is tried.
     ///
-    /// A capture must not read this machine's cache or start a thread; [`State::sample`] is the capture's
+    /// A capture must not read this machine's cache or start a thread; [`crate::scene::sample`] is the capture's
     /// constructor, and [`run`] chooses between the two by whether the flags are a capture's.
     pub fn open() -> Self {
         Self::open_with(crate::identity::config_dir().as_deref())
@@ -171,7 +170,7 @@ impl State {
     /// separate question; a fix in the cache (or the read) estimates it, and with no fix it stays `None` —
     /// the verdict is `Unknown` rather than being borrowed from this desk's clock.
     pub fn open_at(dir: Option<&std::path::Path>, now_ms: i64) -> Self {
-        let mut state = Self::sample();
+        let mut state = Self::base();
         state.desk = Desk::new(Picker::new(Vec::new()));
         state.picture_status = crate::picture::Status::None;
         state.boot_refresh = true;
@@ -746,21 +745,31 @@ impl State {
     }
 }
 
+/// One scene a capture can name: its name and the function that builds its state.
+pub type Scene = (&'static str, fn(&mut State));
+
 /// Open the display and run until it closes. Rune's own flags (`--snap`, `--scene`, `--at`, ...)
 /// are handed through untouched, because a capture that swallowed them would succeed at producing
-/// nothing — the wall's `run` has the same shape (#9).
-pub fn run(passthrough: Vec<String>) -> std::process::ExitCode {
+/// nothing; the wall's `run` has the same shape (#9).
+///
+/// The caller supplies the capture's state and the scene catalog. The screen knows the state it draws,
+/// not how a capture is built.
+pub fn run(
+    passthrough: Vec<String>,
+    capture: fn() -> State,
+    scenes: &'static [Scene],
+) -> std::process::ExitCode {
     // **A capture is not a session.** `--snap` and `--scene` mean a fixed scene, and a scene must not read
     // this machine's cache or start a network thread; the window is the only caller that opens on the last
     // picture this desk read (#284).
-    let capture = passthrough
+    let is_capture = passthrough
         .iter()
         .any(|arg| arg == "--snap" || arg == "--scene");
-    let constructor: fn() -> State = if capture { State::sample } else { State::open };
+    let constructor: fn() -> State = if is_capture { capture } else { State::open };
     let spec = rune::AppSpec::<State> {
         min_size: Some(tokens::MIN_WINDOW),
         on_key: Some(on_key),
-        scenes: crate::scene::SCENES,
+        scenes,
         poll: Some(poll),
         ..rune::AppSpec::new(TITLE, tokens::DESK_WINDOW, constructor, view)
     };
@@ -786,7 +795,7 @@ pub fn run(passthrough: Vec<String>) -> std::process::ExitCode {
 /// window, with a finished picture sitting in the handle it is not drawing.
 fn poll(state: &mut State, _elapsed: f64, _tx: &mut rune::Tx) -> bool {
     // **The first frame paints the cache; the poll after it starts the read** (#284). A capture is built by
-    // `State::sample`, which leaves `boot_refresh` false, so a capture never starts one.
+    // `crate::scene::sample`, which leaves `boot_refresh` false, so a capture never starts one.
     let mut changed = false;
     if state.boot_refresh {
         state.boot_refresh = false;
