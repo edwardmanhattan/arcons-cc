@@ -1872,21 +1872,27 @@ impl State {
         };
         let local = (at.0 - f64::from(rect.x), at.1 - f64::from(rect.y));
         let hull = self.hull_at(id, local);
-        self.apply(Intent::FocusPane(id)).ok();
+        self.settle(Intent::FocusPane(id), None).ok();
         match hull {
             Some(unit) => {
-                self.apply(Intent::Select {
-                    pane: id,
-                    unit: Some(unit),
-                })
+                self.settle(
+                    Intent::Select {
+                        pane: id,
+                        unit: Some(unit),
+                    },
+                    None,
+                )
                 .ok();
             }
             // The water: clear this pane's card, as a press on the map does (#99).
             None => {
-                self.apply(Intent::Select {
-                    pane: id,
-                    unit: None,
-                })
+                self.settle(
+                    Intent::Select {
+                        pane: id,
+                        unit: None,
+                    },
+                    None,
+                )
                 .ok();
             }
         }
@@ -2964,7 +2970,7 @@ impl SettingRow {
         })
     }
 
-    /// Run the row, **through the control plane** where it has one (#240), the rule `MenuItem::run` keeps: a press
+    /// Run the row, **through the door** where it has one (#240), the rule `MenuAction::intent` keeps: a press
     /// and a client's request must be the same sentence, or one of them is a second vocabulary.
     fn run(&self, state: &mut State) {
         match self.intent() {
@@ -4426,7 +4432,8 @@ fn menu_view(state: &State, scale: f32, body: El) -> El {
         }
         let run = item.clone();
         let pane = menu.pane;
-        surface = surface.child(row.on_press(move |state: &mut State| run.run(state, pane)));
+        surface =
+            surface.child(row.on_press(move |state: &mut State| menu_press(state, &run, pane)));
     }
     let mut body = body.child(surface);
 
@@ -4481,7 +4488,7 @@ fn menu_view(state: &State, scale: f32, body: El) -> El {
                         .font(tokens::LABEL)
                         .color(tokens::ink()),
                 )
-                .on_press(move |state: &mut State| run.run(state, pane));
+                .on_press(move |state: &mut State| menu_press(state, &run, pane));
             if sub_ring == Some(index) {
                 row = row
                     .border(tokens::HAIRLINE * 2.0, tokens::focus_edge())
@@ -4698,50 +4705,16 @@ impl MenuItem {
     /// `None` is the one row that is *not* a change: a submenu's trigger opens a second surface of the menu it
     /// is already in, which is a place rather than a value.
     fn intent(&self, state: &State, pane: ViewId) -> Option<Intent> {
-        Some(match self.action {
-            // The point the menu was opened at, in the pane's own frame pixels — the row shows the water that
-            // was clicked rather than the water the source pane was looking at (#77).
-            MenuAction::Split => Intent::SplitAt {
+        let menu = state.menu().map_or(
+            Menu {
                 pane,
-                at: state
-                    .menu()
-                    .map(|menu| (f64::from(menu.at.0), f64::from(menu.at.1)))?,
+                at: (0.0, 0.0),
+                open: None,
+                ring: None,
             },
-            MenuAction::NewWorkspace => Intent::SplitToWorkspace(pane),
-            MenuAction::Rename => Intent::BeginRename(RenameTarget::Pane(pane)),
-            MenuAction::Close => Intent::ClosePane(pane),
-            MenuAction::CloseAll => Intent::CloseAllPanes,
-            MenuAction::CloseWorkspace(index) => Intent::CloseWorkspace(index),
-            // **The wall's two resets** (#166, #240): the same verbs a `ctl` types, on the pane the menu was asked
-            // on. The refusal is the intent's own — `no pane has the keys` on a workspace with no focus — so the
-            // row and the action cannot disagree.
-            MenuAction::CloseOtherPanes => Intent::CloseOtherPanes,
-            MenuAction::CloseOtherWorkspaces => Intent::CloseOtherWorkspaces,
-            MenuAction::MoveTo(target) => Intent::MovePane {
-                pane,
-                workspace: target,
-            },
-            MenuAction::Submenu(_) => return None,
-        })
-    }
-
-    /// Run the row's action on the pane the menu was asked on, **through the control plane** (#170). The menu
-    /// closes in the action, not here: what a row does is the row's, and one of them has to close the menu
-    /// *before* it changes the layout.
-    fn run(&self, state: &mut State, pane: ViewId) {
-        match self.intent(state, pane) {
-            Some(intent) => {
-                // A refusal is the row's own rule answering: `Close` on the wall's last pane is not offered
-                // (that row is not built), so a refusal here is a race the redraw settles.
-                state.apply(intent).ok();
-            }
-            // A trigger's press opens the surface its hover would: the wall has a mouse and a hand.
-            None => {
-                if let MenuAction::Submenu(key) = self.action {
-                    open_submenu(state, key);
-                }
-            }
-        }
+            |menu| Menu { pane, ..menu },
+        );
+        self.action.intent(&menu)
     }
 }
 
@@ -4981,6 +4954,34 @@ pub enum MenuAction {
     CloseOtherWorkspaces,
     /// A row with a second surface: its children draw beside it, and this is the key that opens them.
     Submenu(&'static str),
+}
+
+impl MenuAction {
+    /// **What this row means as an intent** (#170): the row's own description of itself, so a test can say
+    /// every row a menu offers is expressible in the control plane's vocabulary.
+    ///
+    /// `None` is the one row that is *not* a change: a submenu's trigger opens a second surface of the
+    /// menu it is already in, which is a place rather than a value.
+    pub fn intent(self, menu: &Menu) -> Option<Intent> {
+        Some(match self {
+            MenuAction::Split => Intent::SplitAt {
+                pane: menu.pane,
+                at: (f64::from(menu.at.0), f64::from(menu.at.1)),
+            },
+            MenuAction::NewWorkspace => Intent::SplitToWorkspace(menu.pane),
+            MenuAction::Rename => Intent::BeginRename(RenameTarget::Pane(menu.pane)),
+            MenuAction::Close => Intent::ClosePane(menu.pane),
+            MenuAction::CloseAll => Intent::CloseAllPanes,
+            MenuAction::CloseWorkspace(index) => Intent::CloseWorkspace(index),
+            MenuAction::CloseOtherPanes => Intent::CloseOtherPanes,
+            MenuAction::CloseOtherWorkspaces => Intent::CloseOtherWorkspaces,
+            MenuAction::MoveTo(target) => Intent::MovePane {
+                pane: menu.pane,
+                workspace: target,
+            },
+            MenuAction::Submenu(_) => return None,
+        })
+    }
 }
 
 /// **One verb a hand at the glass can produce, and the control that produces it** (#240).
@@ -5391,10 +5392,22 @@ pub fn menu_ring_step(state: &mut State, step: isize) -> bool {
     menu_ring(state, Some(next))
 }
 
+/// **A pointer's press on a row**: the same conversion the keyboard uses, through the public door.
+///
+/// A row is a value. It says which change it means; the door settles it once, and a submenu trigger is the
+/// one row that opens a place instead.
+fn menu_press(state: &mut State, row: &MenuItem, pane: ViewId) {
+    if let Some(intent) = row.intent(state, pane) {
+        state.apply(intent).ok();
+    } else if let MenuAction::Submenu(key) = row.action {
+        open_submenu(state, key);
+    }
+}
+
 /// **Act on the ringed row** (#164): the row the keyboard is on, and never the row the pointer is over.
 ///
-/// A row that opens a second surface opens it and puts the ring on its first row; a leaf runs its action, which is
-/// `MenuAction::run` — the same function a press calls, so a key and a press cannot mean two things.
+/// A row that opens a second surface opens it and puts the ring on its first row; a leaf is converted by
+/// `MenuAction::intent` and settled by the door's private half, so a key inside `apply` does not re-enter it.
 pub fn menu_choose(state: &mut State) -> bool {
     let Some(menu) = state.menu() else {
         return false;
@@ -5418,7 +5431,9 @@ pub fn menu_choose(state: &mut State) -> bool {
         }
         return true;
     }
-    row.run(state, menu.pane);
+    if let Some(intent) = row.action.intent(&menu) {
+        state.settle(intent, None).ok();
+    }
     true
 }
 

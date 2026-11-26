@@ -13,12 +13,29 @@ impl State {
     /// **The door.** Apply one intent, or say why not. A handler ignores the answer: rune re-runs the
     /// view after it, and a change from `poll` sets `layout_dirty` through the same call.
     pub fn apply(&mut self, intent: Intent) -> Result<Applied, Refused> {
-        apply_by(self, intent, None)
+        self.apply_as(intent, None)
     }
 
     /// **The door, and whose hand knocked.** A carrier's hand wins over an origin an intent carries.
     pub fn apply_as(&mut self, intent: Intent, hand: Option<Origin>) -> Result<Applied, Refused> {
-        apply_by(self, intent, hand)
+        if asked_the_authority(self, &intent) {
+            return Ok(Applied::Changed(Changed(false)));
+        }
+        let applied = self.settle(intent, hand)?;
+        if applied.changed() {
+            self.layout_dirty = true;
+        }
+        Ok(applied)
+    }
+
+    /// **The door's body, without the viewer check or the redraw word.** The menu's leaf and a cursor's
+    /// derived changes come back through here, so a derived change is not a fresh input.
+    pub(super) fn settle(
+        &mut self,
+        intent: Intent,
+        hand: Option<Origin>,
+    ) -> Result<Applied, Refused> {
+        settle_by(self, intent, hand)
     }
 }
 
@@ -55,18 +72,11 @@ fn asked_the_authority(state: &State, intent: &Intent) -> bool {
 ///
 /// `None` is a caller with no carrier: the pointer's own handlers, a scene's script, a test. Those may say which
 /// origin they mean, which is what #205's per-client cursors are.
-fn apply_by(
+fn settle_by(
     state: &mut State,
     intent: Intent,
     hand: Option<crate::verb::Origin>,
 ) -> Result<Applied, Refused> {
-    // **A viewer does not change the wall** (#204): it asks its authority, and answers `changed: false` — which is the
-    // truth, because no pixel moved. The change arrives later as a `Scene`, and until it does the pending intent is a
-    // request rather than a fact. Every handler comes through here (#170, #173), so this is the only place that has to
-    // know the difference — and a wall, a capture and the authority itself all answer `false` to it and apply in place.
-    if asked_the_authority(state, &intent) {
-        return Ok(Applied::Changed(Changed(false)));
-    }
     let changed = match intent {
         Intent::FocusPane(pane) => {
             if state.pane(pane).is_none() {
@@ -351,9 +361,6 @@ fn apply_by(
         Intent::OpenSettings => super::open_settings(state),
         Intent::CloseSurfaces => super::close_surfaces(state),
     };
-    if changed {
-        state.layout_dirty = true;
-    }
     Ok(Applied::Changed(Changed(changed)))
 }
 
