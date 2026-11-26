@@ -33,7 +33,7 @@ use crate::data::types::{
     StoryPage,
 };
 use crate::tokens;
-use crate::ui::{ELLIPSIS, State};
+use crate::ui::{ELLIPSIS, Local, State};
 use crate::verb::ViewId;
 
 /// The three tabs, in the order the panel reads them. **There is no `unknown` tab**, deliberately: the
@@ -418,7 +418,7 @@ fn back_row(pane: ViewId, view: &View) -> El {
                 .fill(tokens::name_plate())
                 .role("button")
                 .label("Back to the list")
-                .on_press(move |state: &mut State| press_back(state, pane)),
+                .on_press(move |state: &mut State| state.local(Local::NewsBack { pane })),
         )
         .child(
             text(title)
@@ -441,7 +441,7 @@ fn retry_word(pane: ViewId) -> El {
         .fill(tokens::name_plate())
         .role("button")
         .label("Read the story again")
-        .on_press(move |state: &mut State| press_retry_detail(state, pane))
+        .on_press(move |state: &mut State| state.local(Local::NewsRetryDetail { pane }))
 }
 
 /// One line of the detail's prose, at the provenance line's height and vertically centred: the box is
@@ -554,7 +554,7 @@ fn tabs(pane: ViewId, view: &View) -> El {
                 .role("radio")
                 .checked(active)
                 .label(*label)
-                .on_press(move |state: &mut State| press_scope(state, pane, scope))
+                .on_press(move |state: &mut State| state.local(Local::NewsScope { pane, scope }))
         }))
 }
 
@@ -622,7 +622,7 @@ fn story_row(pane: ViewId, view: &View, index: usize, story: &NewsStory) -> El {
         } else {
             tokens::clear()
         })
-        .on_press(move |state: &mut State| select(state, pane, id))
+        .on_press(move |state: &mut State| state.local(Local::NewsSelect { pane, story: id }))
         .child(
             text(when_and_where(story))
                 .key(format!("news-when-{pane}-{index}"))
@@ -715,8 +715,8 @@ fn pager(pane: ViewId, label: &'static str, press: Press, enabled: bool) -> El {
         .disabled(!enabled);
     if enabled {
         button = button.on_press(move |state: &mut State| match press {
-            Press::Page(step) => press_page(state, pane, step),
-            Press::Retry => press_retry(state, pane),
+            Press::Page(step) => state.local(Local::NewsPage { pane, step }),
+            Press::Retry => state.local(Local::NewsRetry { pane }),
         });
     }
     button
@@ -737,7 +737,7 @@ fn note(pane: ViewId, kind: &'static str, message: &str, colour: rune::Color) ->
 // ---------------------------------------------------------------------------------------------
 
 /// A press on a scope tab: focus the pane, change the scope, and ask page 1 — off the UI thread.
-fn press_scope(state: &mut State, pane: ViewId, scope: NewsScope) {
+pub(super) fn press_scope(state: &mut State, pane: ViewId, scope: NewsScope) {
     state.focus_pane(pane);
     let query = state
         .pane_mut(pane)
@@ -754,7 +754,7 @@ fn press_scope(state: &mut State, pane: ViewId, scope: NewsScope) {
 
 /// A press on `previous`/`next`: the target comes from [`View::target`], so a disabled button cannot
 /// send a request.
-fn press_page(state: &mut State, pane: ViewId, step: i32) {
+pub(super) fn press_page(state: &mut State, pane: ViewId, step: i32) {
     state.focus_pane(pane);
     let query = state
         .pane_mut(pane)
@@ -768,7 +768,7 @@ fn press_page(state: &mut State, pane: ViewId, step: i32) {
 }
 
 /// A press on `retry`: ask the page whose rows are on screen again.
-fn press_retry(state: &mut State, pane: ViewId) {
+pub(super) fn press_retry(state: &mut State, pane: ViewId) {
     state.focus_pane(pane);
     let query = state
         .pane_mut(pane)
@@ -782,7 +782,7 @@ fn press_retry(state: &mut State, pane: ViewId) {
 
 /// A press on a row: the story opens **in this pane**, and its detail is read off the UI thread. The
 /// list stays underneath, so `back` returns to the page the operator left.
-fn select(state: &mut State, pane: ViewId, story: i64) {
+pub(super) fn select(state: &mut State, pane: ViewId, story: i64) {
     state.focus_pane(pane);
     let opened = state
         .pane_mut(pane)
@@ -810,7 +810,7 @@ fn ask_story(state: &mut State, pane: ViewId, story: i64) {
 }
 
 /// `back`: the list, exactly as it was left. The same function Escape reaches.
-fn press_back(state: &mut State, pane: ViewId) {
+pub(super) fn press_back(state: &mut State, pane: ViewId) {
     state.focus_pane(pane);
     if let Some(view) = state.pane_mut(pane).and_then(|pane| pane.news.as_mut()) {
         view.back();
@@ -819,7 +819,7 @@ fn press_back(state: &mut State, pane: ViewId) {
 }
 
 /// `retry` after a detail that failed: one more read of the same story.
-fn press_retry_detail(state: &mut State, pane: ViewId) {
+pub(super) fn press_retry_detail(state: &mut State, pane: ViewId) {
     state.focus_pane(pane);
     let asked = state
         .pane_mut(pane)

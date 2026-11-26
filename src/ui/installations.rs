@@ -28,6 +28,7 @@ use crate::data::types::{Installation, InstallationType, TacticalObjectManifestE
 use crate::map::geometry::Rendered;
 use crate::tokens;
 use crate::ui::filter::Filter;
+use crate::ui::{Local, State};
 use crate::units::card::{self, Placement, WIDTH};
 
 /// An installation's mark, in points — its artwork, or the generic facility shape.
@@ -183,7 +184,7 @@ fn mark(
         .absolute(x - half, y - half)
         .size(MARK, MARK)
         // A press selects **this pane's** facility, or closes its card when it is already open.
-        .on_press(move |state: &mut crate::ui::State| press(state, pane, id));
+        .on_press(move |state: &mut State| state.local(Local::Facility { pane, id }));
     // **The selection is the pane's**, so it is marked the way a selected post is: the same edge the
     // focused pane uses, on the mark rather than a second floating ring (#99, #116).
     if selected == Some(id) {
