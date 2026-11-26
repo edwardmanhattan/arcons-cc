@@ -1627,41 +1627,6 @@ pub fn load_intents(name: &str) -> Vec<(f64, crate::verb::Intent)> {
     out
 }
 
-/// **Apply the script's due steps**, in order, and say whether anything changed (#172).
-///
-/// Called from `poll` with the frame clock: a virtual clock in a capture, the real one on a wall. The steps go
-/// through `State::apply` — the same door the pointer and a socket use — so a scene driven this way is a
-/// client, not a second implementation of one.
-pub fn apply_due_intents(state: &mut State, now: f64) -> bool {
-    let mut changed = false;
-    while let Some((at, _)) = state.pending_intents.get(state.intents_applied) {
-        if *at > now {
-            break;
-        }
-        let Some((_, intent)) = state.pending_intents.get(state.intents_applied) else {
-            break;
-        };
-        let intent = intent.clone();
-        state.intents_applied += 1;
-        // **The step happens at its own frame** (#172, #167): a cursor's fade, an age or a clock read in the step
-        // must see the time the file says, not the end of the script. The clock is restored after each one.
-        let clock = state.frame_clock();
-        state.set_frame_clock(*at);
-        let result = state.apply(intent);
-        state.set_frame_clock(clock);
-        match result {
-            Ok(applied) => changed |= applied.changed(),
-            // A refused step is printed and the script goes on: a capture whose wall did not reach the state the
-            // script meant differs from its golden, and the log says which step refused and why.
-            Err(why) => eprintln!(
-                "arcons-cc: intent step {} refused: {}",
-                state.intents_applied, why.0
-            ),
-        }
-    }
-    changed
-}
-
 /// The `close-all` scene: **everything but the focused pane, and every workspace but this one** (#166).
 ///
 /// A wall of three panes in workspace 1 and a pane in each of the other two, then two intents: `pane.close_others`
@@ -1838,7 +1803,7 @@ pub fn state_for(name: &str) -> State {
     // **A scene with an intent script is the state its whole script reaches** (#172): a capture at `--at 2` is
     // after every step, so a test that asks a scene for its state asks for the end of the script — otherwise the
     // assertions would be about a wall the capture never shows.
-    apply_due_intents(&mut state, f64::INFINITY);
+    state.apply_due_intents(f64::INFINITY);
     state
 }
 

@@ -18,7 +18,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use arcons_cc::{config, platform, selfcheck, ui};
+use arcons_cc::{config, platform, scene, selfcheck, ui};
 
 /// Render one map frame with no window. Needs `--features map`: without the engine there is nothing
 /// to render, and saying so is better than writing a black PNG.
@@ -274,7 +274,7 @@ fn main() -> ExitCode {
         // A headless scene renders a fixture: it has no server to talk to and must not need one.
         // `--scene`/`--snap`/`--tree` are Rune's own flags, so this asks Rune rather than guessing.
         config::Command::Run if arcons_cc_headless() => {
-            ui::run(args.window, args.passthrough.clone())
+            ui::run(args.window, args.passthrough.clone(), scene::SCENES)
         }
         config::Command::Run => match config::Config::load(&args, &config::Env::from_process()) {
             Ok(config) => {
@@ -290,7 +290,7 @@ fn main() -> ExitCode {
                 // The flag is read by the view loop's poll hook; installing it before the window
                 // opens means a `SIGTERM` during startup is not lost.
                 platform::watch_for_termination();
-                ui::run(args.window, args.passthrough.clone())
+                ui::run(args.window, args.passthrough.clone(), scene::SCENES)
             }
             Err(problem) => {
                 // The same codes `--self-check` uses, so a unit file that reports `status=2` says
