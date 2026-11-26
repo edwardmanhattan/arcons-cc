@@ -15,12 +15,14 @@
 //! projection and element building. The map's own frame cost is MapLibre's, and the probe in #5 is
 //! where that number lives.
 
+#![cfg(test)]
+
 use std::time::Instant;
 
-use arcons_cc::map::geometry::{Camera, Rendered};
-use arcons_cc::tokens;
-use arcons_cc::ui::State;
-use arcons_cc::units::Picture;
+use super::State;
+use crate::map::geometry::{Camera, Rendered};
+use crate::tokens;
+use crate::units::Picture;
 use chrono::{TimeZone, Utc};
 
 /// The wall's limit for camera pan/zoom at 1080p with 200 units, in milliseconds of frame CPU.
@@ -54,11 +56,11 @@ fn picture_with(units: usize) -> Picture {
             // off-viewport (which would make the measurement a measurement of nothing).
             let lat = -6.30 + (index % 20) as f64 * 0.02;
             let lon = 106.70 + (index / 20) as f64 * 0.02;
-            arcons_cc::data::types::FeedPosition {
+            crate::data::types::FeedPosition {
                 id_unit: index as i64 + 1,
                 name: format!("KRI {index}"),
                 hull_number: None,
-                position: Some(arcons_cc::data::types::FeedFix {
+                position: Some(crate::data::types::FeedFix {
                     latitude: lat,
                     longitude: lon,
                     speed_kn: Some(12.0),
@@ -144,7 +146,7 @@ fn budget_four_panes_pan_frame_cpu() {
     // on the same water so all 200 hulls are inside every pane.
     state.panel = Some((f64::from(w) as f32 * 2.0, f64::from(h) as f32 * 2.0));
     for (id, rect) in state.pane_rects() {
-        let frame = arcons_cc::ui::view::synthetic_frame(camera, rect, 1.0);
+        let frame = crate::ui::view::synthetic_frame(camera, rect, 1.0);
         if let Some(pane) = state.pane_mut(id) {
             pane.camera = camera;
             pane.frame = Some(frame);
@@ -155,7 +157,7 @@ fn budget_four_panes_pan_frame_cpu() {
 
     let mut runtime = rune::Runtime::new(
         state,
-        arcons_cc::ui::view,
+        crate::ui::view,
         (f64::from(w) as f32 * 2.0, f64::from(h) as f32 * 2.0),
         rune::Env {
             system_dark: true,
@@ -183,7 +185,7 @@ fn budget_four_panes_pan_frame_cpu() {
         if let Some(pane) = runtime.state.pane_mut(focused) {
             pane.camera = moved;
             if let Some(frame) = pane.frame {
-                pane.frame = Some(arcons_cc::map::geometry::Rendered {
+                pane.frame = Some(crate::map::geometry::Rendered {
                     camera: moved,
                     ..frame
                 });
@@ -225,7 +227,7 @@ fn budget_200_markers_pan_zoom_frame_cpu() {
 
     let mut runtime = rune::Runtime::new(
         state,
-        arcons_cc::ui::view,
+        crate::ui::view,
         (1920.0, 1080.0),
         rune::Env {
             system_dark: true,
@@ -308,7 +310,7 @@ fn budget_three_workspaces_cost_one_walls_frames() {
             ids.push(id);
         }
         for (id, rect) in state.pane_rects() {
-            let frame = arcons_cc::ui::view::synthetic_frame(camera, rect, 1.0);
+            let frame = crate::ui::view::synthetic_frame(camera, rect, 1.0);
             if let Some(pane) = state.pane_mut(id) {
                 pane.camera = camera;
                 pane.frame = Some(frame);
@@ -321,9 +323,9 @@ fn budget_three_workspaces_cost_one_walls_frames() {
     /// move ticket leaves behind, and the one this measurement is about.
     fn fill(state: &mut State, index: usize) {
         let id = state.allocate_pane();
-        let pane = arcons_cc::ui::Pane::newsroom(id, Camera::new((-6.108, 106.910), 11.0));
+        let pane = crate::ui::Pane::newsroom(id, Camera::new((-6.108, 106.910), 11.0));
         let workspace = &mut state.workspaces[index];
-        workspace.layout = Some(arcons_cc::ui::view::Layout::single_with(id));
+        workspace.layout = Some(crate::ui::view::Layout::single_with(id));
         workspace.panes.push(pane);
     }
 
@@ -331,7 +333,7 @@ fn budget_three_workspaces_cost_one_walls_frames() {
         let (w, h) = PANE_SIZE;
         let mut runtime = rune::Runtime::new(
             state,
-            arcons_cc::ui::view,
+            crate::ui::view,
             (f64::from(w) as f32 * 2.0, f64::from(h) as f32 * 2.0),
             rune::Env {
                 system_dark: true,
