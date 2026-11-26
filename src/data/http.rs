@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 
-use crate::config::Minos;
 use crate::data::Error;
 use crate::data::auth::{Auth, Refresher};
 use crate::data::types::{
@@ -20,6 +19,7 @@ use crate::data::types::{
     TacticalObjectManifest, TacticalObjectPlacement, TniCommandPost, TniCommander, TokenPair,
     UnitCommander, UnitDetail, UnitOrganisation, UnitOrganisationDetail, UnitSummary, Viewpoint,
 };
+use crate::minos::Minos;
 
 /// A request timeout. The wall is on a LAN or a VPN; a read that takes longer than this is a stall to
 /// retry, not a picture to wait for.
@@ -474,8 +474,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use crate::config::{Credential, Minos, Secret};
     use crate::data::types::{NewsScope, NewsWindow};
+    use crate::minos::{Credential, Minos, Secret};
 
     /// A Minos that lives on loopback, in this process: two auth routes and a queue of `GET`
     /// answers. Real sockets, real `reqwest`, no network and no stub of our own client.

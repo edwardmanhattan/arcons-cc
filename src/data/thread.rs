@@ -14,7 +14,6 @@ use std::sync::mpsc::{Receiver, channel};
 
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
-use crate::config::Minos;
 use crate::data::Error;
 use crate::data::http::Http;
 use crate::data::types::{
@@ -23,6 +22,7 @@ use crate::data::types::{
     TniCommandPost, TniCommander, UnitCommander, UnitDetail, UnitOrganisation,
     UnitOrganisationDetail, Viewpoint,
 };
+use crate::minos::Minos;
 
 /// What the view loop asks for. One variant per read the display performs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -281,9 +281,9 @@ mod tests {
         let (base, _stub) = stub_minos(ONE_HULL);
         let minos = Minos::new(
             base,
-            crate::config::Credential::Password {
+            crate::minos::Credential::Password {
                 identifier: "wall".into(),
-                password: crate::config::Secret::new("not-a-real-password"),
+                password: crate::minos::Secret::new("not-a-real-password"),
             },
         );
         let backend = Backend::spawn(minos).expect("the backend thread starts");
@@ -323,9 +323,9 @@ mod tests {
         let (base, _stub) = stub_minos(PAGE);
         let minos = Minos::new(
             base,
-            crate::config::Credential::Password {
+            crate::minos::Credential::Password {
                 identifier: "wall".into(),
-                password: crate::config::Secret::new("not-a-real-password"),
+                password: crate::minos::Secret::new("not-a-real-password"),
             },
         );
         let backend = Backend::spawn(minos).expect("the backend thread starts");
@@ -366,9 +366,9 @@ mod tests {
         let (base, _stub) = stub_minos(VIEWPOINT);
         let minos = Minos::new(
             base,
-            crate::config::Credential::Password {
+            crate::minos::Credential::Password {
                 identifier: "wall".into(),
-                password: crate::config::Secret::new("not-a-real-password"),
+                password: crate::minos::Secret::new("not-a-real-password"),
             },
         );
         let backend = Backend::spawn(minos).expect("the backend thread starts");

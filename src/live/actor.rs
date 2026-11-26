@@ -21,11 +21,11 @@ use std::time::Duration;
 use tokio_centrifuge::client::Client;
 use tokio_centrifuge::config::Config;
 
-use crate::config::Minos;
 use crate::data::Http;
 use crate::data::types::FeedPosition;
 use crate::live::wire::LiveFix;
 use crate::live::{Action, Backoff, Refusal, Trust, wire};
+use crate::minos::Minos;
 
 /// The one channel this app subscribes to.
 ///

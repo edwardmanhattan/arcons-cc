@@ -16,6 +16,7 @@ pub mod control;
 pub mod data;
 pub mod live;
 pub mod map;
+pub mod minos;
 pub mod platform;
 pub mod scene;
 pub mod tokens;

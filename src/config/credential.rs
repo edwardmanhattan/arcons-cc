@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::config::{Credential, Secret};
+use crate::minos::{Credential, Secret};
 
 /// Why a credential file was refused. Each says what to do about it.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -171,7 +171,7 @@ pub fn mode_of(path: &Path) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Minos;
+    use crate::minos::Minos;
 
     fn path() -> PathBuf {
         PathBuf::from("/cfg/credentials.toml")

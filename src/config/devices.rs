@@ -145,7 +145,7 @@ impl Devices {
 /// **A device's key**: 32 bytes made fresh at a claim, handed to the phone once, and never stored.
 ///
 /// `Debug` is written by hand, so formatting a whole answer or a state is safe by construction (`INV-08`) —
-/// the same decision [`super::Secret`] makes, for the same reason.
+/// the same decision [`crate::minos::Secret`] makes, for the same reason.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Key([u8; KEY_LEN]);
 

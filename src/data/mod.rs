@@ -213,7 +213,7 @@ pub struct Session {
 impl Session {
     /// Sign in, or exchange the refresh token once. **This is the only call that proves a
     /// credential**, so a failure here is exit 3 and nothing else.
-    pub fn start(minos: &crate::config::Minos) -> Result<Session, Error> {
+    pub fn start(minos: &crate::minos::Minos) -> Result<Session, Error> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1129,11 +1129,11 @@ mod tests {
     /// names the subject the account is missing (#135).
     #[test]
     fn a_refused_newsroom_read_keeps_every_row_and_names_its_subject() {
-        let minos = crate::config::Minos::new(
+        let minos = crate::minos::Minos::new(
             refusing_minos(),
-            crate::config::Credential::Password {
+            crate::minos::Credential::Password {
                 identifier: "wall".into(),
-                password: crate::config::Secret::new("not-a-real-password"),
+                password: crate::minos::Secret::new("not-a-real-password"),
             },
         );
         let mut session = Session::start(&minos).expect("the stub signs in");

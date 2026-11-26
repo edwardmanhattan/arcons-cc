@@ -105,9 +105,11 @@ Comment on the issue rather than choosing silently, especially for: the wall's c
 
 ```
 src/main.rs      flags, startup, exit codes
-src/config.rs    the command line, the resolved Config, Secret (redacting by construction)
+src/config.rs    the command line, the resolved Config, the defaults
+src/minos.rs     the Minos endpoint and the credential (Secret redacts itself)
 src/config/      file.rs (config.toml) · credential.rs (mode 0600) · settings.rs (settings.toml, written by the display) · layout.rs (layout.toml: the wall as the operator arranged it) · devices.rs (devices.toml: the paired phones, a hash and a name) · check.rs (--self-check, 0–6)
-src/ui/          the view, view.rs (the pane tree), tree.rs (the chain of command), markers.rs, objects.rs (the operational layer), installations.rs (the places), filter.rs (per-pane visibility and the panel's vocabulary), devices.rs (pairing's file, written on a thread), unitcard.rs, tokens.rs (the only file that names a colour or a size)
+src/ui/          the view, view.rs (the pane tree), tree.rs (the chain of command), markers.rs, objects.rs (the operational layer), installations.rs (the places), filter.rs (per-pane visibility and the panel's vocabulary), devices.rs (pairing's file, written on a thread), unitcard.rs
+src/tokens.rs    the palette and metrics — the only file that names a colour or a size
 src/units/       the vocabulary and the view model: Unit, UnitView, Glyph, Picture, motion, card
 src/data.rs      the Minos REST client            (#3)
 src/control.rs   the control plane: the intent vocabulary, the socket's wire   (#162)

@@ -31,7 +31,7 @@ pub fn since_start() -> u128 {
 /// the wall has one — a machine in a cupboard has no terminal, and stderr goes to the journal.
 ///
 /// Structured redaction is not this layer's job: everything that could hold a secret already prints
-/// as `<redacted>` (`config::Secret`), so there is nothing to grep out here (`INV-08`).
+/// as `<redacted>` (`minos::Secret`), so there is nothing to grep out here (`INV-08`).
 pub fn init_logging(log_file: Option<&Path>) {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
