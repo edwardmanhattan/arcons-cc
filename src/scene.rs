@@ -936,7 +936,7 @@ fn pane_tree_zoom(state: &mut State) {
         TREE_ZOOM_AT.1 - centre.1 * TREE_ZOOM_IN,
     );
     if let Some(pane) = state.pane_mut(tree_id) {
-        pane.tree = Some(crate::ui::tree::TreeCamera::moved_to(pan, TREE_ZOOM_IN));
+        pane.tree = Some(crate::ui::TreeCamera::moved_to(pan, TREE_ZOOM_IN));
     }
 }
 

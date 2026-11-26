@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arcons CC architecture — the picture, from wire to pixel</title>
+<meta name="description" content="How the wall reads the feed, folds live fixes, judges age, draws the map, and projects markers. ASD-STE100 wording. Mermaid diagrams rendered with Pele.">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/pele@1/dist/pele.global.js" defer></script>
+<script src="diagram.js" defer></script>
+</head>
+<body>
+
+<header class="page-header">
+  <div class="wrap">
+    <p class="eyebrow">Arcons Command Center · architecture documentation</p>
+    <h1>Architecture III: the picture, from wire to pixel</h1>
+    <p class="lede">
+      The wall gets the fleet by two transports. It builds one model from both. The map thread draws
+      the water. The marker layer projects each hull with the frame that the map thread drew.
+    </p>
+    <p class="meta">
+      Code: <code>src/data/types.rs</code>, <code>src/units/</code>, <code>src/map/</code>,
+      <code>src/ui/markers.rs</code>, <code>src/live/wire.rs</code>. Diagrams rendered with
+      <a href="https://github.com/obsidianmd/pele">Pele</a>.
+    </p>
+    <nav class="doc-nav" aria-label="Architecture pages">
+      <a href="index.html">Overview</a>
+      <a href="runtime.html">Runtime</a>
+      <a href="picture.html" aria-current="page">Picture</a>
+      <a href="control.html">Control</a>
+      <a href="verification.html">Verification</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+<section id="two">
+  <h2>Two transports, one model</h2>
+  <p>
+    The wall uses HTTPS for the standing picture and WSS for movement. The standing read is the
+    authority for membership and for age. The socket is an accelerator over that read. It is not a
+    second truth.
+  </p>
+
+  <figure class="diagram-card">
+    <div class="diagram-head">
+      <h3>From Minos to a marker</h3>
+      <span>Rendered with Pele</span>
+    </div>
+    <div class="diagram" id="picture-flow" role="img" aria-label="Sequence: Minos gives the standing picture to the reads thread and fixes to the socket thread; the view loop folds both into Picture; the map thread supplies the frame for markers."></div>
+    <figcaption>
+      The reads thread and the socket thread send values. Only the view loop writes the model. The map
+      thread supplies the frame that markers use.
+    </figcaption>
+    <details class="source">
+      <summary>Diagram source</summary>
+      <pre id="picture-flow-source">sequenceDiagram
+  autonumber
+  participant M as Minos
+  participant R as Reads thread
+  participant S as Socket thread
+  participant U as View loop
+  participant P as Picture
+  participant G as Map thread
+
+  M-&gt;&gt;R: GET /live-feed/positions
+  R--&gt;&gt;U: Reply::Picture
+  U-&gt;&gt;P: replace_from_feed
+  M-&gt;&gt;S: live-feed publication
+  S--&gt;&gt;U: Update::Fix
+  U-&gt;&gt;P: apply_fix
+  U-&gt;&gt;G: Camera
+  G--&gt;&gt;U: RGBA frame and Rendered
+  U-&gt;&gt;U: markers project with Rendered</pre>
+    </details>
+  </figure>
+
+  <p>
+    The two paths have different jobs:
+  </p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>need</th><th>transport</th><th>why</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>the fleet, including hulls with no fix</td><td><code>GET /live-feed/positions</code></td><td>the socket has no history and no membership</td></tr>
+        <tr><td>movement</td><td>WSS <code>live-feed</code></td><td>a fix must arrive in less than 1 s</td></tr>
+        <tr><td>a hull's name, class, and commander</td><td><code>GET /units/…</code></td><td>the feed carries the join key, not the details</td></tr>
+        <tr><td>a hull's picture</td><td><code>GET /units</code>, then each picture URL</td><td>one register read for the fleet</td></tr>
+        <tr><td>the facility layer</td><td><code>GET /installations</code></td><td>the places are not hulls</td></tr>
+        <tr><td>the operational marks</td><td><code>GET /tactical-object-placements</code></td><td>each mark embeds its symbol</td></tr>
+        <tr><td>the newsroom</td><td><code>GET /banglinstra/stories</code></td><td>one page at a time</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="read">
+  <h2>The standing read</h2>
+  <p>
+    One read returns every hull. A hull can have no position. That is a normal value, not an error. The
+    type keeps the difference between "not measured" and "zero" (<span class="badge">INV-01</span>).
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/data/types.rs</strong> · the wire type for one hull</figcaption>
+    <pre><code>pub struct FeedPosition {
+    pub id_unit: i64,
+    pub name: String,
+    #[serde(default)]
+    pub hull_number: Option&lt;String&gt;,
+    // Absent when the hull has never reported. Not a zero, not a default position.
+    #[serde(default)]
+    pub position: Option&lt;FeedFix&gt;,
+}
+
+pub struct FeedFix {
+    pub latitude: f64,
+    pub longitude: f64,
+    #[serde(default)]
+    pub speed_kn: Option&lt;f64&gt;,
+    #[serde(default)]
+    pub course_deg: Option&lt;f64&gt;,
+    #[serde(default)]
+    pub accuracy_m: Option&lt;f64&gt;,
+    pub recorded_at: DateTime&lt;Utc&gt;,
+    pub received_at: DateTime&lt;Utc&gt;,
+    pub age_seconds: f64,
+    pub backfilled: bool,
+    // ...
+}</code></pre>
+  </figure>
+
+  <p>
+    The model replaces its whole unit list from this read. Membership belongs to the server. If a hull
+    is absent from the read, the hull is absent from the fleet. The model does not keep a hull that the
+    server removed.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/units/mod.rs</strong> · <code>Picture::replace_from_feed_at</code></figcaption>
+    <pre><code>pub fn replace_from_feed_at(&amp;mut self, feed: &amp;[FeedPosition], now: Instant) {
+    self.units = feed
+        .iter()
+        .map(|entry| {
+            let unit = Unit {
+                id_unit: entry.id_unit,
+                name: entry.name.clone(),
+                hull_number: entry.hull_number.clone(),
+            };
+            match &amp;entry.position {
+                None =&gt; UnitView::silent(unit),
+                Some(fix) =&gt; view_from_http(unit, fix, now),
+            }
+        })
+        .collect();
+}</code></pre>
+  </figure>
+
+  <p>
+    <code>UnitView::silent</code> sets <code>position: None</code>. A silent hull is in the picture and
+    not on the map. This is the common case on the development feed: 126 of 127 hulls have no fix.
+  </p>
+</section>
+
+<section id="fix">
+  <h2>The live fix</h2>
+  <p>
+    A live publication is flat. The three optional measurements are absent when unmeasured. The
+    <code>backfilled</code> flag travels with the fix. The socket type is separate from the HTTP type
+    because the wire shapes are different.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/live/wire.rs</strong> · one <code>live-feed</code> publication</figcaption>
+    <pre><code>pub struct LiveFix {
+    pub id_unit: i64,
+    pub name: String,
+    #[serde(default)]
+    pub hull_number: Option&lt;String&gt;,
+    pub latitude: f64,
+    pub longitude: f64,
+    #[serde(default)]
+    pub speed_kn: Option&lt;f64&gt;,
+    #[serde(default)]
+    pub course_deg: Option&lt;f64&gt;,
+    #[serde(default)]
+    pub accuracy_m: Option&lt;f64&gt;,
+    pub recorded_at: DateTime&lt;Utc&gt;,
+    pub received_at: DateTime&lt;Utc&gt;,
+    #[serde(default)]
+    pub backfilled: bool,
+    #[serde(default)]
+    pub manual: bool,
+    #[serde(default)]
+    pub reported_by: Option&lt;FeedActor&gt;,
+    #[serde(default)]
+    pub reported_for: Option&lt;FeedActor&gt;,
+}</code></pre>
+  </figure>
+
+  <p>
+    <code>Picture::apply_fix</code> finds the hull by <code>id_unit</code>. If the hull exists, the fix
+    updates the position and the measured values. If the hull does not exist, the fix adds the hull.
+    The socket is allowed to know about a hull that the last read did not have.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/units/mod.rs</strong> · <code>Picture::apply_fix</code>, shortened</figcaption>
+    <pre><code>pub fn apply_fix(&amp;mut self, fix: &amp;LiveFix) {
+    let now = Instant::now();
+    let position = Pos::new(fix.latitude, fix.longitude);
+
+    if let Some(existing) = self
+        .units
+        .iter_mut()
+        .find(|unit| unit.unit.id_unit == fix.id_unit)
+    {
+        let previous = existing.drawn(now).or(existing.position);
+        travel_into(existing, previous, position, fix.backfilled, now, 0.0);
+        existing.course_deg = fix.course_deg;
+        existing.accuracy_m = fix.accuracy_m;
+        existing.speed_kn = fix.speed_kn;
+        existing.received_at = fix.received_at;
+        existing.manual = fix.manual;
+        existing.reported_by = fix.reported_by.clone();
+        existing.reported_for = fix.reported_for.clone();
+        existing.unit.name = fix.name.clone();
+        if fix.hull_number.is_some() {
+            existing.unit.hull_number = fix.hull_number.clone();
+        }
+        return;
+    }
+
+    // A hull the last read did not have: add it, do not drop the fix.
+    let unit = Unit {
+        id_unit: fix.id_unit,
+        name: fix.name.clone(),
+        hull_number: fix.hull_number.clone(),
+    };
+    let mut view = UnitView::silent(unit);
+    travel_into(&amp;mut view, None, position, fix.backfilled, now, 0.0);
+    view.course_deg = fix.course_deg;
+    view.accuracy_m = fix.accuracy_m;
+    view.speed_kn = fix.speed_kn;
+    view.received_at = fix.received_at;
+    view.manual = fix.manual;
+    view.reported_by = fix.reported_by.clone();
+    view.reported_for = fix.reported_for.clone();
+    self.units.push(view);
+}</code></pre>
+  </figure>
+
+  <div class="callout">
+    <span class="label">A read is a snapshot</span>
+    <p>
+      A fix from the standing read has <code>travel: None</code>. The marker appears where the server
+      puts it. It does not fly there from its old position. On a reconnect, a flight across the sea
+      would show a movement that did not occur.
+    </p>
+  </div>
+</section>
+
+<section id="age">
+  <h2>Age, glyphs, and absence</h2>
+  <p>
+    The server sends <code>age_seconds</code> at read time. The wall stores that value with the receipt
+    time. Between reads, the wall adds the monotonic elapsed time. The wall never compares a server
+    timestamp with the local clock (<span class="badge">INV-06</span>).
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/units/mod.rs</strong> · age and glyph selection</figcaption>
+    <pre><code>pub fn age_seconds(&amp;self, now: Instant) -&gt; Option&lt;f64&gt; {
+    self.position?;
+    Some(self.age_at_receipt + now.saturating_duration_since(self.receipt).as_secs_f64())
+}
+
+pub fn glyph_with(&amp;self, now: Instant, stale_after: Duration) -&gt; Option&lt;Glyph&gt; {
+    self.position?;
+    if self.backfilled {
+        // INV-03: history, whatever its age.
+        return Some(Glyph::History);
+    }
+    match self.age_seconds(now) {
+        Some(age) if age &gt;= stale_after.as_secs_f64() =&gt; Some(Glyph::Stale),
+        Some(_) =&gt; Some(Glyph::Live),
+        None =&gt; None,
+    }
+}</code></pre>
+  </figure>
+
+  <figure class="diagram-card">
+    <div class="diagram-head">
+      <h3>Which glyph a hull earns</h3>
+      <span>Rendered with Pele</span>
+    </div>
+    <div class="diagram" id="glyph-choice" role="img" aria-label="Decision: no position gives no marker; backfilled gives history; an old fix gives stale; a fresh fix gives live."></div>
+    <figcaption>
+      The backfilled flag wins over age. A backfilled fix can be one second old and still is history.
+    </figcaption>
+    <details class="source">
+      <summary>Diagram source</summary>
+      <pre id="glyph-choice-source">flowchart TD
+  A["Hull in the feed"] --&gt; B{"Position present?"}
+  B --&gt;|"no"| C["No marker&lt;br/&gt;nothing to project"]
+  B --&gt;|"yes"| D{"backfilled?"}
+  D --&gt;|"yes"| E["History glyph&lt;br/&gt;hollow mark"]
+  D --&gt;|"no"| F{"age at least stale_after?"}
+  F --&gt;|"yes"| G["Stale glyph&lt;br/&gt;dimmed mark"]
+  F --&gt;|"no"| H["Live glyph&lt;br/&gt;filled mark"]</pre>
+    </details>
+  </figure>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>state</th><th>meaning</th><th>what the wall draws</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>Glyph::Live</code></td><td>a fresh fix</td><td>a filled marker, with a heading arrow when measured</td></tr>
+        <tr><td><code>Glyph::Stale</code></td><td>a fix older than the threshold</td><td>a dimmed marker; the card says the age</td></tr>
+        <tr><td><code>Glyph::History</code></td><td><code>backfilled: true</code></td><td>a hollow mark, never “here now”</td></tr>
+        <tr><td>no fix</td><td>the hull has not reported</td><td>nothing on the map; the hull stays in the picture</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    The deployment can change the threshold with <code>stale_after_s</code> in <code>config.toml</code>.
+    The code default is 120 s. The threshold is a client decision because the server does not know what
+    the operator is looking at.
+  </p>
+</section>
+
+<section id="travel">
+  <h2>Movement is a drawing decision</h2>
+  <p>
+    A hull that moves 200 m between reports should move on the wall. The marker travels from the old
+    drawn position to the new fix over 600 ms. The travel is a display value. It never changes the fix
+    (<span class="badge">INV-05</span>).
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/units/motion.rs</strong> · when a marker travels</figcaption>
+    <pre><code>pub fn travel(
+    from: Pos,
+    to: Pos,
+    backfilled: bool,
+    gap_seconds: f64,
+    now: Instant,
+) -&gt; Option&lt;Travel&gt; {
+    if backfilled {
+        return None;                 // history does not move
+    }
+    if from.apart(to) &gt; MAX_JUMP_DEGREES {
+        return None;                 // a jump across the sea is not hull motion
+    }
+    if gap_seconds &gt; MAX_GAP.as_secs_f64() &amp;&amp; gap_seconds &gt; 0.0 {
+        return None;                 // after a long silence, snap
+    }
+    Some(Travel { from, to, started: now })
+}</code></pre>
+  </figure>
+
+  <p>
+    The three refusals are important. A backfilled fix must not slide into place. A large jump must not
+    look like a fast ship. A fix after a long silence must not draw a course that nobody observed.
+  </p>
+</section>
+
+<section id="map">
+  <h2>The map thread and the offline seed</h2>
+  <p>
+    The map engine is MapLibre Native. It runs behind the <code>map</code> feature. The gate does not
+    build it, because the gate must need no C++ compiler, no network, and no GPU. CI compiles it on
+    macOS. The wall builds it with <code>scripts/build-wall.sh</code>.
+  </p>
+
+  <p>
+    The seed is a 2.6 MB SQLite cache. It is embedded in the binary with <code>include_bytes!</code>.
+    On the first start, the map thread copies the seed to a writable cache. It pins the expiry of every
+    row to the year 2100. Without this step, MapLibre tries to revalidate the style over the network.
+    On a wall with no network, the map would stay black.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/map/thread.rs</strong> · the start of the map thread</figcaption>
+    <pre><code>let cache = crate::map::cache_path();
+if let Err(e) = crate::map::render::prepare_cache(&amp;cache) {
+    *error.lock().expect("the error slot is not poisoned") = Some(e.to_string());
+    return;
+}
+
+let mut map = match crate::map::render::LiveMap::new(camera, size.0, size.1, &amp;cache) {
+    Ok(map) =&gt; map,
+    Err(e) =&gt; {
+        *error.lock().expect("the error slot is not poisoned") = Some(e.to_string());
+        return;
+    }
+};</code></pre>
+  </figure>
+
+  <p>
+    <code>prepare_cache</code> does three jobs. It sets a corrupt cache aside. It copies the embedded
+    seed when the cache is absent. It runs <code>UPDATE resources SET expires = ?</code> and
+    <code>UPDATE tiles SET expires = ?</code> on every start. The last job is why an old cache stays
+    offline-usable.
+  </p>
+
+  <p>
+    The renderer is a <code>Continuous</code> renderer. The thread builds it one time and keeps it. The
+    GL context, the tile cache, the glyph atlas, and the shaders stay hot. A camera change then costs
+    milliseconds. A new renderer would cost seconds.
+  </p>
+
+  <div class="callout">
+    <span class="label">The first frame</span>
+    <p>
+      The renderer pumps a number of frames after the style loads, so the first frame that reaches the
+      view loop has tiles. A first frame with no tiles is a grey rectangle. The log line
+      <code>first map frame in … ms</code> is the measured number.
+    </p>
+  </div>
+</section>
+
+<section id="projection">
+  <h2>One projection</h2>
+  <p>
+    The map and the markers must agree on where a latitude and longitude land. They agree because there
+    is one function. Both call <code>map::geometry::project</code> with the camera of the rendered
+    frame. There is no second conversion (<span class="badge">INV-04</span>).
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/map/geometry.rs</strong> · the projection, and the frame that carries it</figcaption>
+    <pre><code>pub const WORLD_BASE_PX: f64 = 512.0;
+
+fn world_px(lat: f64, lon: f64, zoom: f64) -&gt; (f64, f64) {
+    let scale = WORLD_BASE_PX * 2f64.powf(zoom);
+    let lat = clamp_lat(lat).to_radians();
+    let x = (wrap_lon(lon) + 180.0) / 360.0 * scale;
+    let s = ((lat.tan() + 1.0 / lat.cos()).ln()).min(std::f64::consts::PI);
+    let y = (1.0 - s / std::f64::consts::PI) / 2.0 * scale;
+    (x, y)
+}
+
+pub fn project(camera: Camera, viewport: Viewport, lat: f64, lon: f64) -&gt; (f64, f64) {
+    let (x, y) = world_px(lat, lon, camera.zoom);
+    let (cx, cy) = world_px(camera.center.0, camera.center.1, camera.zoom);
+    (x - cx + viewport.w / 2.0, y - cy + viewport.h / 2.0)
+}
+
+impl Rendered {
+    pub fn project(&amp;self, lat: f64, lon: f64) -&gt; (f64, f64) {
+        project(self.camera, self.viewport(), lat, lon)
+    }
+}</code></pre>
+  </figure>
+
+  <p>
+    The world is 512 pixels at zoom 0. MapLibre uses this convention. A 256-pixel base would put every
+    marker at half of the offset that the map draws. The error is small at zoom 3 and large at zoom 11.
+  </p>
+
+  <p>
+    Markers use the frame's camera, not the pane's live camera. Mid-gesture, these two cameras differ.
+    The picture on screen is the old frame. A marker that used the new camera would move before the
+    water moves.
+  </p>
+</section>
+
+<section id="markers">
+  <h2>Markers</h2>
+  <p>
+    The marker layer is a pure function. It takes the picture, one rendered frame, and one pane's
+    filter. It returns one placed marker for each hull that has a fix.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/ui/markers.rs</strong> · <code>place</code> and one placement</figcaption>
+    <pre><code>pub fn place(
+    picture: &amp;crate::units::Picture,
+    frame: &amp;Rendered,
+    filter: &amp;crate::ui::filter::Filter,
+    now: Instant,
+    stale_after: std::time::Duration,
+    range: crate::units::mark::Range,
+    sizes: &amp;dyn Fn(i64) -&gt; Option&lt;crate::units::mark::Size&gt;,
+) -&gt; Vec&lt;Placed&gt; {
+    if filter.hides_hulls() {
+        return Vec::new();
+    }
+    picture
+        .units()
+        .iter()
+        .filter_map(|unit| place_one(unit, frame, now, stale_after, range, sizes))
+        .collect()
+}
+
+fn place_one(...) -&gt; Option&lt;Placed&gt; {
+    let glyph = unit.glyph_with(now, stale_after)?;   // no fix gives None
+    let drawn: Pos = unit.drawn(now)?;
+    let (x, y) = frame.project(drawn.lat, drawn.lon);
+    Some(Placed { id_unit: unit.unit.id_unit, x, y, glyph, /* ... */ })
+}</code></pre>
+  </figure>
+
+  <p>
+    The filter belongs to the pane. A pane that hides the hull layer gets no markers from this
+    function. There is no second place where “hulls are off” can be forgotten.
+  </p>
+
+  <p>
+    The glyph can be 12 points. The hit target is at least 24 points. A touch target is a decision about
+    fingers, not about the size of the symbol. At a high zoom, a hull with a picture can draw the
+    picture instead of the symbol. The switch uses the pane's frame zoom, not the camera, so a hull does
+    not change representation while it is still projected against the old frame.
+  </p>
+</section>
+
+<section id="cards">
+  <h2>Cards and pane state</h2>
+  <p>
+    The data is shared. The question is not. The wall has one picture and one socket. Each pane has its
+    own selection, its own card, its own filter, and its own symbol-or-picture range.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/ui/mod.rs</strong> · the per-pane view</figcaption>
+    <pre><code>pub struct PaneView {
+    /// The hull this pane asks about.
+    pub selected: Option&lt;i64&gt;,
+    /// The card for that hull. One card per pane.
+    pub card: Option&lt;crate::units::card::Card&gt;,
+    /// The facility this pane asks about, if any.
+    pub installation: Option&lt;i64&gt;,
+    /// Symbol or picture, chosen by the frame's zoom.
+    pub range: crate::units::mark::Range,
+    /// The layers and vocabularies this pane hides.
+    pub filter: crate::ui::filter::Filter,
+}</code></pre>
+  </figure>
+
+  <p>
+    A press in one pane changes that pane. It does not change a neighbour. This rule is
+    <span class="badge">INV-10</span>. The first version had one wall-wide selection, and it drew the
+    same card in every pane.
+  </p>
+
+  <p>
+    A card is built from the picture. If the hull moves, the card follows. The card also uses the reads
+    thread for the hull's identity, commander, and specifications. Those reads use the same
+    <code>Command</code> and <code>Reply</code> channel as every other REST read.
+  </p>
+</section>
+
+<section id="envelope">
+  <h2>The socket envelope is not uniform</h2>
+  <p>
+    Centrifugo adds one <code>data</code> level. The channels below that level have different shapes.
+    A client that assumes one shape reads <code>undefined</code> and gets no error. The parser refuses
+    the wrong shape.
+  </p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>channel</th><th>shape under <code>pub</code></th><th>parser</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>live-feed</code></td><td>a bare event at <code>data</code></td><td><code>live::wire::parse</code></td></tr>
+        <tr><td><code>game:&lt;id&gt;</code></td><td><code>data.type</code>, then <code>data.data.*</code></td><td>not this client</td></tr>
+        <tr><td><code>game:&lt;id&gt;:positions</code></td><td><code>data.positions</code>, no <code>type</code></td><td>not this client</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <figure class="code">
+    <figcaption><strong>src/live/wire.rs</strong> · the parse refuses the wrong depth</figcaption>
+    <pre><code>pub fn parse(pub_data: &amp;[u8]) -&gt; Result&lt;LiveFix, WireError&gt; {
+    serde_json::from_slice::&lt;LiveFix&gt;(pub_data).map_err(|error| {
+        if serde_json::from_slice::&lt;serde_json::Value&gt;(pub_data).is_err() {
+            WireError::NotJson(error.to_string())
+        } else {
+            WireError::NotLiveFeed(error.to_string())
+        }
+    })
+}</code></pre>
+  </figure>
+
+  <p>
+    The caller passes the bytes of <code>pub.data</code>, not the whole envelope. The <code>data</code>
+    level belongs to the transport. If two places unwrap it, the two places will disagree about the
+    depth.
+  </p>
+
+  <div class="callout ok">
+    <span class="label">Check this page against the code</span>
+    <p>
+      Run <code>cargo test units::</code>, <code>cargo test map::</code>, and
+      <code>cargo test live::wire</code>. The tests use the wire fixtures and the same projection that
+      the markers use.
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <p>
+      This page uses ASD-STE100 wording. The sentences are short. The verbs are active. The terms are
+      the project's terms.
+    </p>
+    <p>
+      The diagrams are rendered with <a href="https://github.com/obsidianmd/pele">Pele</a> (MIT), loaded
+      from jsDelivr. If Pele does not load, open “Diagram source” below each diagram.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arcons CC architecture — the system and its words</title>
+<meta name="description" content="The architecture of Arcons Command Center: the programs, the words, the invariants, and the source map. ASD-STE100 wording. Mermaid diagrams rendered with Pele.">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/pele@1/dist/pele.global.js" defer></script>
+<script src="diagram.js" defer></script>
+</head>
+<body>
+
+<header class="page-header">
+  <div class="wrap">
+    <p class="eyebrow">Arcons Command Center · architecture documentation</p>
+    <h1>Architecture I: the system and its words</h1>
+    <p class="lede">
+      This page gives the system map. It gives the domain words. It gives the rules that shape the code.
+      The other pages give the runtime and the code examples.
+    </p>
+    <p class="meta">
+      Source: the root package and <code>crates/desk</code> at <code>main</code>. Read the code with this page.
+      The diagrams are rendered with <a href="https://github.com/obsidianmd/pele">Pele</a> (MIT).
+    </p>
+    <nav class="doc-nav" aria-label="Architecture pages">
+      <a href="index.html" aria-current="page">Overview</a>
+      <a href="runtime.html">Runtime</a>
+      <a href="picture.html">Picture</a>
+      <a href="control.html">Control</a>
+      <a href="verification.html">Verification</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+<section id="purpose">
+  <h2>What this document set explains</h2>
+  <p>
+    The application is a wall display for the live maritime picture. The repository holds more than one
+    program. The wall is the main program. The desk writes fixes. The phone controls the wall. The relay
+    carries the phone's lines. One gate proves the code.
+  </p>
+  <p>
+    This document set answers three questions:
+  </p>
+  <ol>
+    <li>Which parts exist, and which part owns which state?</li>
+    <li>How does one fix move from Minos to a pixel on the wall?</li>
+    <li>How does a reader know that a claim is true?</li>
+  </ol>
+  <p>
+    The answer to the third question is a command. A ticket is done when <code>scripts/verify.sh</code>
+    exits 0. The document uses file names and function names. A reader can open the code and compare it
+    with the text.
+  </p>
+</section>
+
+<section id="system">
+  <h2>The system in one picture</h2>
+  <p>
+    Minos is the backend. Minos is not in this repository. The wall reads Minos. The wall does not write
+    Minos. The desk is the one program that writes a fix.
+  </p>
+
+  <figure class="diagram-card">
+    <div class="diagram-head">
+      <h3>Programs and transports</h3>
+      <span>Rendered with Pele</span>
+    </div>
+    <div class="diagram" id="system-context" role="img" aria-label="System context: Minos, the wall, the desk, the phone, the relay, the control client, and the gate."></div>
+    <figcaption>
+      The wall gets the standing picture by HTTPS and the movement by WSS. Control lines enter by a unix
+      socket or by the relay. The gate proves the wall and the desk.
+    </figcaption>
+    <details class="source">
+      <summary>Diagram source</summary>
+      <pre id="system-context-source">flowchart TB
+  subgraph Minos["Minos deployment - external"]
+    REST["REST API&lt;br/&gt;auth, live-feed, units"]
+    WS["Centrifugo socket&lt;br/&gt;live-feed"]
+  end
+
+  subgraph Wall["arcons-cc - the wall"]
+    VIEW["View loop&lt;br/&gt;Rune + State"]
+    DATA["Reads thread&lt;br/&gt;REST client"]
+    LIVE["Socket thread&lt;br/&gt;Centrifugo client"]
+    MAP["Map threads&lt;br/&gt;one per map pane"]
+    CTL["Control plane&lt;br/&gt;unix socket"]
+    REL["Relay carrier&lt;br/&gt;outbound"]
+  end
+
+  DESK["desk binary&lt;br/&gt;writes relayed fixes"]
+  PHONE["phone app"]
+  CTLCLIENT["arcons-cc ctl"]
+  RELAYSVC["relay service"]
+  GATE["scripts/verify.sh"]
+
+  REST --&gt;|"initial picture"| DATA
+  DATA --&gt;|"Reply"| VIEW
+  WS --&gt;|"Update"| LIVE
+  LIVE --&gt;|"Update"| VIEW
+  VIEW --&gt;|"Camera"| MAP
+  MAP --&gt;|"frame"| VIEW
+  CTLCLIENT --&gt;|"intent"| CTL
+  CTL --&gt;|"Job"| VIEW
+  VIEW --&gt;|"Answer"| CTL
+  REL &lt;--&gt;|"JSON lines"| RELAYSVC
+  RELAYSVC &lt;--&gt;|"JSON lines"| PHONE
+  DESK --&gt;|"POST /live-feed/fixes/relayed"| REST
+  REST -.-&gt;|"publishes"| WS
+  GATE -.-&gt;|"proves"| VIEW
+  GATE -.-&gt;|"proves"| DESK</pre>
+    </details>
+  </figure>
+
+  <div class="cards">
+    <div class="card">
+      <h3>The wall</h3>
+      <p>Root package. Reads Minos. Draws the picture. Answers the control plane. Does not write Minos.</p>
+    </div>
+    <div class="card">
+      <h3>The desk</h3>
+      <p><code>crates/desk</code>. Reads the picture. Writes relayed fixes for a batch of units.</p>
+    </div>
+    <div class="card">
+      <h3>The phone</h3>
+      <p><code>clients/phone</code>. Sends intents. Reads the projection. Holds no Minos credential.</p>
+    </div>
+    <div class="card">
+      <h3>The relay</h3>
+      <p><code>tools/dev-relay</code>. Joins the phone and the wall in development. Not the contract.</p>
+    </div>
+    <div class="card">
+      <h3>The gate</h3>
+      <p><code>scripts/verify.sh</code>. One command. Format, lints, tests, captures, budgets.</p>
+    </div>
+  </div>
+</section>
+
+<section id="programs">
+  <h2>The programs, and what each one owns</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>program</th><th>where</th><th>reads</th><th>writes</th><th>owns</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>wall</strong></td>
+          <td>repository root, <code>cargo run</code></td>
+          <td>Minos REST and <code>live-feed</code></td>
+          <td><code>layout.toml</code>, <code>settings.toml</code>, <code>devices.toml</code></td>
+          <td>the picture, the panes, the map threads, the control plane</td>
+        </tr>
+        <tr>
+          <td><strong>desk</strong></td>
+          <td><code>crates/desk</code>, <code>cargo run -p desk</code></td>
+          <td>Minos REST</td>
+          <td>relayed fixes for a batch of units</td>
+          <td>its device id, the batch, the time field</td>
+        </tr>
+        <tr>
+          <td><strong>phone</strong></td>
+          <td><code>clients/phone</code></td>
+          <td>the relay</td>
+          <td>intents</td>
+          <td>its paired key, the projection cache, the screen</td>
+        </tr>
+        <tr>
+          <td><strong>relay</strong></td>
+          <td><code>tools/dev-relay</code></td>
+          <td>JSON lines</td>
+          <td>JSON lines</td>
+          <td>no domain state</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    The wall is the authority for its own arrangement. A viewer is a second wall process that draws the
+    authority's scenes. A viewer holds no Minos credential and opens no Minos socket.
+  </p>
+</section>
+
+<section id="words">
+  <h2>The words</h2>
+  <p>
+    The domain is small. The words are exact. The code uses these words. Use the same words in a
+    discussion, or a reader will look for a type that does not exist.
+  </p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>word</th><th>meaning</th><th>not</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Unit</strong></td><td>One hull. The join key is <code>id_unit</code>.</td><td>vessel, ship, target</td></tr>
+        <tr><td><strong>Fix</strong></td><td>One accepted position report: latitude, longitude, time, and the measured values.</td><td>ping, update, location</td></tr>
+        <tr><td><strong>Feed</strong></td><td>Every live unit, with or without a fix.</td><td>fleet list, the positions</td></tr>
+        <tr><td><strong>Picture</strong></td><td>The feed, plus the wall's judgements: age, glyph, travel.</td><td>dashboard, view</td></tr>
+        <tr><td><strong>Stale</strong></td><td>A client judgement from age. The default threshold is 120 s.</td><td>an error, a lost connection</td></tr>
+        <tr><td><strong>Backfilled</strong></td><td>A fix from an offline backlog. It is real and it did not just happen.</td><td>current, live, late</td></tr>
+        <tr><td><strong>Pane</strong></td><td>One rectangle. A pane is a map, a tree, or the newsroom.</td><td>window, split</td></tr>
+        <tr><td><strong>Pane view</strong></td><td>What one pane asks about: selection, card, range, filter.</td><td>the wall's selection</td></tr>
+        <tr><td><strong>Workspace</strong></td><td>A named tiling of panes. One workspace is active.</td><td>tab, page</td></tr>
+        <tr><td><strong>Arrangement</strong></td><td>What the wall remembers: workspaces, panes, cameras, names, filters.</td><td>layout of one workspace</td></tr>
+        <tr><td><strong>Intent</strong></td><td>One settled control request. The wall decides the result.</td><td>event, command</td></tr>
+        <tr><td><strong>Projection</strong></td><td>What the wall shows, as a value a client can read.</td><td>snapshot of pixels</td></tr>
+        <tr><td><strong>Scene</strong></td><td>One named state that a capture renders.</td><td>screenshot</td></tr>
+        <tr><td><strong>Golden</strong></td><td>The reference PNG for one scene.</td><td>baseline image</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="rules">
+  <h2>The rules that shape the code</h2>
+  <p>
+    The repository numbers its promises. A test cites the number in its failure message. The table gives
+    the short form. <code>docs/invariants.md</code> gives the full text and the proof.
+  </p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>id</th><th>promise</th><th>where it lives</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><span class="badge">INV-01</span></td><td>An absent optional field is never drawn as a number.</td><td><code>units</code>, <code>data::types</code></td></tr>
+        <tr><td><span class="badge">INV-02</span></td><td>No marker without a fix. No marker at 0, 0 unless a fix says so.</td><td><code>markers::place</code></td></tr>
+        <tr><td><span class="badge">INV-03</span></td><td>A backfilled fix never has the live glyph.</td><td><code>UnitView::glyph_with</code></td></tr>
+        <tr><td><span class="badge">INV-04</span></td><td>A marker uses its own pane's rendered camera and frame.</td><td><code>map::geometry::Rendered::project</code></td></tr>
+        <tr><td><span class="badge">INV-05</span></td><td>Travel is a drawing value. It never changes a fix.</td><td><code>units::motion</code></td></tr>
+        <tr><td><span class="badge">INV-06</span></td><td>Age does not decrease unless a new fix arrives.</td><td><code>UnitView::age_seconds</code></td></tr>
+        <tr><td><span class="badge">INV-07</span></td><td>Every refusal code has one action. No catch-all.</td><td><code>live::Refusal</code>, <code>control::RefusalKind</code></td></tr>
+        <tr><td><span class="badge">INV-08</span></td><td>No log, error, or panic contains a secret.</td><td><code>config::Secret</code>, all error types</td></tr>
+        <tr><td><span class="badge">INV-09</span></td><td>After a reconnect, no marker is current until a picture read completes.</td><td><code>live::Trust</code>, <code>Link::Unproven</code></td></tr>
+        <tr><td><span class="badge">INV-10</span></td><td>One card for one pane. The card stays in the window.</td><td><code>PaneView</code>, <code>ui::card</code></td></tr>
+        <tr><td><span class="badge">INV-11</span></td><td>Same fixture, scene, and virtual clock give the same PNG.</td><td><code>scene</code>, <code>capture.sh</code></td></tr>
+        <tr><td><span class="badge">INV-12</span></td><td>Pan, zoom, and a tiled wall stay inside the frame budget.</td><td><code>tests/budget.rs</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    <span class="label">The one rule to remember</span>
+    <p>
+      The view loop never blocks. Each slow part owns a thread. The slow parts send messages to the view
+      loop. The view loop owns the state and builds the next frame.
+    </p>
+  </div>
+</section>
+
+<section id="source">
+  <h2>The source tree</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>path</th><th>what it holds</th><th>threads</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>src/main.rs</code></td><td>Flags, start order, exit codes, the ctl client.</td><td>none</td></tr>
+        <tr><td><code>src/lib.rs</code></td><td>The library. The module list is the architecture.</td><td>none</td></tr>
+        <tr><td><code>src/config/</code></td><td><code>config.toml</code>, credential, settings, layout, devices, self-check.</td><td>no</td></tr>
+        <tr><td><code>src/data/</code></td><td>The Minos REST client and its typed values.</td><td>one reads thread</td></tr>
+        <tr><td><code>src/live/</code></td><td>The Centrifugo actor, refusals, backoff, trust.</td><td>one socket thread</td></tr>
+        <tr><td><code>src/units/</code></td><td><code>Unit</code>, <code>Fix</code>, <code>UnitView</code>, <code>Picture</code>, motion, card.</td><td>no</td></tr>
+        <tr><td><code>src/map/</code></td><td>Geometry with no engine, and the MapLibre thread.</td><td>one thread per map pane</td></tr>
+        <tr><td><code>src/ui/</code></td><td><code>State</code>, the view, panes, tree, newsroom, tokens.</td><td>the view loop</td></tr>
+        <tr><td><code>src/control/</code></td><td>Intents, the unix socket, the relay, the viewer, pairing.</td><td>one listener and one relay carrier</td></tr>
+        <tr><td><code>src/scene.rs</code></td><td>The named headless states and their wire fixtures.</td><td>none</td></tr>
+        <tr><td><code>src/verify.rs</code></td><td>Pixel and structure assertions for a capture.</td><td>none</td></tr>
+        <tr><td><code>src/platform.rs</code></td><td>The log, signals, the start clock, the quit deadline.</td><td>signal and timer</td></tr>
+        <tr><td><code>crates/desk</code></td><td>The desk binary: identity, time, batch, send.</td><td>read and send workers</td></tr>
+        <tr><td><code>clients/phone</code></td><td>The Dart package and the Flutter app.</td><td>the phone's own</td></tr>
+        <tr><td><code>tools/dev-relay</code></td><td>The development relay.</td><td>the relay's own</td></tr>
+        <tr><td><code>scripts/</code></td><td>The gate, captures, assertions, the soak, build and record commands.</td><td>scripts</td></tr>
+        <tr><td><code>fixtures/</code></td><td>Wire recordings and golden PNGs. The tests read them.</td><td>none</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="shape">
+  <h2>One code shape to remember</h2>
+  <p>
+    The library says why the modules are separate. Read the first two rules. Then read the module list.
+    A new module must not break either rule.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/lib.rs</strong> · the module list and its two rules</figcaption>
+    <pre><code>//! Two rules shape the module list, and neither is negotiable:
+//!
+//! - **The UI thread never blocks.** Reads (`data`), the socket (`live`) and the map (`map`) each
+//!   own a thread and hand results to the view loop; the view loop only ever builds elements.
+//! - **A ticket is done when `scripts/verify.sh` says so.**
+//!
+//! pub mod config;
+//! pub mod control;
+//! pub mod data;
+//! pub mod live;
+//! pub mod map;
+//! pub mod platform;
+//! pub mod scene;
+//! pub mod ui;
+//! pub mod units;
+//! pub mod verify;</code></pre>
+  </figure>
+
+  <p>
+    The list is not a layer diagram. <code>data</code> does not call <code>ui</code>.
+    <code>ui</code> reads <code>units</code>. <code>live</code> and <code>data</code> send values to
+    <code>ui</code>. <code>control</code> changes <code>ui::State</code> through one function. This
+    direction keeps the view loop free of network and engine work.
+  </p>
+</section>
+
+<section id="next">
+  <h2>Read next</h2>
+  <div class="next">
+    <a href="runtime.html">
+      <strong>Runtime</strong>
+      <span>Start order, threads, channels, the frame loop, and the stop order.</span>
+    </a>
+    <a href="picture.html">
+      <strong>Picture</strong>
+      <span>REST and socket, the model, age and glyphs, the map, and the markers.</span>
+    </a>
+    <a href="control.html">
+      <strong>Control</strong>
+      <span>Intents, carriers, the queue, the authority, the relay, and the files.</span>
+    </a>
+    <a href="verification.html">
+      <strong>Verification</strong>
+      <span>Scenes, captures, goldens, pixel assertions, and the gate.</span>
+    </a>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <p>
+      This page uses ASD-STE100 wording. The sentences are short. The verbs are active. The terms are
+      the project's terms.
+    </p>
+    <p>
+      The diagrams are rendered with <a href="https://github.com/obsidianmd/pele">Pele</a> (MIT), loaded
+      from jsDelivr. If Pele does not load, open “Diagram source” below each diagram.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

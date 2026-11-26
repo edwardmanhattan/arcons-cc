@@ -46,8 +46,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::layout::{RATIO_RANGE, SavedNode};
 use crate::map::geometry::Viewport;
+use crate::ui::ViewId;
 use crate::ui::tokens;
-use crate::ui::view::{self, Dir, Drop, Layout, Rect, Side, ViewId};
+use crate::ui::view::{self, Dir, Drop, Layout, Rect, Side};
 
 /// Where the recordings live, relative to the crate root. `cargo run -- --record` writes here.
 pub const DIR: &str = "fixtures/control/tiling";

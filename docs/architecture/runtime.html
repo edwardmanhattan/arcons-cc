@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arcons CC architecture — the wall's runtime</title>
+<meta name="description" content="How the wall starts, which threads exist, how they send messages, how one frame is built, and how the wall stops. ASD-STE100 wording. Mermaid diagrams rendered with Pele.">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/pele@1/dist/pele.global.js" defer></script>
+<script src="diagram.js" defer></script>
+</head>
+<body>
+
+<header class="page-header">
+  <div class="wrap">
+    <p class="eyebrow">Arcons Command Center · architecture documentation</p>
+    <h1>Architecture II: the wall's runtime</h1>
+    <p class="lede">
+      The wall is one window and several threads. The view loop owns the state. The other threads do
+      slow work and send messages. This page shows the start order, the channels, one frame, and the
+      stop order.
+    </p>
+    <p class="meta">
+      Code: <code>src/main.rs</code>, <code>src/ui/mod.rs</code>, <code>src/data/thread.rs</code>,
+      <code>src/live/actor.rs</code>, <code>src/map/thread.rs</code>. Diagrams rendered with
+      <a href="https://github.com/obsidianmd/pele">Pele</a>.
+    </p>
+    <nav class="doc-nav" aria-label="Architecture pages">
+      <a href="index.html">Overview</a>
+      <a href="runtime.html" aria-current="page">Runtime</a>
+      <a href="picture.html">Picture</a>
+      <a href="control.html">Control</a>
+      <a href="verification.html">Verification</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+<section id="start">
+  <h2>The start order</h2>
+  <p>
+    The start order is deliberate. A flag must answer before the program touches the network. The log
+    must start before the program writes a line. The GPU pin must happen before Rune starts a thread.
+    The configuration is read before the window opens.
+  </p>
+  <ol class="steps">
+    <li>Parse the command line. <code>--help</code> and <code>--version</code> return here.</li>
+    <li>Start the log. Every later line also goes to the log file.</li>
+    <li>Pin the Vulkan device. The loader reads the environment one time.</li>
+    <li>Read <code>config.toml</code> and the credential. <code>--self-check</code> returns here.</li>
+    <li>Install the <code>SIGTERM</code> handler. A stop during startup is not lost.</li>
+    <li>Open the window. Rune calls <code>setup</code>, then <code>poll</code> and <code>view</code> for each frame.</li>
+  </ol>
+
+  <figure class="code">
+    <figcaption><strong>src/main.rs</strong> · the order, with the comments that say why</figcaption>
+    <pre><code>let args = config::Args::parse(std::env::args().skip(1))?;
+
+// `--version` and `--help` answer without opening a log file, a config, or a socket.
+// Before Rune's threads exist: the Vulkan loader reads this once, process-wide.
+platform::init_logging(args.log_file.as_deref());
+#[cfg(feature = "map")]
+arcons_cc::map::pin_gpu_from_env();
+
+match args.command {
+    config::Command::SelfCheck =&gt; self_check(&amp;args),
+    // A headless scene renders a fixture: no server, no credential, no window.
+    config::Command::Run if arcons_cc_headless() =&gt; ui::run(args.window, args.passthrough.clone()),
+    config::Command::Run =&gt; match config::Config::load(&amp;args, &amp;config::Env::from_process()) {
+        Ok(config) =&gt; {
+            config::set_current(&amp;config);
+            platform::watch_for_termination();
+            ui::run(args.window, args.passthrough.clone())
+        }
+        Err(problem) =&gt; ExitCode::from(problem.code()),
+    },
+    // ...
+}</code></pre>
+  </figure>
+
+  <div class="callout">
+    <span class="label">Why the order matters</span>
+    <p>
+      <code>pin_gpu_from_env</code> changes <code>VK_DRIVER_FILES</code> and
+      <code>VK_ICD_FILENAMES</code>. The Vulkan loader reads these variables one time. A call after
+      Rune's threads start would not move the map to the compositor's GPU.
+    </p>
+  </div>
+</section>
+
+<section id="appspec">
+  <h2>Rune's application contract</h2>
+  <p>
+    Rune owns the event loop, the window, and the GPU surface. The application gives Rune four functions
+    and one scene list. The functions are small. The work is in the threads that feed them.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/ui/mod.rs</strong> · <code>run</code> builds the <code>AppSpec</code> (shortened)</figcaption>
+    <pre><code>let spec = AppSpec::&lt;State&gt; {
+    min_size: Some(tokens::MIN_WINDOW),
+    setup: Some(setup),          // start the control plane, the socket, the reads thread
+    poll: Some(poll),            // drain messages, apply them, ask for a redraw when needed
+    on_key: Some(on_key),        // the wall's keys, through the same intent vocabulary
+    scenes: crate::scene::SCENES,// the named states that a capture can render
+    ..AppSpec::new(
+        TITLE,
+        window.size,
+        || State::default() /* then the saved settings, layout, relay, devices */,
+        view,
+    )
+};</code></pre>
+  </figure>
+
+  <p>
+    <code>view</code> is a pure function of <code>State</code>. It builds an <code>El</code> tree and
+    returns. It does not read the network, wait for a thread, or write a file. <code>State</code>
+    changes only on the view loop's thread. <code>poll</code> drains worker messages and applies them.
+    Input handlers apply intents on the same thread.
+  </p>
+</section>
+
+<section id="threads">
+  <h2>The threads and the channels</h2>
+  <p>
+    There are four kinds of worker thread. They do not share mutable domain state. They send values to
+    the view loop. The view loop is the only writer of <code>State</code>.
+  </p>
+
+  <figure class="diagram-card">
+    <div class="diagram-head">
+      <h3>Ownership and message direction</h3>
+      <span>Rendered with Pele</span>
+    </div>
+    <div class="diagram" id="threads" role="img" aria-label="Threads: the view loop owns State; reads, socket, map, control, and relay threads send messages to it."></div>
+    <figcaption>
+      The arrows show messages, not calls. A worker never calls <code>view</code>. A worker never
+      writes <code>State</code>.
+    </figcaption>
+    <details class="source">
+      <summary>Diagram source</summary>
+      <pre id="threads-source">flowchart LR
+  subgraph Loop["View loop - the only owner of State"]
+    STATE["State&lt;br/&gt;picture, workspaces, panes, link"]
+    VIEW["view function&lt;br/&gt;builds an El tree"]
+  end
+
+  DATA["Reads thread&lt;br/&gt;arcons-data"]
+  LIVE["Socket thread&lt;br/&gt;arcons-live"]
+  MAP["Map thread per map pane&lt;br/&gt;arcons-map"]
+  CTL["Control listener&lt;br/&gt;control"]
+  RELAY["Relay carrier&lt;br/&gt;relay"]
+
+  DATA --&gt;|"Reply, std mpsc"| STATE
+  LIVE --&gt;|"Update, std mpsc"| STATE
+  MAP --&gt;|"Pixels + Rendered"| STATE
+  CTL --&gt;|"Job, Queue"| STATE
+  RELAY --&gt;|"Job, Queue"| STATE
+  STATE --&gt;|"Camera, Cadence, Resize"| MAP
+  STATE --&gt;|"Command, unbounded"| DATA
+  STATE --&gt;|"Answer"| CTL
+  STATE --&gt; VIEW
+  VIEW --&gt;|"frame"| STATE</pre>
+    </details>
+  </figure>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>thread</th><th>started by</th><th>receives</th><th>sends</th><th>stops by</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>view loop</strong></td>
+          <td>Rune</td>
+          <td>frame events, keys, pointer events</td>
+          <td>commands and answers</td>
+          <td>Rune quit after <code>poll</code> sets it</td>
+        </tr>
+        <tr>
+          <td><strong>reads</strong></td>
+          <td><code>Backend::spawn</code></td>
+          <td><code>Command</code> on an unbounded channel</td>
+          <td><code>Reply</code> on a standard channel</td>
+          <td>command channel closes</td>
+        </tr>
+        <tr>
+          <td><strong>socket</strong></td>
+          <td><code>LiveThread::spawn</code></td>
+          <td>a stop token</td>
+          <td><code>Update</code> on a standard channel</td>
+          <td>stop token, then join</td>
+        </tr>
+        <tr>
+          <td><strong>map</strong>, one per pane</td>
+          <td><code>MapThread::spawn</code></td>
+          <td><code>Request</code> on a standard channel</td>
+          <td><code>rune::Pixels</code> and <code>Rendered</code></td>
+          <td><code>Request::Stop</code>, then join</td>
+        </tr>
+        <tr>
+          <td><strong>control listener</strong></td>
+          <td><code>Server::spawn</code></td>
+          <td>unix socket lines</td>
+          <td><code>Job</code> on the wall's <code>Queue</code></td>
+          <td>stop flag and a hung-up client</td>
+        </tr>
+        <tr>
+          <td><strong>relay carrier</strong></td>
+          <td><code>Relay::spawn</code></td>
+          <td>relay lines</td>
+          <td><code>Job</code> on the same <code>Queue</code></td>
+          <td>stop token</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout warn">
+    <span class="label">One exception, and it is safe</span>
+    <p>
+      The map thread writes pixels through <code>rune::Pixels::set</code>. That function is made for a
+      call from another thread and merges writes between frames. The map thread also writes one
+      <code>Rendered</code> value behind a mutex. Both are handover slots, not domain state.
+    </p>
+  </div>
+</section>
+
+<section id="reads">
+  <h2>Example: the reads thread</h2>
+  <p>
+    The reads thread does the HTTPS work. It signs in one time and refreshes the token at 80% of its
+    stated life. A request is an enum value. A reply is an enum value. The view loop sends a request
+    and continues. It reads the reply on a later frame.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/data/thread.rs</strong> · <code>Backend::spawn</code></figcaption>
+    <pre><code>let (commands, mut incoming) = unbounded_channel::&lt;Command&gt;();
+let (outgoing, replies) = channel::&lt;Reply&gt;();
+
+std::thread::Builder::new()
+    .name("arcons-data".to_string())
+    .spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(async move {
+            let http = Arc::new(sign_in(&amp;minos).await?);
+            while let Some(command) = incoming.recv().await {
+                let http = Arc::clone(&amp;http);
+                let replies = thread_replies.clone();
+                // Each read is its own task: a slow picture read never delays a card.
+                tokio::spawn(async move {
+                    let _ = replies.send(perform(&amp;http, command).await);
+                });
+            }
+        });
+    })?;</code></pre>
+  </figure>
+
+  <p>
+    The handle has two methods. Both are non-blocking. <code>request</code> never waits for the network.
+    <code>try_recv</code> never waits for an answer.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/data/thread.rs</strong> · the handle the view loop holds</figcaption>
+    <pre><code>pub fn request(&amp;self, command: Command) {
+    // A closed channel means the backend thread is gone; the next frame sees no reply.
+    let _ = self.commands.send(command);
+}
+
+pub fn try_recv(&amp;self) -&gt; Option&lt;Reply&gt; {
+    self.replies.try_recv().ok()
+}</code></pre>
+  </figure>
+
+  <p>
+    One current-thread Tokio runtime per worker is a decision about isolation. The reads thread and the
+    socket thread each own a runtime. A slow read cannot take a worker from the socket. The cost is no
+    work stealing. The workload is a small number of routes, so the cost does not matter.
+  </p>
+</section>
+
+<section id="socket">
+  <h2>Example: the socket thread</h2>
+  <p>
+    The socket thread owns one Centrifugo connection for each attempt. It sends an <code>Update</code>
+    for each fact that the view loop needs. It also calls a wake function after each update, so Rune
+    draws the new picture now and not on the next idle frame.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/live/actor.rs</strong> · the update values</figcaption>
+    <pre><code>pub enum Update {
+    Connected,
+    Picture(Vec&lt;FeedPosition&gt;),      // the standing picture, re-read after a connect
+    Fix {
+        fix: Box&lt;LiveFix&gt;,
+        received: std::time::Instant,
+    },
+    Untrusted,                        // the gap starts here
+    Refused { code: u16, reason: String },
+    RefreshDue,                       // 109: refresh the token, then retry
+    Retrying { attempt: u32, delay: Duration },
+    Failed(String),
+}</code></pre>
+  </figure>
+
+  <p>
+    The actor has a fixed loop. The loop is short because each extra branch is another state to get
+    wrong. The reconnect sequence is the important part. A socket connect is not a current picture.
+    <code>live-feed</code> has no history. After a connect, the actor reads the whole picture and then
+    subscribes. Until that read completes, the header says <code>reconnecting</code>
+    (<span class="badge">INV-09</span>).
+  </p>
+
+  <figure class="diagram-card">
+    <div class="diagram-head">
+      <h3>One socket session, and the reconnect path</h3>
+      <span>Rendered with Pele</span>
+    </div>
+    <div class="diagram" id="socket-states" role="img" aria-label="Socket states: sign in, connect, re-read the picture, subscribe, live, backoff, refresh, stop."></div>
+    <figcaption>
+      Refusal 101, 103, or 107 stops the actor. Refusal 109 refreshes the token and retries. Refusal
+      100, or an unknown code, retries with jittered backoff.
+    </figcaption>
+    <details class="source">
+      <summary>Diagram source</summary>
+      <pre id="socket-states-source">stateDiagram-v2
+  [*] --&gt; SignIn
+  SignIn --&gt; Connecting: token ready
+  SignIn --&gt; Backoff: retryable error
+  Connecting --&gt; Reading: connected
+  Reading --&gt; Live: picture read and trusted
+  Reading --&gt; Backoff: read failed
+  Live --&gt; Untrusted: disconnect
+  Untrusted --&gt; Backoff
+  Backoff --&gt; Connecting: delay ended
+  Backoff --&gt; Stopped: stop token
+  Connecting --&gt; Stopped: refusal 101, 103, 107
+  Live --&gt; Refreshing: refusal 109
+  Refreshing --&gt; Connecting: token refreshed
+  Live --&gt; Backoff: refusal 100 or unknown
+  Live --&gt; Stopped: stop token</pre>
+    </details>
+  </figure>
+
+  <p>
+    The backoff is exponential and fully jittered. The bound is 1 s, 2 s, 4 s, and so on to 30 s. The
+    wait is a random value between zero and the bound. A fleet of walls must not reconnect in one
+    millisecond after a server restart.
+  </p>
+</section>
+
+<section id="frame">
+  <h2>One frame</h2>
+  <p>
+    Rune calls <code>poll</code> before it calls <code>view</code>. <code>poll</code> drains every
+    channel. It applies each value to <code>State</code>. It reports whether a pixel changed.
+    <code>view</code> then builds the element tree from the new state.
+  </p>
+
+  <figure class="diagram-card">
+    <div class="diagram-head">
+      <h3>One frame, in order</h3>
+      <span>Rendered with Pele</span>
+    </div>
+    <div class="diagram" id="one-frame" role="img" aria-label="Sequence: poll drains socket, reads, control, and map; applies values to State; view builds the element tree."></div>
+    <figcaption>
+      The view loop never waits. If a channel is empty, the frame continues with the state it has.
+    </figcaption>
+    <details class="source">
+      <summary>Diagram source</summary>
+      <pre id="one-frame-source">sequenceDiagram
+  autonumber
+  participant R as Rune
+  participant P as poll
+  participant S as State
+  participant D as Reads thread
+  participant L as Socket thread
+  participant M as Map thread
+  participant V as view
+
+  R-&gt;&gt;P: frame at elapsed
+  P-&gt;&gt;L: try_recv
+  L--&gt;&gt;P: Update
+  P-&gt;&gt;S: apply_update
+  P-&gt;&gt;D: try_recv
+  D--&gt;&gt;P: Reply
+  P-&gt;&gt;S: apply_reply
+  P-&gt;&gt;M: read Rendered
+  M--&gt;&gt;P: camera and size
+  P--&gt;&gt;R: changed
+  R-&gt;&gt;V: view and State
+  V--&gt;&gt;R: El tree</pre>
+    </details>
+  </figure>
+
+  <p>
+    The socket drain is a good example. It collects the updates first, then applies them. This order
+    ends the borrow of <code>state.live</code> before <code>apply_update</code> needs the whole state
+    mutably.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/ui/mod.rs</strong> · <code>drain_socket</code> and <code>apply_update</code></figcaption>
+    <pre><code>fn drain_socket(state: &amp;mut State) -&gt; bool {
+    let updates: Vec&lt;crate::live::Update&gt; = match &amp;state.live {
+        Some(live) =&gt; std::iter::from_fn(|| live.try_recv()).collect(),
+        None =&gt; return false,
+    };
+    let changed = !updates.is_empty();
+    for update in updates {
+        apply_update(state, update);
+    }
+    changed
+}
+
+fn apply_update(state: &amp;mut State, update: crate::live::Update) {
+    match update {
+        Update::Picture(feed) =&gt; {
+            state.picture.replace_from_feed(&amp;feed);
+            state.link = Link::Live;
+        }
+        Update::Fix { fix, received } =&gt; {
+            state.picture.apply_fix(&amp;fix);
+            state.fixes += 1;
+            state.note_fix_latency(received.elapsed());
+        }
+        Update::Connected | Update::Untrusted | Update::RefreshDue
+        | Update::Retrying { .. } =&gt; {
+            state.link = Link::Unproven;
+        }
+        Update::Refused { code, reason } =&gt; {
+            state.link = Link::Failed(format!("refused {code}: {reason}"));
+        }
+        Update::Failed(error) =&gt; state.link = Link::Failed(error),
+    }
+}</code></pre>
+  </figure>
+
+  <p>
+    The order inside <code>apply_update</code> follows the facts. A <code>Picture</code> makes the wall
+    live. A <code>Fix</code> moves one hull. <code>Connected</code>, <code>Untrusted</code>,
+    <code>RefreshDue</code>, and <code>Retrying</code> do not make a picture current. They only change
+    the header.
+  </p>
+</section>
+
+<section id="maps">
+  <h2>How a map frame crosses to the view loop</h2>
+  <p>
+    A map pane has a thread. The thread owns the MapLibre scene, the tile cache, the glyph atlas, and
+    the GL context. It receives camera and size requests. It sends two values back:
+  </p>
+  <ul>
+    <li>RGBA pixels, through <code>rune::Pixels::set</code>;</li>
+    <li>one <code>Rendered</code> value with the camera and the frame size.</li>
+  </ul>
+
+  <figure class="code">
+    <figcaption><strong>src/map/thread.rs</strong> · the handover at the end of one render</figcaption>
+    <pre><code>map.set_camera(camera);
+let rgba = map.frame_rgba();
+frames.fetch_add(1, Ordering::SeqCst);
+let (width, height) = map.dims();
+
+if rgba.len() != (width as usize) * (height as usize) * 4 {
+    // The frame is not the size the camera asked for. Stop the thread; do not draw it.
+    return;
+}
+
+// Called from this thread, on purpose: `Pixels::set` is the streaming path.
+pixels.set(width, height, rgba);
+*rendered.lock().expect("the rendered slot is not poisoned") = Some(Rendered {
+    camera,
+    width,
+    height,
+});</code></pre>
+  </figure>
+
+  <p>
+    The thread merges requests. A drag sends one camera for each frame. The thread drains the queue
+    before it renders. The newest camera wins. This rule keeps a fast drag from building a queue of
+    frames that nobody sees.
+  </p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>pane state</th><th>cadence</th><th>reason</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>focused pane in the active workspace</td><td>4 Hz</td><td>the operator is working here</td></tr>
+        <tr><td>other visible pane</td><td>1 Hz</td><td>the map is there, but it is not the focus</td></tr>
+        <tr><td>pane in a hidden workspace</td><td>one frame per 60 s</td><td>a hidden workspace must not render like a wall</td></tr>
+        <tr><td>window hidden</td><td>no render</td><td>nobody looks at it</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    A map thread starts after the first layout pass, because the pane's size is known then. A restored
+    wall, a moved pane, and a new pane all use <code>State::spawn_missing_maps</code>. One function
+    starts a thread for every pane that has no thread. That one function is why a restored pane cannot
+    come back as a blank map.
+  </p>
+</section>
+
+<section id="stop">
+  <h2>The stop order</h2>
+  <p>
+    <code>SIGTERM</code> sets a flag. <code>poll</code> sees the flag and calls <code>stop</code>. The
+    order is three steps. The order is the part that makes a clean stop clean.
+  </p>
+
+  <figure class="code">
+    <figcaption><strong>src/ui/mod.rs</strong> · <code>stop</code></figcaption>
+    <pre><code>pub fn stop(state: &amp;mut State, layout: &amp;std::path::Path, arm: &amp;dyn Fn()) {
+    // 1. Write the arrangement while the state is whole.
+    state.flush_layout_at(layout);
+    // 2. Arm the quit deadline. A slow disk cannot lose the arrangement now.
+    arm();
+    // 3. Join the map threads. This is the step that can hang.
+    state.close_maps();
+}</code></pre>
+  </figure>
+
+  <ol>
+    <li>
+      <strong>Write the arrangement.</strong> A <code>SIGTERM</code> one second after a split keeps the
+      split. The write completes before the deadline starts.
+    </li>
+    <li>
+      <strong>Arm the deadline.</strong> <code>platform::QUIT_DEADLINE</code> is 5 s. If the quit is
+      still running, Rune writes the step it reached, marks <code>quit.deadline</code>, and ends the
+      process.
+    </li>
+    <li>
+      <strong>Join the map threads.</strong> Each map thread owns a GL context. MapLibre aborts if the
+      process drops a context under a live render. The join gives each thread its ordered stop.
+    </li>
+  </ol>
+
+  <p>
+    The unit file sets <code>TimeoutStopSec=10</code>. The deadline is 5 s. The gap is deliberate. If
+    systemd sent <code>SIGKILL</code> first, the log would not say which step hung.
+  </p>
+</section>
+
+<section id="headless">
+  <h2>Headless mode is a different setup</h2>
+  <p>
+    A capture is not a wall. <code>rune::is_headless()</code> is true for <code>--scene</code>,
+    <code>--snap</code>, <code>--tree</code>, and <code>--script</code>. In that mode:
+  </p>
+  <ul>
+    <li>no control socket opens;</li>
+    <li>no relay dials;</li>
+    <li>no Minos read starts;</li>
+    <li>no map thread starts;</li>
+    <li>the logical clock starts at zero and moves only by the capture's <code>--at</code> value;</li>
+    <li>one map pane gets a synthetic frame from its laid-out rectangle.</li>
+  </ul>
+  <p>
+    These rules make a capture independent of the machine, the network, and the wall clock
+    (<span class="badge">INV-11</span>). A capture that opened a socket would fail on a build machine
+    with no deployment.
+  </p>
+
+  <div class="callout ok">
+    <span class="label">Check this page against the code</span>
+    <p>
+      Read <code>src/ui/mod.rs</code>: <code>run</code>, <code>setup</code>, <code>poll</code>,
+      <code>drain_socket</code>, <code>apply_update</code>, and <code>stop</code>. Run
+      <code>scripts/verify.sh --fast</code>. The code and this page must agree.
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <p>
+      This page uses ASD-STE100 wording. The sentences are short. The verbs are active. The terms are
+      the project's terms.
+    </p>
+    <p>
+      The diagrams are rendered with <a href="https://github.com/obsidianmd/pele">Pele</a> (MIT), loaded
+      from jsDelivr. If Pele does not load, open “Diagram source” below each diagram.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
