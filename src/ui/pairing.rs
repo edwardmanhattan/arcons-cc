@@ -29,7 +29,7 @@
 //! the digits is a picture in the room, which is exactly who a pairing code is for.
 
 use crate::config::devices::{Device, Key};
-use crate::control::{Changed, Refused};
+use crate::control::{Changed, Paired, Refused};
 use crate::ui::State;
 
 /// How long a code is good for, on the frame clock: **two minutes**. Long enough to type six digits on a phone,
@@ -250,7 +250,7 @@ pub fn begin(state: &mut State) -> Result<Changed, Refused> {
 /// **A wrong code is one of [`PAIR_ATTEMPTS`]** (#262): the fourth wrong guess leaves the code open, the fifth burns
 /// it, and the answer to that fifth guess is `no pairing is open` — the same name an expired or spent code gets, so
 /// there is no new refusal (`INV-07`) and nothing a client can read about how many tries are left.
-pub fn claim(state: &mut State, code: &str, name: &str) -> Result<super::Paired, Refused> {
+pub fn claim(state: &mut State, code: &str, name: &str) -> Result<Paired, Refused> {
     let Some(pairing) = state.pairing().cloned() else {
         return Err(Refused("no pairing is open"));
     };
@@ -284,7 +284,7 @@ pub fn claim(state: &mut State, code: &str, name: &str) -> Result<super::Paired,
     // The code paired one phone. `docs/mobile-remote.md` leaves "two remotes at once" open; this does not decide
     // it, it spends the code — a second phone needs its own `pair.begin`.
     state.pairing = None;
-    Ok(super::Paired {
+    Ok(Paired {
         name: name.to_string(),
         key,
     })
@@ -331,9 +331,10 @@ mod tests {
 
     /// A wall that pairs in memory only: a test may not write to the machine's `devices.toml` (`INV-11`).
     fn capture() -> State {
-        let mut state = State::default();
-        state.headless = true;
-        state
+        State {
+            headless: true,
+            ..State::default()
+        }
     }
 
     /// A wall with a code drawn on it at `logical`, and the digits a phone would type.
@@ -558,7 +559,7 @@ mod tests {
             format!("{paired:?}"),
             format!(
                 "{:?}",
-                super::super::wire::to_wire(&Intent::PairClaim {
+                crate::control::wire::to_wire(&Intent::PairClaim {
                     code: digits.clone(),
                     name: "phone".to_string(),
                 })

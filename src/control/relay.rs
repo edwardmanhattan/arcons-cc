@@ -962,9 +962,9 @@ mod tests {
     use super::*;
     use crate::config::devices::{Device, Devices, Key, VERSION};
     use crate::control::Job;
-    use crate::control::pair::PAIR_ATTEMPTS;
     use crate::control::wire::{self, Answer, Request};
     use crate::control::{Changed, RefusalKind, refusal_kind};
+    use crate::ui::pairing::PAIR_ATTEMPTS;
     use crate::verb::Intent;
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::{UnixListener, UnixStream};

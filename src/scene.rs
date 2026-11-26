@@ -2218,11 +2218,11 @@ mod tests {
             PAIRING_CODE,
             "the pairing scene's digits must be its own clock's, or two renders draw two codes (INV-11)"
         );
-        let text = crate::control::pair::payload(PAIRING_CODE, Some(PAIRING_RELAY))
+        let text = crate::ui::pairing::payload(PAIRING_CODE, Some(PAIRING_RELAY))
             .expect("the scene configures a relay, so the payload exists");
         assert_eq!(
             pairing.qr(),
-            crate::control::pair::Matrix::encode(&text).as_ref(),
+            crate::ui::pairing::Matrix::encode(&text).as_ref(),
             "the matrix on the wall is not the encoder's for `{text}` (#270)"
         );
         assert_eq!(

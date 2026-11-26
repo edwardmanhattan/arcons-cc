@@ -1,6 +1,6 @@
 //! **The pairing QR, drawn as the wall's own squares** (#270).
 //!
-//! The payload and the module grid are [`crate::control::pair`]'s: this module turns a cached matrix into
+//! The payload and the module grid are [`crate::ui::pairing`]'s: this module turns a cached matrix into
 //! elements and nothing more. A frame draws squares; it does not build a QR (`INV-05`), and a capture never
 //! reaches for an encoder or a socket (`INV-11`) — the picture is a function of the digits and the relay's
 //! string, both of which are values on the state.
@@ -19,7 +19,7 @@
 
 use rune::{El, el};
 
-use crate::control::pair::Matrix;
+use crate::ui::pairing::Matrix;
 use crate::ui::tokens;
 
 /// One module's side in points: the largest whole number that fits [`tokens::QR_SIDE`], and at least one so a

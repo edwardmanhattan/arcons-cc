@@ -31,7 +31,7 @@ use crate::verb::Origin;
 ///
 /// A wall mid-frame is a wall that will answer in a frame; a wall that took five seconds is a wall with a
 /// problem, and a client hanging on a socket for ever cannot tell that from a slow one.
-pub(super) const ANSWER_WITHIN: Duration = Duration::from_secs(5);
+pub(crate) const ANSWER_WITHIN: Duration = Duration::from_secs(5);
 
 /// The listening socket and the thread that accepts on it.
 ///
@@ -193,7 +193,7 @@ fn serve_one(stream: UnixStream, tx: &Sender<Job>, stop: &AtomicBool) -> std::io
 /// projection is and writes it if it moved. One watch per connection: a second ask is a new baseline, not a second
 /// stream. The two compose — a watch is a deadline on the *same* read, so a watched connection still carries every
 /// hand it did before it was watched.
-pub(super) fn serve_session(
+pub(crate) fn serve_session(
     mut carrier: impl super::carrier::Carrier,
     tx: &Sender<Job>,
     stop: &AtomicBool,

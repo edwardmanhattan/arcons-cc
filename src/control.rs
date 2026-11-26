@@ -49,9 +49,6 @@ pub mod carrier;
 pub mod client;
 // **The exchange corpus** (#224) is recorded through the session loop, which is a unix socket's reader
 // (`server`). A Windows build has the vocabulary and no plane, so it has no corpus either.
-#[cfg(unix)]
-pub mod corpus;
-pub mod pair;
 pub mod projection;
 // **The relay** (#196) is the wall's one outbound carrier. Its frames compile everywhere — `tests/doc_claims.rs`
 // compares them with `docs/control.md` on every platform — and the socket it dials is a unix one, so a Windows build
@@ -63,7 +60,6 @@ pub mod relay;
 #[cfg(unix)]
 pub mod sessions;
 pub mod snapshot;
-pub mod tiling;
 // **A watch** (#221) is the one thing on this plane that is not request/answer. It compiles everywhere: the wire's
 // three frames are the vocabulary, and the carrier that can actually carry a stream is a unix one.
 pub mod watch;

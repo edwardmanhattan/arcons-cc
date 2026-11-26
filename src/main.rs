@@ -49,8 +49,8 @@ fn probe_map(_camera: arcons_cc::map::geometry::Camera, out: PathBuf) -> ExitCod
 /// **`--record`'s tiling half** (#220): one file per case, from the wall's own functions, so a client in
 /// another language reads numbers instead of guessing them.
 fn record_tiling() -> bool {
-    let dir = arcons_cc::control::tiling::directory();
-    match arcons_cc::control::tiling::record(&dir) {
+    let dir = arcons_cc::ui::tiling::directory();
+    match arcons_cc::ui::tiling::record(&dir) {
         Ok(written) => {
             for path in written {
                 println!("recorded {}", path.display());
@@ -67,8 +67,8 @@ fn record_tiling() -> bool {
 /// **`--record`'s corpus half** (#224): the exchange stream, from the wall's own session loop.
 #[cfg(unix)]
 fn record_corpus() -> bool {
-    let dir = arcons_cc::control::corpus::directory();
-    match arcons_cc::control::corpus::record(&dir) {
+    let dir = arcons_cc::ui::corpus::directory();
+    match arcons_cc::ui::corpus::record(&dir) {
         Ok(path) => {
             println!("recorded {}", path.display());
             true
@@ -85,13 +85,13 @@ fn record_corpus() -> bool {
 /// that has gone stale is a client reading a contract the wall no longer keeps.
 #[cfg(unix)]
 fn conformance(path: &std::path::Path) -> ExitCode {
-    match arcons_cc::control::corpus::replay(path) {
+    match arcons_cc::ui::corpus::replay(path) {
         Ok(answered) => {
             for (number, (exchange, answer)) in answered.iter().enumerate() {
                 println!(
                     "ok    {:>3}  {}\n            {}",
                     number + 1,
-                    arcons_cc::control::corpus::line_of(&exchange.send),
+                    arcons_cc::ui::corpus::line_of(&exchange.send),
                     answer
                 );
             }

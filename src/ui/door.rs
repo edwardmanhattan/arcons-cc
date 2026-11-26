@@ -3,9 +3,10 @@
 //! A pointer handler, a menu row, a socket job and a capture's script all arrive at [`State::apply`].
 //! The body is `apply_by`: it settles the intent, and nothing below it is an input.
 
+use super::pairing as pair;
 use super::*;
 use crate::control::{
-    Applied, Changed, LAST_PANE, NOT_NEIGHBOURS, RATIO_WORDS, Refused, SELF_DROP, pair, wire,
+    Applied, Changed, LAST_PANE, NOT_NEIGHBOURS, RATIO_WORDS, Refused, SELF_DROP, wire,
 };
 use crate::verb::{Intent, Origin, RenameTarget};
 
