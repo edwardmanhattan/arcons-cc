@@ -18,6 +18,7 @@ pub mod live;
 pub mod map;
 pub mod platform;
 pub mod scene;
+pub mod tokens;
 pub mod ui;
 pub mod units;
 pub mod verb;

@@ -46,7 +46,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::layout::{RATIO_RANGE, SavedNode};
 use crate::map::geometry::Viewport;
-use crate::ui::tokens;
+use crate::tokens;
 use crate::ui::view::{self, Dir, Drop, Layout, Rect, Side};
 use crate::verb::ViewId;
 

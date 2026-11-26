@@ -634,7 +634,7 @@ fn panes_named(state: &mut State) {
 /// a capture of a look the display cannot produce would be a lie about the wall.
 fn panes_gaps(state: &mut State) {
     panes(state);
-    state.settings.pane_gap = crate::ui::tokens::GAP;
+    state.settings.pane_gap = crate::tokens::GAP;
 }
 
 /// The `panes-gap-resize` scene (#114): the gapped wall left at **half**, and the border dragged to
@@ -648,7 +648,7 @@ fn panes_gaps(state: &mut State) {
 fn panes_gap_resize(state: &mut State) {
     // **No border drag in code**: the pointer is the only thing that may move the split here.
     panes_wall(state, false);
-    state.settings.pane_gap = crate::ui::tokens::GAP;
+    state.settings.pane_gap = crate::tokens::GAP;
 }
 
 /// The `settings` scene (#82): a wall with its **settings sheet open**, which is the only picture of the
@@ -1430,8 +1430,8 @@ fn cursor_point(state: &State, id_unit: i64) -> Option<(f32, f32)> {
     let pane = state.pane(state.focused())?;
     let frame = crate::map::geometry::Rendered {
         camera: pane.camera,
-        width: crate::ui::tokens::WINDOW_SIZE.0 as u32,
-        height: crate::ui::tokens::WINDOW_SIZE.1 as u32,
+        width: crate::tokens::WINDOW_SIZE.0 as u32,
+        height: crate::tokens::WINDOW_SIZE.1 as u32,
     };
     let marker = crate::ui::markers::place(
         &state.picture,
@@ -2506,8 +2506,8 @@ mod tests {
             rows.len()
         );
         assert_eq!(
-            crate::ui::tokens::filter_size(rows.len()).1,
-            crate::ui::tokens::FILTER_MAX_H,
+            crate::tokens::filter_size(rows.len()).1,
+            crate::tokens::FILTER_MAX_H,
             "this vocabulary is taller than the panel, so it scrolls inside its maximum"
         );
         for pane in filtered.panes() {
@@ -2654,7 +2654,7 @@ mod tests {
             narrow_camera.zoom
         );
         assert!(
-            (narrow_camera.zoom - crate::ui::tokens::TREE_ZOOM_MIN).abs() > 1e-6,
+            (narrow_camera.zoom - crate::tokens::TREE_ZOOM_MIN).abs() > 1e-6,
             "the fit is inside the token range, not clamped at its floor: {narrow_camera:?}"
         );
         for node in &narrow_drawn.nodes {

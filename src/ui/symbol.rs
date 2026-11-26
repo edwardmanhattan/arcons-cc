@@ -21,7 +21,7 @@
 
 use rune::{El, el, shape::Shape};
 
-use crate::ui::tokens;
+use crate::tokens;
 use crate::units::Glyph;
 
 /// The icon's ink, as a polygon in the unit box: the standard's surface-combatant arrow.

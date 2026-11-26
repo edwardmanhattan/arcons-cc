@@ -14,7 +14,7 @@
 //! stops there; sending is #278's.
 
 use arcons_cc::map::geometry::{Camera, WHEEL_ZOOM_PER_PX};
-use arcons_cc::ui::tokens;
+use arcons_cc::tokens;
 use rune::{El, el, row, spacer, text};
 
 use crate::chart::{Chart, ZOOM_STEP};

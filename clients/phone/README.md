@@ -97,7 +97,7 @@ SDK and no Xcode (`docs/verification.md`).
 - **The corpus is the spec.** A field this package names and the wall does not send is a red test; a shape the recording
   grows is a red test until it is typed.
 - **The wall's numbers are cited, then checked.** `MIN_PANE_PT`, `PANE_EDGE_BAND`, `GAP` and `RATIO_RANGE` are the
-  wall's (`src/ui/tokens.rs`, `src/config/layout.rs`); `Numbers.wall` names where each came from and a test holds it to
+  wall's (`src/tokens.rs`, `src/config/layout.rs`); `Numbers.wall` names where each came from and a test holds it to
   the numbers every recorded tiling case carries, so a token that moved is red here and not found on somebody's phone.
 - **Rectangles are `f32`.** The wall's are, and the recording writes them that way (`742.39996`, not `742.4`), so
   `CellRect` rounds once and the tests compare with `==` instead of a tolerance.

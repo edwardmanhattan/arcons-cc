@@ -32,7 +32,8 @@ use crate::data::types::{
     NewsArticle, NewsQuery, NewsScope, NewsStory, NewsStoryDetail, NewsWindow, Pagination,
     StoryPage,
 };
-use crate::ui::{ELLIPSIS, State, tokens};
+use crate::tokens;
+use crate::ui::{ELLIPSIS, State};
 use crate::verb::ViewId;
 
 /// The three tabs, in the order the panel reads them. **There is no `unknown` tab**, deliberately: the

@@ -35,7 +35,6 @@ pub mod saved;
 pub mod snapshot;
 pub mod symbol;
 pub mod tiling;
-pub mod tokens;
 pub mod tree;
 pub mod unitcard;
 pub mod view;
@@ -52,6 +51,7 @@ use rune::{AppSpec, Cx, El, col, el, row, spacer, text};
 use crate::config;
 use crate::live::LiveThread;
 use crate::map::geometry::Camera;
+use crate::tokens;
 use crate::units::Picture;
 use crate::verb::{Intent, Origin, PaneContent, RenameTarget, ViewId};
 

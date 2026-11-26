@@ -207,7 +207,7 @@ void main() {
         controller.landing,
         Retile(1, Side.left),
         reason: 'the pointer is in pane 1\'s left band and the phone did not read it that way: `PANE_EDGE_BAND` is the '
-            'wall\'s 0.3 of the pane\'s own span (src/ui/tokens.rs), and a client that guessed sends `centre` where '
+            'wall\'s 0.3 of the pane\'s own span (src/tokens.rs), and a client that guessed sends `centre` where '
             'the wall\'s own hand sends `left`',
       );
       final advertised = cells(preview, canvas);

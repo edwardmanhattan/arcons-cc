@@ -555,7 +555,7 @@ The two checks do different jobs, and neither substitutes for the other:
   catches what nobody thought to assert.
 - **`assert.sh`** answers *"is what changed wrong?"* — "the marker for hull 12 is 5.1 px from where
   the projection puts it", "the stale marker is 146 luma and the live one 170". It reads colours from
-  `ui::tokens` and geometry from `map::geometry::project`, so it cannot outlive the palette or the
+  `tokens` and geometry from `map::geometry::project`, so it cannot outlive the palette or the
   layout it describes.
 
 ### A capture is a wall with no memory

@@ -77,7 +77,7 @@ scripts/conformance.sh fixtures/control/session.jsonl   # replay the recorded ex
   token rides in the connect frame's `data`**, and **no history exists on `live-feed`** — the five
   traps. They are spelled out in `README.md` and `CONTEXT.md`; INV-01/02/03/09 are the same claims as
   tests.
-- **Colours and sizes live in `src/ui/tokens.rs`.** Nothing outside it names one; `tests/scaffold.rs`
+- **Colours and sizes live in `src/tokens.rs`.** Nothing outside it names one; `tests/scaffold.rs`
   fails when something does. Assert against tokens, never literals.
 - **An icon comes from Rune's catalogue** (`rune::Icon` / `El::icon`), and its meaning is also in words
   where there is room. A glyph nobody can name is a button nobody presses (#111).

@@ -5,7 +5,7 @@
 //! reaches for an encoder or a socket (`INV-11`) — the picture is a function of the digits and the relay's
 //! string, both of which are values on the state.
 //!
-//! Three decisions are this file's, and the tokens they land on are `ui::tokens`':
+//! Three decisions are this file's, and the tokens they land on are `tokens`':
 //!
 //! - **Dark on light.** The QR is a light block with dark modules, the standard's own polarity: a scanner
 //!   expects it, and a white square is the one thing on a dark wall a camera finds across a room.
@@ -19,8 +19,8 @@
 
 use rune::{El, el};
 
+use crate::tokens;
 use crate::ui::pairing::Matrix;
-use crate::ui::tokens;
 
 /// One module's side in points: the largest whole number that fits [`tokens::QR_SIDE`], and at least one so a
 /// payload that outgrows the square degrades to a dense picture rather than to nothing.

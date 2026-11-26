@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::ui::tokens;
+use crate::tokens;
 
 pub mod check;
 pub mod credential;

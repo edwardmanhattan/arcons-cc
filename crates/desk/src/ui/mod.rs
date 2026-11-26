@@ -17,7 +17,7 @@
 //! [`rune::Tx::blur`] after its action, handing the keyboard back to the form. The buttons are
 //! still exposed to assistive technology as buttons, by role and by name.
 
-use arcons_cc::ui::tokens;
+use arcons_cc::tokens;
 use rune::{Cx, El, col, el, row, spacer, text};
 
 use arcons_cc::map::geometry::Camera;

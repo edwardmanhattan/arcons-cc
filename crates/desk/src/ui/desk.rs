@@ -14,7 +14,7 @@
 //! here, because Minos publishes none for a shore account (decision 4). The chips filter what the operator
 //! asked to see; they never filter what the operator may report.
 
-use arcons_cc::ui::tokens;
+use arcons_cc::tokens;
 use rune::{El, col, el, row, spacer, text};
 
 use crate::batch::{Batch, Row};

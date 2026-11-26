@@ -20,7 +20,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::map::geometry::Viewport;
-use crate::ui::tokens;
+use crate::tokens;
 use crate::verb::{Edge, ViewId};
 
 /// Which way a split runs.
@@ -107,12 +107,12 @@ pub fn viewport_point(rect: Rect, local: (f32, f32)) -> (f32, f32) {
 /// reports a point local to a 28 × 4 box that is itself at an offset inside the pane. Both offsets are
 /// added here, once, for the same reason as [`viewport_point`]: the layout asks in viewport points.
 pub fn handle_point(rect: Rect, local: (f32, f32)) -> (f32, f32) {
-    let (w, _h) = crate::ui::tokens::PANE_HANDLE;
+    let (w, _h) = crate::tokens::PANE_HANDLE;
     viewport_point(
         rect,
         (
             rect.w / 2.0 - w / 2.0 + local.0,
-            crate::ui::tokens::GAP / 2.0 + local.1,
+            crate::tokens::GAP / 2.0 + local.1,
         ),
     )
 }
@@ -230,9 +230,9 @@ pub fn landing_rect(layout: &Layout, drop: Drop, viewport: Viewport, pane: ViewI
 /// `verify`, for the reason the whole file exists: a capture and its assertion that compute a rectangle
 /// twice come to disagree about it.
 pub fn name_probe(rect: Rect) -> Rect {
-    let plate = crate::ui::tokens::GAP / 2.0;
-    let pad = crate::ui::tokens::GAP;
-    let height = crate::ui::tokens::NAME_H;
+    let plate = crate::tokens::GAP / 2.0;
+    let pad = crate::tokens::GAP;
+    let height = crate::tokens::NAME_H;
     Rect {
         x: rect.x + plate + pad / 2.0,
         y: rect.y + plate + height / 4.0,
@@ -248,9 +248,9 @@ pub fn name_probe(rect: Rect) -> Rect {
 /// `verify`, for the reason [`name_probe`] exists: a capture and its assertion that compute a rectangle
 /// twice come to disagree about it — and here the disagreement would be a press the operator cannot land.
 pub fn chrome_buttons(rect: Rect) -> (Rect, Rect) {
-    let size = crate::ui::tokens::PANE_BUTTON;
-    let edge = crate::ui::tokens::GAP / 2.0;
-    let gap = crate::ui::tokens::GAP / 2.0;
+    let size = crate::tokens::PANE_BUTTON;
+    let edge = crate::tokens::GAP / 2.0;
+    let gap = crate::tokens::GAP / 2.0;
     let y = rect.y + edge;
     let maximise_x = rect.x + rect.w - edge - size;
     let filter_x = maximise_x - gap - size;
@@ -727,7 +727,7 @@ impl Layout {
             return None;
         }
         let rect = self.rect_of(viewport, target)?;
-        let band = crate::ui::tokens::PANE_EDGE_BAND;
+        let band = crate::tokens::PANE_EDGE_BAND;
         let edges = [
             (Side::Left, at.0 - rect.x, rect.w),
             (Side::Right, rect.right() - at.0, rect.w),

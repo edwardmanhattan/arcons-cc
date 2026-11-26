@@ -22,7 +22,7 @@ use std::time::Instant;
 use rune::{El, el};
 
 use crate::map::geometry::Rendered;
-use crate::ui::tokens;
+use crate::tokens;
 use crate::units::{Glyph, Pos, UnitView};
 
 /// The symbol's side, in points. In `tokens` with every other size, not here.

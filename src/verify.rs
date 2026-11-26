@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use crate::map::geometry::{Camera, Rendered};
 use crate::scene;
-use crate::ui::tokens;
+use crate::tokens;
 
 /// How far a marker's ink may be from where the raw projection says it is.
 ///

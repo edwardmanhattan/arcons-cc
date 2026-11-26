@@ -22,7 +22,7 @@ reqwest = { version = "0.13", features = ["blocking", "json", "rustls", "webpki-
 # cannot draw with two Runes (#276, ADR-0009 decision 1).
 rune = { workspace = true }
 # **The wall's tokens and only the wall's.** A colour or a size is named once, in
-# `src/ui/tokens.rs`, and the desk reads that file rather than keeping a second palette (#276,
+# `src/tokens.rs`, and the desk reads that file rather than keeping a second palette (#276,
 # decision 5). The wall's library, not its binary: nothing here can post a fix.
 arcons-cc = { path = "../.." }
 
