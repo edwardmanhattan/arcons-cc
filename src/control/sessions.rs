@@ -19,7 +19,7 @@
 
 use std::sync::mpsc::{self, Receiver, Sender};
 
-use crate::ui::Origin;
+use crate::verb::Origin;
 
 /// **One thing a carrier has left for the wall** (#222): a request to answer, or a hand that has let go.
 ///

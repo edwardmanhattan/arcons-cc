@@ -44,8 +44,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
 
+use crate::control::Job;
 use crate::control::carrier::Loopback;
-use crate::control::server::{self, Job};
+use crate::control::server;
 use crate::ui::State;
 
 /// Where the recordings live, relative to the crate root. `cargo run -- --record` writes here.
