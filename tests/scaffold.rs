@@ -72,6 +72,9 @@ fn only_tokens_names_a_colour_or_a_size() {
         if path == "src/tokens.rs" {
             continue;
         }
+        if text.lines().any(|line| line.trim() == "#![cfg(test)]") {
+            continue;
+        }
         for (number, line) in text.lines().enumerate() {
             let code = line.split("//").next().unwrap_or("").trim();
             if code.is_empty() {
@@ -279,7 +282,10 @@ fn no_handler_changes_the_wall_except_through_the_door() {
         }
         scanned += 1;
         // Only the view: the tests below the first `#[cfg(test)]` are allowed to poke whatever they like.
-        let body = source.split("#[cfg(test)]").next().unwrap_or(&source);
+        let body = source
+            .split_once("\nmod tests {")
+            .map(|(body, _)| body)
+            .unwrap_or(&source);
         for handler in handler_closures(body) {
             // **A layout pass is not an input** (#173): `on_layout` is where the wall learns its own geometry —
             // the panel's size, each pane's rectangle, the frame markers project against (`INV-04`) — and the

@@ -10586,3 +10586,6 @@ mod settings_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod budget;
