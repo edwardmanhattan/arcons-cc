@@ -901,11 +901,10 @@ fn the_control_document_names_the_scene_the_code_sends() {
 /// are checked here, from one `serde` serialization of an empty-projection's shape.
 #[test]
 fn the_projection_in_the_document_is_the_projection_the_code_sends() {
-    use arcons_cc::control::projection;
-
     let doc = read("docs/control.md");
     let state = arcons_cc::ui::State::default();
-    let wall = serde_json::to_value(projection::of(&state)).expect("a projection serializes");
+    let wall = serde_json::to_value(arcons_cc::ui::projection::of(&state))
+        .expect("a projection serializes");
     let keys = |value: &serde_json::Value| -> Vec<String> {
         value
             .as_object()

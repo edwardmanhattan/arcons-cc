@@ -50,12 +50,38 @@ impl State {
     pub fn answer(&mut self, job: crate::control::Job) -> bool {
         match &job {
             crate::control::Job::Request { request, hand, .. } => {
-                let (reply, changed) =
-                    crate::control::authority::answer(self, request, hand.clone());
+                let (reply, changed) = self.answer_request(request, hand.clone());
                 job.answer(reply);
                 changed
             }
             crate::control::Job::Departed { origin } => self.let_go(origin),
+        }
+    }
+
+    /// **One request, answered against the wall** (#202): the authority's whole vocabulary, in one function.
+    ///
+    /// A wall's loop and a viewer's session both come here, so there is one place that decides what a request
+    /// means and one place that could grow a second opinion (`INV-07`).
+    pub fn answer_request(
+        &mut self,
+        request: &wire::Request,
+        hand: Option<Origin>,
+    ) -> (wire::Answer, bool) {
+        match request {
+            wire::Request::Intent(intent) => match self.apply_as(intent.clone(), hand) {
+                Ok(Applied::Changed(changed)) => {
+                    let moved = changed.0;
+                    (wire::Answer::Changed(Ok(changed)), moved)
+                }
+                Ok(Applied::Paired(paired)) => (wire::Answer::Paired(paired), true),
+                Err(why) => (wire::Answer::Changed(Err(why)), false),
+            },
+            wire::Request::Wall => (
+                wire::Answer::Wall(super::projection::versioned(self)),
+                false,
+            ),
+            wire::Request::Watch(watch) => (wire::Answer::Watching(*watch), false),
+            wire::Request::Scene => (wire::Answer::Scene(Box::new(self.scene())), false),
         }
     }
 }

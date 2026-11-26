@@ -344,7 +344,7 @@ mod client_tests {
     /// **A projection at a version, saying where it came from** (#221). The label is what makes the candidates a test
     /// can tell apart: the one the wall published, and the one the client read instead.
     fn projection(seq: u64, label: &str) -> Projection {
-        let mut wall = crate::control::projection::of(&crate::ui::State::default());
+        let mut wall = crate::ui::projection::of(&crate::ui::State::default());
         wall.seq = seq;
         wall.workspaces[0].name = label.to_string();
         wall

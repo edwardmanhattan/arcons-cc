@@ -29,6 +29,7 @@ pub mod markers;
 pub mod newsroom;
 pub mod objects;
 pub mod pairing;
+pub mod projection;
 pub mod qr;
 pub mod saved;
 pub mod snapshot;

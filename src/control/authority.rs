@@ -21,8 +21,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::control::carrier::Carrier;
 use crate::control::wire::{Answer, Request};
-use crate::control::{Applied, Changed, Refused};
-use crate::ui::State;
+use crate::control::{Changed, Refused};
 
 /// **Whose state this is** (#202).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,42 +73,6 @@ fn this_walls_socket() -> PathBuf {
     #[cfg(not(unix))]
     {
         PathBuf::from("socket")
-    }
-}
-
-/// **Answer one request against the wall that owns it.** The authority's whole vocabulary, in one function.
-///
-/// A wall's control loop and a viewer's session both come here, so there is one place that decides what a request
-/// means and one place that could grow a second opinion (`INV-07`).
-pub fn answer(
-    state: &mut State,
-    request: &Request,
-    hand: Option<crate::verb::Origin>,
-) -> (Answer, bool) {
-    match request {
-        // **Whose hand asked** (#222): a request that arrived on a carrier with a name is that client's, whatever the
-        // frame said, and the door prefers the carrier's answer.
-        Request::Intent(intent) => match state.apply_as(intent.clone(), hand) {
-            Ok(Applied::Changed(changed)) => {
-                let changed_on_screen = changed.0;
-                (Answer::Changed(Ok(changed)), changed_on_screen)
-            }
-            // **A claim answers with the key** (#194): the carrier writes it back to the client that proved it was
-            // in the room, and the wall keeps only the hash.
-            Ok(Applied::Paired(paired)) => (Answer::Paired(paired), true),
-            Err(why) => (Answer::Changed(Err(why)), false),
-        },
-        Request::Wall => (
-            Answer::Wall(crate::control::projection::versioned(state)),
-            false,
-        ),
-        // **A watch** (#221) is granted here and carried by the transport: whether a carrier can hold a stream open is
-        // the carrier's question (`carrier::Carrier::carries_a_watch`), so the grant is all the wall has to say. The
-        // session loop that asked gets the projection the client already holds and starts the beat from it.
-        Request::Watch(watch) => (Answer::Watching(*watch), false),
-        // **The arrangement, not the projection** (#201): what a viewer's picture is computed from. Built on the frame
-        // that asks, which is what "what is on the wall" means.
-        Request::Scene => (Answer::Scene(Box::new(state.scene())), false),
     }
 }
 
@@ -242,7 +205,18 @@ pub fn refused(why: &'static str) -> Answer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::control::Applied;
     use crate::control::carrier::Loopback;
+    use crate::ui::State;
+
+    /// The request-to-answer mapping, now on the wall; the tests keep the old call shape.
+    fn answer(
+        state: &mut State,
+        request: &crate::control::wire::Request,
+        hand: Option<crate::verb::Origin>,
+    ) -> (crate::control::wire::Answer, bool) {
+        state.answer_request(request, hand)
+    }
 
     /// **Local unless the environment names something** (#202): the default is a wall with no network anywhere in its
     /// path, which is what a capture, a test and a single display all are.

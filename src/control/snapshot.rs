@@ -500,7 +500,6 @@ mod tests {
     /// phone drawing the right arrangement of the wrong panes.
     #[test]
     fn the_scene_and_the_projection_carry_one_arrangement() {
-        use crate::control::projection;
         use crate::ui::State;
         use crate::ui::view::{Dir, Layout, Shape};
 
@@ -525,7 +524,7 @@ mod tests {
             Layout::from_shape(shape).expect("a tiling of the three panes it has");
 
         let scene = state.scene();
-        let wall = projection::of(&state);
+        let wall = crate::ui::projection::of(&state);
         let saved = scene.workspace[0]
             .tiling
             .clone()
@@ -553,7 +552,7 @@ mod tests {
         let back = crate::ui::saved::load_shape(&saved, &ids).expect("a shape of those ids");
         assert_eq!(
             wall.workspaces[0].tiling,
-            Some(projection::tiling_of(&back)),
+            Some(crate::ui::projection::tiling_of(&back)),
             "the scene's tiling, read with the projection's ids, is the projection's tiling"
         );
     }
