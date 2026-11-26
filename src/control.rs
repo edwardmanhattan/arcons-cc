@@ -72,8 +72,12 @@ pub mod wire;
 #[cfg(unix)]
 pub mod ctl;
 #[cfg(unix)]
+pub mod host;
+#[cfg(unix)]
 pub mod server;
 
+#[cfg(unix)]
+pub use host::Host;
 #[cfg(unix)]
 pub use server::Server;
 #[cfg(unix)]

@@ -12,7 +12,7 @@
 //!
 //! The other four rules of the ticket are held where they belong, and named here because they are what the queue is
 //! for: a stale premise is a `rule` and not a `busy` (`control::REFUSALS`), a carrier that hangs up takes its origin
-//! with it (`control::authority::serve`), the origin of a cursor is the **device's name** the carrier knows
+//! with it (`State::answer`), the origin of a cursor is the **device's name** the carrier knows
 //! (`control::carrier::Carrier::origin`), and two clients that agree are applied twice with the second answering
 //! `changed: false`. `docs/control.md` is the prose; `cargo test control::sessions` and `cargo test control::authority`
 //! are the proof.
@@ -234,10 +234,7 @@ mod tests {
             &queue,
             "the phone's request never reached the wall's queue: a carrier is holding the wall (#222)",
         );
-        assert!(
-            control::authority::serve(&mut state, job),
-            "a new workspace is a change"
-        );
+        assert!(state.answer(job), "a new workspace is a change");
         assert_eq!(
             phone.answer("the phone's answer").expect("an answer"),
             Answer::Changed(Ok(Changed(true))),
@@ -272,10 +269,7 @@ mod tests {
             // The close arrives first, and the wall applies it before the second request is even typed.
             a.send(&close);
             let job = next(&queue, "the first request never reached the wall's queue");
-            assert!(
-                control::authority::serve(&mut state, job),
-                "closing a pane of two is a change"
-            );
+            assert!(state.answer(job), "closing a pane of two is a change");
             assert_eq!(
                 a.answer("the first answer").expect("an answer"),
                 Answer::Changed(Ok(Changed(true))),
@@ -285,10 +279,7 @@ mod tests {
             // The focus arrives second, on the other carrier, and it is the loser: the premise is in the past.
             b.send(&focus);
             let job = next(&queue, "the second request never reached the wall's queue");
-            assert!(
-                !control::authority::serve(&mut state, job),
-                "a refusal must not dirty the layout"
-            );
+            assert!(!state.answer(job), "a refusal must not dirty the layout");
             let refusal = match b.answer("the second answer") {
                 Err(wire::Unreadable::Refused(refusal)) => refusal,
                 other => panic!(
@@ -333,11 +324,11 @@ mod tests {
 
         ctl.send(&line(r#"{"verb":"pane.close","pane":2}"#));
         let job = next(&queue, "the close never reached the wall's queue");
-        assert!(control::authority::serve(&mut state, job));
+        assert!(state.answer(job));
 
         phone.send(&line(r#"{"verb":"pane.close","pane":2}"#));
         let job = next(&queue, "the second close never reached the wall's queue");
-        assert!(!control::authority::serve(&mut state, job));
+        assert!(!state.answer(job));
         let refusal = match phone.answer("the second close's answer") {
             Err(wire::Unreadable::Refused(refusal)) => refusal,
             other => panic!("a close on a pane another client closed is refused, not {other:?}"),
@@ -400,7 +391,7 @@ mod tests {
 
         first.send(&focus);
         let job = next(&queue, "the first focus never reached the wall's queue");
-        assert!(control::authority::serve(&mut state, job));
+        assert!(state.answer(job));
         assert_eq!(
             first.answer("the first answer").expect("an answer"),
             Answer::Changed(Ok(Changed(true))),
@@ -410,7 +401,7 @@ mod tests {
         second.send(&focus);
         let job = next(&queue, "the second focus never reached the wall's queue");
         assert!(
-            !control::authority::serve(&mut state, job),
+            !state.answer(job),
             "the same request on the same pane moves nothing"
         );
         assert_eq!(
@@ -443,7 +434,7 @@ mod tests {
             r#"{"verb":"cursor.move","at":[420.0,180.0],"origin":"the other phone"}"#,
         ));
         let job = next(&queue, "the cursor move never reached the wall's queue");
-        assert!(control::authority::serve(&mut state, job));
+        assert!(state.answer(job));
 
         let drawn: Vec<&str> = state
             .cursors
@@ -479,7 +470,7 @@ mod tests {
         let ctl = Client::anonymous(&queue);
         ctl.send(&line(r#"{"verb":"cursor.move","at":[10.0,20.0]}"#));
         let job = next(&queue, "the cursor move never reached the wall's queue");
-        assert!(control::authority::serve(&mut state, job));
+        assert!(state.answer(job));
         assert_eq!(
             state.cursors.keys().map(Origin::as_str).collect::<Vec<_>>(),
             [Origin::ctl().as_str()],

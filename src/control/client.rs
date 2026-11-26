@@ -455,7 +455,7 @@ mod tests {
                 .spawn(move || {
                     let mut state = State::default();
                     while let Ok(job) = handed_over.recv() {
-                        crate::control::authority::serve(&mut state, job);
+                        state.answer(job);
                     }
                 })
                 .expect("the wall's thread starts");

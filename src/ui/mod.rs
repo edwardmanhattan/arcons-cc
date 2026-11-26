@@ -481,28 +481,11 @@ pub struct State {
     /// it is given.
     #[cfg(unix)]
     pub session: Option<crate::control::authority::Session>,
-    /// **The wall's queue** (#222): one channel every carrier hands its requests to — the unix socket, the relay — and
-    /// this thread is the only thing that drains it. The queue is the wall's and not a listener's, so the order a
-    /// request is applied in is the order it arrived in, whichever carrier it came in on. Empty on a capture, which
-    /// binds nothing (`INV-11`).
+    /// **The wall's carriers** (#222): the queue every socket and relay feeds, the listener and the relay.
+    /// The host is a mailbox; `poll` drains [`State::answer`] between frames, so no carrier reads the wall.
+    /// Empty on a capture, which binds nothing (`INV-11`).
     #[cfg(unix)]
-    pub queue: crate::control::sessions::Queue,
-    /// **The control plane's listener** (#165): the socket a client drives the wall through. Its requests wait in
-    /// [`State::queue`], with every other carrier's. `None` in a capture (a scene opens nothing, `INV-11`) and
-    /// when the plane is turned off — so a wall with no socket is a wall nothing can be driven through, and
-    /// `--self-check` says which it is.
-    ///
-    /// Unix only: the transport is a unix socket, and a Windows wall has no plane until someone decides on a
-    /// named pipe (`src/control.rs` says the same where the modules are gated).
-    #[cfg(unix)]
-    pub control: Option<crate::control::Server>,
-    /// **The wall's outbound carrier to its relay** (#196): `None` when `ARCONS_RELAY_URL` is unset, which is a wall
-    /// in a cupboard and is supported. Its requests wait in [`State::queue`], beside the socket's, and `poll` settles
-    /// them through `control::authority::serve` — one door, one vocabulary, arrival order.
-    ///
-    /// Unix only, for the listener's reason: the carrier this build has is a unix socket (`src/control.rs`).
-    #[cfg(unix)]
-    pub relay: Option<crate::control::relay::Relay>,
+    pub host: crate::control::Host,
     /// The socket actor, when a credential was configured. `None` means the wall is read-only.
     pub live: Option<LiveThread>,
     /// The reads thread: the card asks it for identity, commander and specification.
@@ -726,11 +709,7 @@ impl Default for State {
             pending_intents: Vec::new(),
             intents_applied: 0,
             #[cfg(unix)]
-            queue: crate::control::sessions::Queue::new(),
-            #[cfg(unix)]
-            control: None,
-            #[cfg(unix)]
-            relay: None,
+            host: crate::control::Host::new(),
             live: None,
             backend: None,
             viewpoint_pane: None,
@@ -6472,14 +6451,14 @@ fn setup(state: &mut State, waker: rune::Waker) {
             tracing::info!("control plane off: ARCONS_CONTROL=0");
         } else {
             let path = crate::control::socket_path();
-            match crate::control::Server::spawn(path.clone(), &state.queue) {
+            match crate::control::Server::spawn(path.clone(), state.host.queue()) {
                 Ok(server) => {
                     tracing::info!(
                         "control plane listening on {} (protocol {}, mode 0600)",
                         server.path().display(),
                         crate::control::PROTOCOL
                     );
-                    state.control = Some(server);
+                    state.host.listen(server);
                 }
                 // A wall with no socket is still a wall: the picture is the job, and a client that cannot
                 // connect is told why here rather than discovering it as a timeout.
@@ -6506,8 +6485,9 @@ fn setup(state: &mut State, waker: rune::Waker) {
                 )
             }
             Err(why) => tracing::warn!("relay: {why}"),
-            Ok(settings) => match crate::control::relay::Relay::spawn(settings, &state.queue) {
-                Ok(relay) => state.relay = Some(relay),
+            Ok(settings) => match crate::control::relay::Relay::spawn(settings, state.host.queue())
+            {
+                Ok(relay) => state.host.relay(relay),
                 // A carrier thread that will not start is a wall that draws without a relay, and says why here
                 // rather than leaving a phone waiting on a relay nobody is behind.
                 Err(problem) => tracing::warn!("relay: could not start the carrier: {problem}"),
@@ -6676,13 +6656,13 @@ fn poll(state: &mut State, elapsed: f64, tx: &mut rune::Tx) -> bool {
     // thread's, so this is the only place a job is settled (`INV-05`): a socket read on this thread would block the
     // frame, and an `apply` on a carrier's thread would be two threads changing one wall. It is drained, never waited
     // on — a wall that waited for a client would freeze for one that has not finished typing — and it goes through
-    // `control::authority::serve`, which is also what a test calls: one door, one vocabulary, one answer to "what does
+    // `State::answer`, which is also what a test calls: one door, one vocabulary, one answer to "what does
     // this request mean".
     #[cfg(unix)]
     let mut controlled = false;
     #[cfg(unix)]
-    while let Some(job) = state.queue.next() {
-        controlled |= crate::control::authority::serve(state, job);
+    while let Some(job) = state.host.next_job() {
+        controlled |= state.answer(job);
     }
     #[cfg(not(unix))]
     let controlled = false;
