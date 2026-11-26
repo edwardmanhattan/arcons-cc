@@ -130,10 +130,7 @@ pub fn wall() -> Result<State, String> {
     // pairing code from the frame clock instead of the OS — so `pair.begin`'s answer, and a wrong code's,
     // are the same bytes on every machine (#194, #224). A random code would make the corpus flake one run
     // in a million, and the *right* guess would write a device key into the tree.
-    let mut state = State {
-        headless: true,
-        ..State::default()
-    };
+    let mut state = State::headless();
     for (index, step) in steps.iter().enumerate() {
         if step.get("at").and_then(Value::as_f64).is_none() {
             return Err(format!(

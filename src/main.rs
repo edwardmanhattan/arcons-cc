@@ -67,8 +67,8 @@ fn record_tiling() -> bool {
 /// **`--record`'s corpus half** (#224): the exchange stream, from the wall's own session loop.
 #[cfg(unix)]
 fn record_corpus() -> bool {
-    let dir = arcons_cc::ui::corpus::directory();
-    match arcons_cc::ui::corpus::record(&dir) {
+    let dir = arcons_cc::corpus::directory();
+    match arcons_cc::corpus::record(&dir) {
         Ok(path) => {
             println!("recorded {}", path.display());
             true
@@ -85,13 +85,13 @@ fn record_corpus() -> bool {
 /// that has gone stale is a client reading a contract the wall no longer keeps.
 #[cfg(unix)]
 fn conformance(path: &std::path::Path) -> ExitCode {
-    match arcons_cc::ui::corpus::replay(path) {
+    match arcons_cc::corpus::replay(path) {
         Ok(answered) => {
             for (number, (exchange, answer)) in answered.iter().enumerate() {
                 println!(
                     "ok    {:>3}  {}\n            {}",
                     number + 1,
-                    arcons_cc::ui::corpus::line_of(&exchange.send),
+                    arcons_cc::corpus::line_of(&exchange.send),
                     answer
                 );
             }

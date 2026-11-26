@@ -13,6 +13,7 @@
 
 pub mod config;
 pub mod control;
+pub mod corpus;
 pub mod data;
 pub mod live;
 pub mod map;

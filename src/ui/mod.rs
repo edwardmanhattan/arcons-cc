@@ -19,7 +19,6 @@
 //! so the gate stays free of C++ and of a network. `--probe-map` is the headless witness.
 
 #[cfg(unix)]
-pub mod corpus;
 pub mod devices;
 mod door;
 pub mod filter;
@@ -1391,6 +1390,18 @@ impl State {
     /// **Never for a scene**: a capture that read this machine's environment would make its golden depend on
     /// who is logged in — the same rule [`State::with_saved_settings`] keeps, for the same reason (`INV-11`). A
     /// scene that wants a relay sets its own string.
+    /// **A wall with no window and no socket** (#224): the corpus recorder and the conformance replay.
+    ///
+    /// Headless means no listener, no `devices.toml`, and a pairing code drawn from the frame clock, so a
+    /// recording's answers are the same bytes on every machine (`INV-11`). The fields stay private; this is
+    /// the one constructor that is allowed to set the flag.
+    pub fn headless() -> State {
+        State {
+            headless: true,
+            ..State::default()
+        }
+    }
+
     pub fn with_relay(mut self) -> State {
         if rune::is_headless() {
             return self;
