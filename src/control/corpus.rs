@@ -54,7 +54,7 @@ pub const DIR: &str = "fixtures/control";
 /// The corpus's file name, inside [`DIR`].
 pub const SESSION: &str = "session.jsonl";
 
-/// The `fixtures/intents/` script the recorded wall is built from. Its steps go through `control::apply`,
+/// The `fixtures/intents/` script the recorded wall is built from. Its steps go through `State::apply`,
 /// and a step that refuses is an error rather than a wall half built — a recording against the wrong wall
 /// would still replay, which is exactly the false green this file exists to prevent.
 pub const SETUP: &str = "control-corpus";
@@ -114,7 +114,7 @@ pub fn session_path(dir: &Path) -> PathBuf {
 }
 
 /// **The wall the corpus is recorded against**, built from its `fixtures/intents/` script through
-/// `control::apply` — the same door a scene and a socket use.
+/// `State::apply` — the same door a scene and a socket use.
 ///
 /// The script is read strictly here, unlike `scene::load_intents` (a capture degrades to the wall its scene
 /// built and the golden says so). A recording that silently skipped a step would write a corpus of
@@ -151,7 +151,7 @@ pub fn wall() -> Result<State, String> {
                     )
                 })
             })?;
-        super::apply(&mut state, intent.clone()).map_err(|why| {
+        state.apply(intent.clone()).map_err(|why| {
             format!(
                 "{} step {index} ({}) was refused: {} — the wall the corpus is recorded against was \
                  never built, so every exchange after it would be a refusal of a pane that does not exist",

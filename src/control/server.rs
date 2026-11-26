@@ -351,7 +351,7 @@ fn ask_the_wall(
 mod tests {
     use super::*;
     use crate::control::wire::Answer;
-    use crate::control::{self, Changed, LAST_PANE};
+    use crate::control::{Changed, LAST_PANE};
     use crate::ui::State;
     use crate::verb::Intent;
     use std::io::{BufRead, BufReader, Write};
@@ -449,9 +449,7 @@ mod tests {
             )))
         );
         let result = match job.request() {
-            Some(super::super::wire::Request::Intent(intent)) => {
-                control::apply(&mut state, intent.clone())
-            }
+            Some(super::super::wire::Request::Intent(intent)) => state.apply(intent.clone()),
             other => panic!("a read where a change was asked for: {other:?}"),
         };
         assert_eq!(result, Err(Refused(LAST_PANE)));

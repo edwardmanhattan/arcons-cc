@@ -327,7 +327,6 @@ fn paired_at() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control::apply;
     use crate::verb::Intent;
 
     /// A wall that pairs in memory only: a test may not write to the machine's `devices.toml` (`INV-11`).
@@ -340,7 +339,7 @@ mod tests {
     /// A wall with a code drawn on it at `logical`, and the digits a phone would type.
     fn opened() -> (State, String) {
         let mut state = capture();
-        apply(&mut state, Intent::PairBegin).expect("pairing opens");
+        state.apply(Intent::PairBegin).expect("pairing opens");
         let digits = state.pairing().expect("a code on the wall").digits();
         (state, digits)
     }
@@ -429,7 +428,7 @@ mod tests {
             "a burnt code paired the phone anyway"
         );
         // **The remedy the operator already had**: `pair.begin` replaces the burnt code.
-        apply(&mut state, Intent::PairBegin).expect("pairing opens again");
+        state.apply(Intent::PairBegin).expect("pairing opens again");
         let fresh = state.pairing().expect("a fresh code").digits();
         assert!(
             super::claim(&mut state, &fresh, "phone").is_ok(),
@@ -496,7 +495,7 @@ mod tests {
     fn a_name_that_is_taken_is_refused_by_name() {
         let (mut state, digits) = opened();
         super::claim(&mut state, &digits, "phone").expect("the first pairing");
-        apply(&mut state, Intent::PairBegin).expect("a fresh code");
+        state.apply(Intent::PairBegin).expect("a fresh code");
         let next = state.pairing().expect("a code").digits();
         assert_eq!(
             super::claim(&mut state, &next, "phone"),
@@ -521,7 +520,7 @@ mod tests {
         let (mut state, digits) = opened();
         super::claim(&mut state, &digits, "phone").expect("the first pairing");
         // A second phone, with its own code: the row that must survive the press on the first.
-        apply(&mut state, Intent::PairBegin).expect("a fresh code");
+        state.apply(Intent::PairBegin).expect("a fresh code");
         let next = state.pairing().expect("a code").digits();
         super::claim(&mut state, &next, "tablet").expect("the second pairing");
         assert_eq!(state.devices.names(), vec!["phone", "tablet"]);
@@ -589,13 +588,17 @@ mod tests {
         // produces, so the flag is the scene's to carry.
         state.headless = true;
         state.devices_path = path.clone();
-        apply(&mut state, Intent::PairBegin).expect("a capture may draw a code");
+        state
+            .apply(Intent::PairBegin)
+            .expect("a capture may draw a code");
         assert!(state.pairing().is_some());
         // The same code twice: a capture's digits are a function of its frame clock, not a lottery (`INV-11`).
         let mut again = crate::scene::state_for("panes");
         again.headless = true;
         again.devices_path = path.clone();
-        apply(&mut again, Intent::PairBegin).expect("a second capture draws the same code");
+        again
+            .apply(Intent::PairBegin)
+            .expect("a second capture draws the same code");
         assert_eq!(
             state.pairing().map(|pairing| pairing.code),
             again.pairing().map(|pairing| pairing.code),
@@ -615,7 +618,7 @@ mod tests {
     #[test]
     fn the_code_is_drawn_and_never_returned() {
         let mut state = capture();
-        let changed = apply(&mut state, Intent::PairBegin).expect("pairing opens");
+        let changed = state.apply(Intent::PairBegin).expect("pairing opens");
         assert!(changed.changed(), "a code appeared on the wall");
         let digits = state.pairing().expect("a code").digits();
         let line = crate::control::wire::reply(crate::control::wire::Answer::Changed(Ok(
@@ -641,7 +644,7 @@ mod tests {
     fn the_payload_is_the_drawn_digits_and_the_relays_address_or_nothing() {
         let mut state = capture();
         state.relay_url = Some("tcp://relay.arcons.test:7030".to_string());
-        apply(&mut state, Intent::PairBegin).expect("pairing opens");
+        state.apply(Intent::PairBegin).expect("pairing opens");
         let pairing = state.pairing().expect("a code on the wall");
         let digits = pairing.digits();
         assert_eq!(digits.len(), 6, "the code is six digits, zero-padded");
@@ -657,7 +660,8 @@ mod tests {
         // **No relay, no QR** (#270): the digits are the whole picture, which is what a phone with no camera
         // reads anyway.
         let mut bare = capture();
-        apply(&mut bare, Intent::PairBegin).expect("pairing opens on a wall with no relay");
+        bare.apply(Intent::PairBegin)
+            .expect("pairing opens on a wall with no relay");
         let bare = bare.pairing().expect("a code on the wall");
         assert_eq!(
             payload(&bare.digits(), None),
@@ -687,7 +691,9 @@ mod tests {
     fn an_unencodable_payload_draws_the_digits_without_a_qr() {
         let mut state = capture();
         state.relay_url = Some(format!("tcp://{}", "a".repeat(4_000)));
-        apply(&mut state, Intent::PairBegin).expect("the code still opens");
+        state
+            .apply(Intent::PairBegin)
+            .expect("the code still opens");
         let pairing = state.pairing().expect("a code on the wall");
         assert!(
             pairing.qr().is_none(),

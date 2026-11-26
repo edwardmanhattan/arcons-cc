@@ -71,7 +71,7 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control::{apply, pair};
+    use crate::control::pair;
     use crate::verb::Intent;
 
     /// A directory this test owns, so no run touches the operator's config directory.
@@ -88,7 +88,7 @@ mod tests {
             devices_path: path.to_path_buf(),
             ..State::default()
         };
-        apply(&mut state, Intent::PairBegin).expect("pairing opens");
+        state.apply(Intent::PairBegin).expect("pairing opens");
         let digits = state.pairing().expect("a code on the wall").digits();
         (state, digits)
     }

@@ -7,7 +7,7 @@
 //! - [`Role::Local`] is today's wall: it owns everything, and no network exists anywhere in its path. A capture is
 //!   `Local`, which is why 45 scenes keep rendering with no authority in the loop at all.
 //! - [`Role::Remote`] is a viewer: it asks the authority for a `Scene` and applies what came back. Its **own** inputs
-//!   still go through `control::apply` locally until #204 makes them intents on the wire — the role is the plumbing
+//!   still go through `State::apply` locally until #204 makes them intents on the wire — the role is the plumbing
 //!   first, because "who owns the state" is the question a fleet cannot get wrong.
 //!
 //! **No push, only pull.** A viewer asks for the newest scene (`read: "scene"`) and the `seq` tells it whether anything
@@ -89,7 +89,7 @@ pub fn answer(
     match request {
         // **Whose hand asked** (#222): a request that arrived on a carrier with a name is that client's, whatever the
         // frame said, and the door prefers the carrier's answer.
-        Request::Intent(intent) => match crate::control::apply_by(state, intent.clone(), hand) {
+        Request::Intent(intent) => match state.apply_as(intent.clone(), hand) {
             Ok(Applied::Changed(changed)) => {
                 let changed_on_screen = changed.0;
                 (Answer::Changed(Ok(changed)), changed_on_screen)
@@ -571,7 +571,7 @@ mod tests {
         assert!(viewer.is_viewer());
 
         // The press. The same door every handler uses.
-        let outcome = crate::control::apply(&mut viewer, crate::verb::Intent::NewWorkspace);
+        let outcome = viewer.apply(crate::verb::Intent::NewWorkspace);
         assert_eq!(
             outcome,
             Ok(Applied::Changed(Changed(false))),
@@ -653,7 +653,7 @@ mod tests {
 
         let mut viewer = State::default();
         viewer.session = Some(Session::new(Box::new(peer)).expect("a session"));
-        let asked = crate::control::apply(&mut viewer, crate::verb::Intent::ClosePane(1));
+        let asked = viewer.apply(crate::verb::Intent::ClosePane(1));
         eprintln!("DEBUG asked={asked:?} session={}", viewer.session.is_some());
 
         // The refused press: the session logs it and stays open.

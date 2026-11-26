@@ -1697,7 +1697,7 @@ mod tests {
                 // watching a wall somebody else may move.
                 if !changed {
                     changed = true;
-                    let _ = crate::control::apply(&mut state, Intent::NewWorkspace);
+                    let _ = state.apply(Intent::NewWorkspace);
                 }
                 continue;
             }
@@ -1888,7 +1888,7 @@ mod tests {
         let mut state = crate::ui::State::default();
         state.headless = true;
         state.devices_path = directory.path().join("devices.toml");
-        crate::control::apply(&mut state, Intent::PairBegin).expect("pairing opens");
+        state.apply(Intent::PairBegin).expect("pairing opens");
         let digits = state.pairing().expect("a code on the wall").digits();
         (state, digits)
     }
