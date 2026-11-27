@@ -132,6 +132,9 @@ impl Window {
         // Set the window title.
         window_state.set_title(attributes.title);
 
+        // Set the window icon before the first commit.
+        window_state.set_window_icon(attributes.window_icon.map(|icon| icon.inner));
+
         // Set the min and max sizes. We must set the hints upon creating a window, so
         // we use the default `1.` scaling...
         let min_size = attributes.min_inner_size.map(|size| size.to_logical(1.));
@@ -438,11 +441,19 @@ impl Window {
         self.window_state.lock().unwrap().has_client_side_frame()
     }
 
+    /// Rune: see `WindowExtWayland::wayland_wm_state`.
+    #[inline]
+    pub fn wayland_wm_state(&self) -> Option<(bool, Option<[bool; 4]>, Option<u16>)> {
+        self.window_state.lock().unwrap().wayland_wm_state()
+    }
+
     #[inline]
     pub fn set_window_level(&self, _level: WindowLevel) {}
 
     #[inline]
-    pub(crate) fn set_window_icon(&self, _window_icon: Option<PlatformIcon>) {}
+    pub(crate) fn set_window_icon(&self, window_icon: Option<PlatformIcon>) {
+        self.window_state.lock().unwrap().set_window_icon(window_icon);
+    }
 
     #[inline]
     pub fn set_minimized(&self, minimized: bool) {
@@ -648,7 +659,13 @@ impl Window {
     #[inline]
     pub fn current_monitor(&self) -> Option<MonitorHandle> {
         let data = self.window.wl_surface().data::<SurfaceData>()?;
-        data.outputs().next().map(MonitorHandle::new)
+        // Rune: compositors like Sway may destroy a `wl_output` global without sending
+        // `wl_surface.leave`, leaving a dead output at index 0 of `SurfaceData::outputs`.
+        // Skip removed outputs so `current_monitor` returns `None` or the next live output.
+        let monitors = self.monitors.lock().unwrap();
+        data.outputs()
+            .find(|output| monitors.iter().any(|m| m.proxy == *output))
+            .map(MonitorHandle::new)
     }
 
     #[inline]

@@ -7,7 +7,7 @@ Nothing in this directory is re-exported as our API: the code is upstream's, the
 
 **The Rune copies are the rev's list, not ours.** `scripts/vendor-patches.sh` reads `[patch.crates-io]` from the
 manifest at the pinned rev and copies every crate it names — two when `#185` started this, six at `d0eaf332`, six at
-`2899b3d3`, **eight at `1f1d68c4`** (`naga` and `accesskit_atspi_common` joined). A crate
+`2899b3d3`, **eight at `4918969f`** (`naga` and `accesskit_atspi_common` joined). A crate
 listed there that this file does not have a `[patch.crates-io]` line for is a run that fails with the lines to add; a
 crate we carry that the rev has stopped patching is a run that fails with the three things to delete. The alternative,
 a `CRATES` array in the script, is what let the `#185` bump carry two of that rev's four patches without anything going
@@ -78,8 +78,8 @@ not draw on Windows yet.
 
 ## `winit` — Rune's copy, because a dependency's patch cannot reach us (#185)
 
-Copied from Rune's own `vendor/winit` at the rev `Cargo.toml` pins (`1f1d68c4`): winit 0.30.13 as published, plus
-Rune's `vendor/winit.patch` — 29 files, 2,122 lines (sixteen files, 617 lines at `d0eaf332`). It is applied through
+Copied from Rune's own `vendor/winit` at the rev `Cargo.toml` pins (`4918969f`): winit 0.30.13 as published, plus
+Rune's `vendor/winit.patch` — 43 files, 2,652 lines (sixteen files, 617 lines at `d0eaf332`). It is applied through
 `[patch.crates-io]` in **our** root `Cargo.toml`, and re-made by `scripts/vendor-patches.sh`, which takes the copy and
 the patch from the pinned rev.
 
@@ -94,7 +94,7 @@ copy also carries `WindowExtWayland::content_corner_radius`, which the Wayland f
 the change is readable here rather than only in their history. Pinned to rune's rev, not to winit's: when the section
 below says "drop it", it goes with the pin it came from.
 
-**What it costs.** 3.1 MB, 218 files, and a copy re-made on **every** winit bump. The patch is applied when the copy is
+**What it costs.** 3.1 MB, 219 files, and a copy re-made on **every** winit bump. The patch is applied when the copy is
 made, so a patch that no longer applies fails at `scripts/vendor-patches.sh` rather than rotting into a build nobody can
 reproduce — which is the whole reason the script exists instead of a copied directory.
 
@@ -106,7 +106,7 @@ together.
 ## `wgpu-hal` — Rune's copy, for the same reason as `winit` (#185)
 
 Copied from Rune's `vendor/wgpu-hal` at the rev `Cargo.toml` pins: wgpu-hal 30.0.1 as published, plus Rune's
-`vendor/wgpu-hal.patch` — 18 files, 2,690 lines (eight files, 440 lines at `d0eaf332`). Applied through our own
+`vendor/wgpu-hal.patch` — 19 files, 2,884 lines (eight files, 440 lines at `d0eaf332`). Applied through our own
 `[patch.crates-io]`, re-made by `scripts/vendor-patches.sh`.
 
 **Why.** Rune's DX12 backend calls `Surface::set_present_rects` — `Present1`'s dirty rectangles on a sequential
