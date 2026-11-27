@@ -774,3 +774,66 @@ profile conversion added in `86a5a574` (#1991); it is named in `THIRD-PARTY-NOTI
 **What could not be run here.** The vendored `winit`, `wgpu-hal`, `sctk-adwaita` and `accesskit` copies compile on
 macOS and Windows only, in CI's `check` and `map` jobs. `map (windows-latest)` remains red for the parked reason in
 #228, and that red predates this bump.
+
+### Taken: `1f1d68c4` → `4918969f` — 340 commits, the vendor's Linux WM state, and no scene moves (#311)
+
+`dev` stood at `4918969f04dce020f63b34e024368a86e5e1857d` (`#2441`, 2026-11-26) when #311 was opened: **340 commits**
+past the pin `1f1d68c4f07f9f814e86b065cffe685f9a694606` (2026-11-25). Both `rune` and `rune-kit` move to it, and the
+workspace compiles with nothing in `src/` touched. The range is taken now because it is the one the wall's text and
+pictures have been waiting on: shaped/positioned text, the text-paint cache, the image atlas and the opacity fold all
+moved, and reading them while the desk's text fields and the wall's labels are fresh is cheaper than reading them
+after the next screen.
+
+**What could have moved the wall's pixels**, named for the next reader:
+
+- `8bc2ebcd` (#2148) — layer opacity and GPU springs now scale only colour fields when they fold. The wall's
+  `panes-drag` pane is drawn at `PANE_LIFTED` opacity, so this is the one scene the change could touch. It did not:
+  `panes-drag` is byte-identical.
+- `39ffcbe9` (#2405) and `df2e20e8` (#2397) — `PositionedText` is wired into layout, paint, selection and caret
+  browsing. It is an opt-in geometry type; the wall's labels and fields use `El::text`/`TextEdit`, not this path.
+- `110572c6` (#2403) — text/paint drops throwaway table layouts and compacts the `Inh` scratch. The code paths are
+  Markdown tables and the paint builder; the wall draws neither a table nor a rich-text run, and its labels measure
+  the same.
+- `42b39e4c` (#2260) — the CPU glyph atlas grows lazily from 256 KiB. This changes when pages are allocated, not what
+  a glyph rasterises to; the text is byte-identical.
+- `307b8b71` (#2242), `807f7a51` (#2120), `e794ddf2` (#2142) — `PaintKeep` now excludes exiting and sticky-held
+  subtrees and copies scroll-translated ones. These are animation and scroll paths; a capture is one frame, and the
+  newsroom scenes are unchanged.
+- `b5603e8b` (#2191), `037775cd` (#2124), `ce1caa8a` (#2115) — image-atlas residency and reclamation. The wall's
+  newsroom pictures are the bitmaps these pages hold; the pixels are the same.
+- `0efe56a7` (#2095) — the `text_quads` cache is bounded in entries and bytes. A cache bound changes memory, not a
+  quad's position; the labels are unchanged.
+- `36a50e61` (#2183) — the theme's `SETTINGS_GEAR` hexagon is taller. The wall copies its own icon bodies from the
+  catalogue (`src/ui/icons.rs`) and does not use this theme; no wall pixel.
+- `022d773c` (#2425) — `RUNE_SYSTEM_FONTS=off` is opt-in. The wall loads its font the way it did.
+- `f5ac08be` (#2435), `95d9c7a6` (#2372), `41191bad` (#2373) — `rune-kit`'s segmented metrics, menu padding and
+  switch look. The wall draws its own menu, chips and settings rows and does not use `rune-kit`; the desk uses its
+  own screen too.
+- `4918969f` (#2441) — the DX12 pipeline-state serialization is Windows-only; this gate renders on Linux.
+
+**What the review found: no scene moves.** All **53** wall scenes and all **5** desk scenes were rendered twice; every
+scene's two runs are identical (`INV-11`). **51** wall scenes are byte-for-byte identical to their goldens. The two
+that differ are the same two #296 already bounded: `installations` by 15 pixels and `newsroom` by 16, every pixel by
+exactly one step (`max Δ1/255`, `0 changed`), both inside their stated bounds. The other three newsroom scenes that
+were 16-pixel rounding at #296 are now byte-identical. All five desk scenes are byte-identical, text fields included.
+
+**No golden was regenerated.** `--update-goldens` was not run: the captures and the reviewed pictures agree.
+
+**The vendor set stays eight, and this bump needs the new copies.** The first `cargo check` failed with
+`wayland_wm_state` and `WindowExtX11::take_wm_state_changed` missing; the new Rune calls both, and the old winit
+copy does not have them. `scripts/vendor-patches.sh` re-made all eight from the new rev:
+
+- **`winit`** — 29 files/2,122 lines → **43 files/2,652** (219 files, 3.1 MB). The new Wayland WM state, the
+  XDG toplevel icon protocol and the X11 WM-state handshake are the additions.
+- **`wgpu-hal`** — 18 files/2,690 → **19 files/2,884**. The DX12 `Create*PipelineState` serialization and the
+  Vulkan swapchain `Device::Lost` guard are the additions.
+- The other six — `naga` (1/157), `sctk-adwaita` (5/1,033), `parley_engine` (10/708), `accesskit_windows` (6/1,893),
+  `accesskit_atspi_common` (1/115) and `accesskit_macos` (6/1,176) — are byte-identical to the copies at `1f1d68c4`.
+
+**The lockfile.** The Rune revs move; two new transitive crates arrive: `windows-registry` 0.6.1 (Windows, MIT OR
+Apache-2.0) and `wayland-protocols-plasma` (MIT). Neither is direct or copyleft, so `THIRD-PARTY-NOTICES.md` keeps its
+rows and its Rune rev is the only line that moves. `moxcms` remains the one image-stack row.
+
+**What could not be run here.** The vendored `winit`, `wgpu-hal`, `sctk-adwaita` and `accesskit` copies compile on
+macOS and Windows only, in CI's `check` and `map` jobs. `map (windows-latest)` remains red for the parked reason in
+#228, and that red predates this bump.
